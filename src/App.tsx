@@ -515,7 +515,16 @@ const App = () => {
         setHistory(d.history || []);
         setWeights(d.weights || {});
         setPlanning(d.planning || []);
-        setCronogramaInicial(deserializeCrono(d.cronogramaInicial || INITIAL_CRONOGRAMA));
+        let loadedCrono = d.cronogramaInicial || INITIAL_CRONOGRAMA;
+        if (typeof loadedCrono === 'string') {
+          try {
+            loadedCrono = JSON.parse(loadedCrono);
+          } catch (jsonErr) {
+            console.error("Error parsing cronogramaInicial JSON:", jsonErr);
+            loadedCrono = [];
+          }
+        }
+        setCronogramaInicial(deserializeCrono(loadedCrono));
         setTeams(d.teams || INITIAL_TEAMS);
         setDelayReasons(d.delayReasons || INITIAL_DELAYS);
         setPpcHistory(d.ppcHistory || []);
@@ -553,7 +562,7 @@ const App = () => {
         history: trimmedHistory,
         weights: wts || {},
         planning: Array.isArray(plans) ? plans : [],
-        cronogramaInicial: Array.isArray(serializedCrono) ? serializedCrono.slice(0, 5500) : [],
+        cronogramaInicial: JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, 5500) : []),
         teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
         delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
         ppcHistory: Array.isArray(ppcHist) ? ppcHist.slice(-260) : [],
