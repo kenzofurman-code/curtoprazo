@@ -1856,20 +1856,6 @@ const App = () => {
                         <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight truncate">{t.activityName}</div>
                       </div>
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
-                      {(t.executedBefore ?? 0) > 0 && (
-                        <div className="mt-1.5">
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-[8px] font-black text-slate-500 uppercase tracking-wider">Já medido</span>
-                            <span className="text-[9px] font-black text-slate-600 bg-slate-200 px-1.5 py-0.5 rounded-full">{(t.executedBefore ?? 0).toFixed(0)}%</span>
-                          </div>
-                          <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-slate-500 transition-all"
-                              style={{ width: `${Math.min(100, t.executedBefore ?? 0)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
                     </td>
                     <td className="p-3 border-r text-center">
                       <select disabled={t.finalized} className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold uppercase cursor-pointer focus:bg-white disabled:opacity-80 disabled:cursor-not-allowed" value={t.responsible || ''} onChange={e => handleUpdateTaskField(t.id, 'responsible', e.target.value)}>
@@ -1879,9 +1865,30 @@ const App = () => {
                     </td>
                     <td className="p-3 border-r bg-emerald-50/30">
                       <div className="flex gap-1 justify-center">
-                        {[25, 50, 75, 100].map(val => (
-                          <button key={val} disabled={t.finalized} onClick={() => handlePlannedChange(t.id, val)} className={`w-8 h-8 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${currentPlan === val ? 'bg-emerald-600 text-white scale-110 shadow-md ring-2 ring-emerald-300' : 'bg-slate-100 text-slate-500 hover:bg-emerald-100 hover:text-emerald-700'} disabled:opacity-50 disabled:cursor-default`}>{val}%</button>
-                        ))}
+                        {[25, 50, 75, 100].map(val => {
+                          const execBefore = t.executedBefore ?? 0;
+                          const isPlanned = currentPlan === val;
+                          const isExecuted = execBefore > 0 && val === execBefore;
+                          // Priority: green (planned) > dark-gray (executed) > default
+                          let btnClass = 'bg-slate-100 text-slate-500 hover:bg-emerald-100 hover:text-emerald-700';
+                          let ring = '';
+                          if (isPlanned) {
+                            btnClass = 'bg-emerald-600 text-white scale-110 shadow-md';
+                            ring = 'ring-2 ring-emerald-300';
+                          } else if (isExecuted) {
+                            btnClass = 'bg-slate-500 text-white shadow-sm';
+                            ring = 'ring-2 ring-slate-400';
+                          }
+                          return (
+                            <button
+                              key={val}
+                              disabled={t.finalized}
+                              onClick={() => handlePlannedChange(t.id, val)}
+                              title={isExecuted && !isPlanned ? `${val}% já medido` : `Planejar ${val}%`}
+                              className={`w-8 h-8 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
+                            >{val}%</button>
+                          );
+                        })}
                       </div>
                     </td>
                     <td className="p-3 border-r align-middle bg-slate-50/50">
