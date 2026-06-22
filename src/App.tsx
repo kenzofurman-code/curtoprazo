@@ -268,8 +268,9 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
         const section = updatedFloorsData[floor][sectionId];
         if (section && Array.isArray(section.items)) {
           section.items.forEach(item => {
-            const cronoItem = cronogramaInicial.find(c => c.id === item.id) ||
-              cronogramaInicial.find(c => c.floor === floor && slugify(c.macro) === sectionId && c.service.toUpperCase() === item.name.toUpperCase());
+            if (!item) return;
+            const cronoItem = cronogramaInicial.find(c => c && c.id === item.id) ||
+              cronogramaInicial.find(c => c && c.floor === floor && slugify(c.macro) === sectionId && String(c.service || '').toUpperCase() === String(item.name || '').toUpperCase());
             const cronoProgress = cronoItem ? (cronoItem.progress || 0) : 0;
             const realizedProgress = item._realized !== undefined ? item._realized : 0;
             item.actualPercent = clampPercent(Math.max(cronoProgress, realizedProgress));
@@ -283,7 +284,6 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
   return { recalculatedPlanning, updatedFloorsData };
 };
 
-
 const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
   const baseCrono = Array.isArray(currentCrono) ? currentCrono : [];
   
@@ -296,15 +296,18 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
       if (!section) return;
       const items = section.items || [];
       items.forEach(item => {
-        const key = `${floor}||${macroKey}||${item.name.toUpperCase()}`;
-        validKeys.add(key);
+        if (item) {
+          const key = `${floor}||${macroKey}||${String(item.name || '').toUpperCase()}`;
+          validKeys.add(key);
+        }
       });
     });
   });
   
   // 2. Filter out any crono items that are no longer valid (deleted in config)
   const filteredCrono = baseCrono.filter(c => {
-    const key = `${c.floor}||${slugify(c.macro)}||${c.service.toUpperCase()}`;
+    if (!c) return false;
+    const key = `${c.floor}||${slugify(c.macro)}||${String(c.service || '').toUpperCase()}`;
     return validKeys.has(key);
   });
   
@@ -320,10 +323,12 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
       const items = section.items || [];
       
       items.forEach(item => {
+        if (!item) return;
         const exists = finalCrono.some(c => 
+          c && 
           c.floor === floor && 
           slugify(c.macro) === macroKey && 
-          c.service.toUpperCase() === item.name.toUpperCase()
+          String(c.service || '').toUpperCase() === String(item.name || '').toUpperCase()
         );
         
         if (!exists) {
@@ -348,6 +353,7 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
   
   return finalCrono;
 };
+
 
 // --- Componentes Visuais Simples ---
 const StatCard = ({ title, value, color }) => (
@@ -1121,7 +1127,8 @@ const App = () => {
             if (!updatedFloorsData[item.floor][macroKey]) updatedFloorsData[item.floor][macroKey] = { title: item.macro, items: [] };
             if (!updatedWeights[item.floor]) updatedWeights[item.floor] = {};
             if (updatedWeights[item.floor][macroKey] === undefined) updatedWeights[item.floor][macroKey] = 1;
-            const existingItemIndex = updatedFloorsData[item.floor][macroKey].items.findIndex(it => it.name.toUpperCase() === item.service.toUpperCase());
+            const existingItemIndex = updatedFloorsData[item.floor][macroKey].items.findIndex(it => it && String(it.name || '').toUpperCase() === String(item.service || '').toUpperCase());
+
             if (existingItemIndex !== -1) {
               updatedFloorsData[item.floor][macroKey].items[existingItemIndex].id = item.id;
               updatedFloorsData[item.floor][macroKey].items[existingItemIndex].actualPercent = item.progress;
