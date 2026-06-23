@@ -859,7 +859,11 @@ const App = () => {
     });
   }, [planning]);
 
-  const ppcChartData = useMemo(() => [...ppcHistory].sort((a, b) => new Date(a.weekStart).getTime() - new Date(b.weekStart).getTime()), [ppcHistory]);
+  const ppcChartData = useMemo(() => [...ppcHistory].sort((a, b) => {
+    const timeA = a && a.weekStart ? new Date(a.weekStart).getTime() : 0;
+    const timeB = b && b.weekStart ? new Date(b.weekStart).getTime() : 0;
+    return (Number.isNaN(timeA) ? 0 : timeA) - (Number.isNaN(timeB) ? 0 : timeB);
+  }), [ppcHistory]);
 
   const availableFloorsForMacro = useMemo(() => {
     if (!drawerMacro) return [];
@@ -909,15 +913,23 @@ const App = () => {
 
   const macroEvolutionHistory = useMemo(() => {
     const map: Record<string, any> = {};
-    const sortedHistory = [...history].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const sortedHistory = [...history].sort((a, b) => {
+      const dateA = a && a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const dateB = b && b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return (Number.isNaN(dateA) ? 0 : dateA) - (Number.isNaN(dateB) ? 0 : dateB);
+    });
     const stateTracker: Record<string, any> = {}; 
 
     sortedHistory.forEach(record => {
-      const floor = record.floor;
-      const macro = record.sectionId;
-      const itemId = record.itemId;
-      const newPct = record.newPercent;
-      const weekStr = getWeekStartDate(new Date(record.timestamp)).toISOString().split('T')[0];
+      if (!record) return;
+      const floor = record.floor || 'Sem Pavimento';
+      const macro = record.sectionId || 'Sem Macro';
+      const itemId = record.itemId || 'Sem Item';
+      const newPct = record.newPercent || 0;
+      
+      const recDate = record.timestamp ? new Date(record.timestamp) : new Date();
+      const validDate = isNaN(recDate.getTime()) ? new Date() : recDate;
+      const weekStr = getWeekStartDate(validDate).toISOString().split('T')[0];
 
       if (!stateTracker[floor]) stateTracker[floor] = {};
       if (!stateTracker[floor][macro]) stateTracker[floor][macro] = {};
@@ -930,7 +942,7 @@ const App = () => {
       if (!map[macroKey].weeks[weekStr]) {
         map[macroKey].weeks[weekStr] = { dateStr: formatDateBR(weekStr), services: [], macroDelta: 0, macroPercent: 0 };
       }
-      map[macroKey].weeks[weekStr].services.push({ name: record.itemName, delta: record.progressAchieved });
+      map[macroKey].weeks[weekStr].services.push({ name: record.itemName || 'Sem Nome', delta: Number(record.progressAchieved) || 0 });
     });
 
     Object.keys(map).forEach(mKey => {
@@ -942,7 +954,7 @@ const App = () => {
 
       sortedWeeks.forEach(wKey => {
         const weekData = macroData.weeks[wKey];
-        const totalItemDelta = weekData.services.reduce((sum, s) => sum + s.delta, 0);
+        const totalItemDelta = (weekData.services || []).reduce((sum, s) => sum + (Number(s.delta) || 0), 0);
         const weekMacroDelta = totalItemDelta / totalItems;
         cumulativeMacroPct += weekMacroDelta;
         weekData.macroDelta = weekMacroDelta;
@@ -952,17 +964,23 @@ const App = () => {
       macroData.changes = changes;
     });
 
-    return (Object.values(map) as any[]).filter(m => m.changes.length > 0);
+    return (Object.values(map) as any[]).filter(m => m.changes && m.changes.length > 0);
   }, [history, allFloorsData]);
 
   const filteredGiantPlanningTasks = useMemo(() => {
     return planning.filter(t => {
-      const matchesSearch = !giantSearch || t.activityName.toLowerCase().includes(giantSearch.toLowerCase()) || t.responsible.toLowerCase().includes(giantSearch.toLowerCase()) || (t.observations || '').toLowerCase().includes(giantSearch.toLowerCase());
+      if (!t) return false;
+      const actName = t.activityName ? String(t.activityName) : '';
+      const respName = t.responsible ? String(t.responsible) : '';
+      const matchesSearch = !giantSearch || 
+        actName.toLowerCase().includes(giantSearch.toLowerCase()) || 
+        respName.toLowerCase().includes(giantSearch.toLowerCase()) || 
+        (t.observations || '').toLowerCase().includes(giantSearch.toLowerCase());
       const matchesFloor = !giantFloorFilter || t.floor === giantFloorFilter;
       const matchesMacro = !giantMacroFilter || slugify(t.sectionId) === slugify(giantMacroFilter);
       const matchesStatus = !giantStatusFilter || (giantStatusFilter === 'finalized' ? t.finalized : !t.finalized);
       return matchesSearch && matchesFloor && matchesMacro && matchesStatus;
-    }).sort((a, b) => b.weekId.localeCompare(a.weekId));
+    }).sort((a, b) => (b.weekId || '').localeCompare(a.weekId || ''));
   }, [planning, giantSearch, giantFloorFilter, giantMacroFilter, giantStatusFilter]);
 
   // --- Handlers de Ações ---
@@ -1530,11 +1548,11 @@ const App = () => {
   const handleExportCSV = () => {
     const headers = ['Semana ID', 'Pavimento', 'Macroatividade', 'Serviço', 'Responsável', 'Meta Planeada (%)', 'Dias Ativos', 'Progresso Semana (%)', 'Progresso Acumulado (%)', 'Motivo Atraso', 'Observações', 'Status'];
     const rows = filteredGiantPlanningTasks.map(t => [
-      t.weekId, t.floor, t.sectionId.toUpperCase(), t.activityName, t.responsible,
-      `${t.plannedThisWeek ?? 100}%`,
-      (t.dailyWork || [0,0,0,0,0]).map((dw, i) => dw ? ['Seg', 'Ter', 'Qua', 'Qui', 'Sex'][i] : '').filter(Boolean).join('/'),
-      `${t.progressThisWeek ?? 0}%`, `${Math.min(100, (t.executedBefore || 0) + (t.progressThisWeek || 0))}%`,
-      t.delayReason || 'N/A', t.observations || '', t.finalized ? 'Finalizado' : 'Ativo'
+      t?.weekId || '', t?.floor || '', (t?.sectionId || '').toUpperCase(), t?.activityName || '', t?.responsible || '',
+      `${t?.plannedThisWeek ?? 100}%`,
+      (t?.dailyWork || [0,0,0,0,0]).map((dw, i) => dw ? ['Seg', 'Ter', 'Qua', 'Qui', 'Sex'][i] : '').filter(Boolean).join('/'),
+      `${t?.progressThisWeek ?? 0}%`, `${Math.min(100, Number(t?.executedBefore || 0) + Number(t?.progressThisWeek || 0))}%`,
+      t?.delayReason || 'N/A', t?.observations || '', t?.finalized ? 'Finalizado' : 'Ativo'
     ]);
     let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; 
     csvContent += [headers.join(';'), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(';'))].join('\n');
@@ -1676,15 +1694,20 @@ const App = () => {
             {ppcChartData.length === 0 ? (
               <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs italic">Nenhum dado de PPC registado.</div>
             ) : (
-              ppcChartData.map((d, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center justify-end h-full z-10 group relative">
-                  <div className="opacity-0 group-hover:opacity-100 absolute -top-8 bg-slate-800 text-white text-[10px] px-2 py-1 rounded pointer-events-none transition-opacity whitespace-nowrap z-20 shadow-lg">
-                    {d.ppc.toFixed(1)}% ({d.completed}/{d.totalPlanned})
+              ppcChartData.map((d, i) => {
+                const ppcVal = typeof d?.ppc === 'number' ? d.ppc : parseFloat(d?.ppc) || 0;
+                const completedVal = d?.completed ?? 0;
+                const totalPlannedVal = d?.totalPlanned ?? 0;
+                return (
+                  <div key={i} className="flex-1 flex flex-col items-center justify-end h-full z-10 group relative">
+                    <div className="opacity-0 group-hover:opacity-100 absolute -top-8 bg-slate-800 text-white text-[10px] px-2 py-1 rounded pointer-events-none transition-opacity whitespace-nowrap z-20 shadow-lg">
+                      {ppcVal.toFixed(1)}% ({completedVal}/{totalPlannedVal})
+                    </div>
+                    <div className={`w-full max-w-[40px] rounded-t-md transition-all cursor-pointer ${ppcVal > 74.9 ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-rose-500 hover:bg-rose-400'}`} style={{ height: `${Math.max(ppcVal, 2)}%` }}></div>
+                    <span className="text-[8px] text-slate-500 mt-2 font-bold rotate-45 origin-top-left absolute -bottom-6 whitespace-nowrap">{formatDateBR(d?.weekStart).slice(0,5)}</span>
                   </div>
-                  <div className={`w-full max-w-[40px] rounded-t-md transition-all cursor-pointer ${d.ppc > 74.9 ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-rose-500 hover:bg-rose-400'}`} style={{ height: `${Math.max(d.ppc, 2)}%` }}></div>
-                  <span className="text-[8px] text-slate-500 mt-2 font-bold rotate-45 origin-top-left absolute -bottom-6 whitespace-nowrap">{formatDateBR(d.weekStart).slice(0,5)}</span>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -2010,14 +2033,17 @@ const App = () => {
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
         <h3 className="text-sm font-black text-slate-800 uppercase mb-4 flex items-center gap-2"><span>📈</span> Evolução Semanal de PPC do Projeto</h3>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          {ppcHistory.map((h, i) => (
-            <div key={i} className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col justify-between">
-              <div className="text-[10px] font-black text-slate-400 uppercase">Semana de {formatDateBR(h.weekStart)}</div>
-              <div className="text-2xl font-black text-indigo-900 mt-1">{h.ppc.toFixed(1)}%</div>
-              <div className="text-[10px] text-slate-500 font-bold uppercase mt-2">{h.completed} / {h.totalPlanned} planos concluídos</div>
-            </div>
-          ))}
-          {ppcHistory.length === 0 && <div className="col-span-full py-8 text-center text-xs text-slate-400 font-bold uppercase italic font-mono">Nenhuma semana encerrada na base de dados.</div>}
+          {(ppcHistory || []).map((h, i) => {
+            const ppcVal = typeof h?.ppc === 'number' ? h.ppc : parseFloat(h?.ppc) || 0;
+            return (
+              <div key={i} className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col justify-between">
+                <div className="text-[10px] font-black text-slate-400 uppercase">Semana de {formatDateBR(h?.weekStart)}</div>
+                <div className="text-2xl font-black text-indigo-900 mt-1">{ppcVal.toFixed(1)}%</div>
+                <div className="text-[10px] text-slate-500 font-bold uppercase mt-2">{h?.completed ?? 0} / {h?.totalPlanned ?? 0} planos concluídos</div>
+              </div>
+            );
+          })}
+          {(ppcHistory || []).length === 0 && <div className="col-span-full py-8 text-center text-xs text-slate-400 font-bold uppercase italic font-mono">Nenhuma semana encerrada na base de dados.</div>}
         </div>
       </div>
 
@@ -2031,8 +2057,8 @@ const App = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pesquisa</label><input type="text" className="w-full p-2 border rounded-lg text-xs" placeholder="Pesquise..." value={giantSearch} onChange={e => setHistorySearch(e.target.value)} /></div>
-          <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantFloorFilter} onChange={e => setHistoryFloorFilter(e.target.value)}><option value="">-- Todos --</option>{floors.map(f => <option key={f} value={f}>{f}</option>)}</select></div>
-          <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantMacroFilter} onChange={e => setHistoryMacroFilter(e.target.value)}><option value="">-- Todas --</option>{allPossibleMacros.map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}</select></div>
+          <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantFloorFilter} onChange={e => setHistoryFloorFilter(e.target.value)}><option value="">-- Todos --</option>{(floors || []).map(f => <option key={f} value={f}>{f}</option>)}</select></div>
+          <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantMacroFilter} onChange={e => setHistoryMacroFilter(e.target.value)}><option value="">-- Todas --</option>{(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}</select></div>
           <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Estado</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantStatusFilter} onChange={e => setHistoryStatusFilter(e.target.value)}><option value="">-- Todos --</option><option value="finalized">🔒 Somente Finalizadas</option><option value="active">🔓 Somente Ativas</option></select></div>
         </div>
 
@@ -2044,24 +2070,26 @@ const App = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {filteredGiantPlanningTasks.map((t, idx) => {
-                const totalAcc = Math.min(100, (t.executedBefore || 0) + (t.progressThisWeek || 0));
-                const cPlan = t.plannedThisWeek ?? 100;
-                const isDelayed = cPlan > (t.progressThisWeek ?? 0);
+              {(filteredGiantPlanningTasks || []).map((t, idx) => {
+                const executedB = Number(t?.executedBefore) || 0;
+                const progressW = Number(t?.progressThisWeek) || 0;
+                const totalAcc = Math.min(100, executedB + progressW);
+                const cPlan = t?.plannedThisWeek ?? 100;
+                const isDelayed = cPlan > progressW;
                 return (
-                  <tr key={idx} className={`hover:bg-slate-50/80 transition ${t.finalized ? 'bg-slate-50/50 text-slate-500' : ''}`}>
-                    <td className="p-2.5 border-r font-mono whitespace-nowrap">{t.weekId}</td>
-                    <td className="p-2.5 border-r font-bold whitespace-nowrap">{t.floor}</td>
-                    <td className="p-2.5 border-r uppercase font-medium">{t.sectionId}</td>
-                    <td className="p-2.5 border-r font-black text-slate-800 uppercase">{t.activityName}</td>
-                    <td className="p-2.5 border-r uppercase font-bold text-indigo-900 whitespace-nowrap">{t.responsible}</td>
+                  <tr key={idx} className={`hover:bg-slate-50/80 transition ${t?.finalized ? 'bg-slate-50/50 text-slate-500' : ''}`}>
+                    <td className="p-2.5 border-r font-mono whitespace-nowrap">{t?.weekId}</td>
+                    <td className="p-2.5 border-r font-bold whitespace-nowrap">{t?.floor}</td>
+                    <td className="p-2.5 border-r uppercase font-medium">{t?.sectionId}</td>
+                    <td className="p-2.5 border-r font-black text-slate-800 uppercase">{t?.activityName}</td>
+                    <td className="p-2.5 border-r uppercase font-bold text-indigo-900 whitespace-nowrap">{t?.responsible}</td>
                     <td className="p-2.5 border-r text-center font-black">{cPlan}%</td>
-                    <td className="p-2.5 border-r text-center"><div className="flex gap-1 justify-center">{(t.dailyWork || [0,0,0,0,0]).map((dw, i) => <span key={i} className={`w-6 h-6 rounded-full text-[8px] font-black flex items-center justify-center ${dw ? 'bg-slate-300 text-slate-700 shadow-inner' : 'bg-slate-100 text-slate-300'}`}>{['S','T','Q','Q','S'][i]}</span>)}</div></td>
-                    <td className="p-2.5 border-r text-center font-black text-emerald-600">{t.progressThisWeek ?? 0}%</td>
+                    <td className="p-2.5 border-r text-center"><div className="flex gap-1 justify-center">{(t?.dailyWork || [0,0,0,0,0]).map((dw, i) => <span key={i} className={`w-6 h-6 rounded-full text-[8px] font-black flex items-center justify-center ${dw ? 'bg-slate-300 text-slate-700 shadow-inner' : 'bg-slate-100 text-slate-300'}`}>{['S','T','Q','Q','S'][i]}</span>)}</div></td>
+                    <td className="p-2.5 border-r text-center font-black text-emerald-600">{progressW}%</td>
                     <td className="p-2.5 border-r text-center font-black"><div className="flex items-center justify-center space-x-1.5"><div className="w-10 bg-slate-200 rounded-full h-1.5 hidden sm:block"><div className="bg-slate-700 h-1.5 rounded-full" style={{ width: `${totalAcc}%` }}></div></div><span>{totalAcc.toFixed(0)}%</span></div></td>
-                    <td className="p-2.5 border-r text-center font-bold">{isDelayed ? <span className="text-red-600 text-[10px] leading-tight block">⚠️ {t.delayReason || 'N/A'}</span> : <span className="text-emerald-600">✓ Concluído</span>}</td>
-                    <td className="p-2.5 border-r italic text-[10px] max-w-xs truncate" title={t.observations}>{t.observations || 'N/A'}</td>
-                    <td className="p-2.5 text-center font-black whitespace-nowrap">{t.finalized ? '🔒 Finalizado' : '🔓 Ativo'}</td>
+                    <td className="p-2.5 border-r text-center font-bold">{isDelayed ? <span className="text-red-600 text-[10px] leading-tight block">⚠️ {t?.delayReason || 'N/A'}</span> : <span className="text-emerald-600">✓ Concluído</span>}</td>
+                    <td className="p-2.5 border-r italic text-[10px] max-w-xs truncate" title={t?.observations}>{t?.observations || 'N/A'}</td>
+                    <td className="p-2.5 text-center font-black whitespace-nowrap">{t?.finalized ? '🔒 Finalizado' : '🔓 Ativo'}</td>
                   </tr>
                 );
               })}
@@ -2073,27 +2101,29 @@ const App = () => {
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
         <h3 className="text-sm font-black text-slate-800 uppercase mb-4 flex items-center gap-2"><span>🔄</span> Evolução e Variação Acumulada por Pacote (Histórico Geral)</h3>
         <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-          {macroEvolutionHistory.map((macro, idx) => (
+          {(macroEvolutionHistory || []).map((macro, idx) => (
             <div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
               <div className="flex justify-between items-start">
-                <div><span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded uppercase tracking-wider">{macro.sectionTitle}</span><h4 className="text-xs font-black text-slate-800 uppercase mt-1">{macro.floor}</h4></div>
+                <div><span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded uppercase tracking-wider">{macro?.sectionTitle}</span><h4 className="text-xs font-black text-slate-800 uppercase mt-1">{macro?.floor}</h4></div>
                 <div className="text-right"><span className="text-xs font-black text-emerald-600">Avanço Histórico do Pacote</span></div>
               </div>
               <div className="flex items-center gap-1.5 flex-wrap pt-2">
                 <span className="text-[10px] font-bold text-slate-400">0%</span>
-                {macro.changes.map((change, cIdx) => {
-                  const isDeltaNegative = 0 > change.delta;
+                {(macro?.changes || []).map((change, cIdx) => {
+                  const changeDelta = Number(change?.delta) || 0;
+                  const isDeltaNegative = 0 > changeDelta;
                   return (
                     <React.Fragment key={cIdx}>
                       <span className="text-slate-300">→</span>
                       <div className="bg-slate-800 px-2 py-1 rounded text-center cursor-help transition-shadow hover:shadow-md relative group">
-                        <div className={`text-[9px] font-black ${isDeltaNegative ? 'text-rose-400' : 'text-emerald-400'}`}>{isDeltaNegative ? '' : '+'}{change.delta.toFixed(1)}%</div>
-                        <div className="text-[8px] text-slate-400">{change.dateStr}</div>
+                        <div className={`text-[9px] font-black ${isDeltaNegative ? 'text-rose-400' : 'text-emerald-400'}`}>{isDeltaNegative ? '' : '+'}{changeDelta.toFixed(1)}%</div>
+                        <div className="text-[8px] text-slate-400">{change?.dateStr}</div>
                         <div className="opacity-0 group-hover:opacity-100 pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-900 text-white text-[10px] p-3 rounded shadow-xl whitespace-nowrap z-10 transition-opacity border border-slate-700">
                           <p className="font-bold text-indigo-300 border-b border-slate-700 pb-1 mb-1">Serviços na Semana:</p>
-                          {change.services.map((s, sIdx) => {
-                            const sIsNeg = 0 > s.delta;
-                            return <div key={sIdx} className="flex justify-between gap-4"><span>{s.name}</span><span className={sIsNeg ? 'text-rose-400' : 'text-emerald-400'}>{!sIsNeg ? '+' : ''}{s.delta.toFixed(1)}%</span></div>;
+                          {(change?.services || []).map((s, sIdx) => {
+                            const sDelta = Number(s?.delta) || 0;
+                            const sIsNeg = 0 > sDelta;
+                            return <div key={sIdx} className="flex justify-between gap-4"><span>{s?.name || 'Sem Nome'}</span><span className={sIsNeg ? 'text-rose-400' : 'text-emerald-400'}>{!sIsNeg ? '+' : ''}{sDelta.toFixed(1)}%</span></div>;
                           })}
                           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900"></div>
                         </div>
@@ -2104,7 +2134,7 @@ const App = () => {
               </div>
             </div>
           ))}
-          {macroEvolutionHistory.length === 0 && <div className="text-center py-12 text-slate-400 font-bold uppercase italic text-xs">Nenhum dado de variação acumulada disponível.</div>}
+          {(macroEvolutionHistory || []).length === 0 && <div className="text-center py-12 text-slate-400 font-bold uppercase italic text-xs">Nenhum dado de variação acumulada disponível.</div>}
         </div>
       </div>
     </div>
