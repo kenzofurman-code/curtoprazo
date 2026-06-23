@@ -763,7 +763,7 @@ const App = () => {
 
   useEffect(() => {
     if (!db || !userId) return;
-    const targetId = urlUserId ? urlUserId : userId;
+    const targetId = urlUserId ? urlUserId : 'projeto_principal';
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
     const unsubscribe = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
@@ -879,7 +879,7 @@ const App = () => {
     ppcHist = ppcHistory,
     mats = matrices,
     tPhones = teamPhones,
-    targetUserId = (urlUserId ? urlUserId : userId)
+    targetUserId = (urlUserId ? urlUserId : 'projeto_principal')
   ) => {
     if (!db || !targetUserId) return;
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetUserId);
@@ -2271,7 +2271,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
       setAiAnalysis(text);
       if (isFinalized && db && (urlUserId || userId)) {
-        const targetId = urlUserId ? urlUserId : userId;
+        const targetId = urlUserId ? urlUserId : 'projeto_principal';
         const newCache = { ...aiAnalysesHistory, [weekId]: text };
         setAiAnalysesHistory(newCache);
         const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
@@ -3882,7 +3882,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-300">
-              ID: {urlUserId ? `${urlUserId} (Compartilhado)` : userId}
+              ID: {urlUserId ? `${urlUserId} (Compartilhado)` : 'projeto_principal (Padrão)'}
             </span>
             {plannerUsername && (
               <div className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 border border-indigo-700/50 rounded-full text-[9px] font-bold text-indigo-200">
