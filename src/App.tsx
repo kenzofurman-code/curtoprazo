@@ -96,13 +96,23 @@ const decompressIfNeeded = (val: any): string => {
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     return val;
   }
+  if (trimmed.startsWith('unicode:')) {
+    try {
+      return decompressStringUnicode(trimmed);
+    } catch (e) {
+      console.error("Unicode decompression error:", e);
+      return val;
+    }
+  }
   try {
     const decompressed = decompressString(trimmed);
     if (decompressed && (decompressed.startsWith('{') || decompressed.startsWith('['))) {
       return decompressed;
     }
+    return decompressed || val;
   } catch (e) {
     console.error("Decompression check error:", e);
+    return val;
   }
 };
 
@@ -876,16 +886,16 @@ const App = () => {
 
       await setDoc(docRef, { 
         floors: Array.isArray(fls) ? fls : [],
-        data: compressString(dataStr),
-        history: compressString(historyStr),
-        weights: compressString(weightsStr),
-        planning: compressString(planningStr),
-        cronogramaInicial: compressString(cronoStr),
+        data: compressStringUnicode(dataStr),
+        history: compressStringUnicode(historyStr),
+        weights: compressStringUnicode(weightsStr),
+        planning: compressStringUnicode(planningStr),
+        cronogramaInicial: compressStringUnicode(cronoStr),
         teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
         teamPhones: tPhones || {},
         delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
-        ppcHistory: compressString(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
-        matrices: compressString(matricesStr),
+        ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
+        matrices: compressStringUnicode(matricesStr),
         lastUpdated: new Date() 
       });
     } catch (e) {
