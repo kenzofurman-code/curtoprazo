@@ -298,6 +298,77 @@ const formatTimestamp = (ts) => {
   return date.toLocaleString('pt-BR');
 };
 
+const toISODate = (date) => {
+  if (!date) return '';
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const generateMockWeather = (city, dateStr) => {
+  let seed = 0;
+  const locationStr = String(city || "Curitiba, PR");
+  for (let i = 0; i < dateStr.length; i++) seed += dateStr.charCodeAt(i);
+  for (let i = 0; i < locationStr.length; i++) seed += locationStr.charCodeAt(i);
+  const rand = (seed % 100) / 100;
+  
+  let conditions = "Ensolarado";
+  let icon = "clear-day";
+  let tempMax = 22 + Math.floor(rand * 6) - 3;
+  let tempMin = 12 + Math.floor(rand * 6) - 3;
+  let precip = 0;
+  
+  if (rand < 0.2) {
+    conditions = "Chuva Forte";
+    icon = "rain";
+    precip = 15;
+  } else if (rand < 0.45) {
+    conditions = "Parcialmente Nublado";
+    icon = "partly-cloudy-day";
+  } else if (rand < 0.7) {
+    conditions = "Nublado";
+    icon = "cloudy";
+  } else if (rand < 0.9) {
+    conditions = "Garoa";
+    icon = "showers";
+    precip = 2;
+  }
+  
+  if (locationStr.toLowerCase().includes("curitiba")) {
+    tempMax -= 4;
+    tempMin -= 4;
+  }
+  
+  return { tempMax, tempMin, precip, conditions, icon };
+};
+
+const getWeatherEmoji = (icon) => {
+  switch (icon) {
+    case 'snow': return '❄️';
+    case 'snow-showers': return '🌨️';
+    case 'rain': return '🌧️';
+    case 'showers-day':
+    case 'showers-night':
+    case 'showers': return '🌦️';
+    case 'thunder-rain':
+    case 'thunder-showers-day':
+    case 'thunder-showers-night':
+    case 'thunder': return '🌩️';
+    case 'wind': return '💨';
+    case 'fog': return '🌫️';
+    case 'cloudy': return '☁️';
+    case 'partly-cloudy-day': return '⛅';
+    case 'partly-cloudy-night': return '☁️';
+    case 'clear-day': return '☀️';
+    case 'clear-night': return '🌙';
+    default: return '☀️';
+  }
+};
+
+
 
 // --- Componente Inteligente: Selecionador de Dias Arrastável ---
 const DaysSelector = ({ dailyWork, disabled, onChange }) => {
@@ -628,6 +699,11 @@ const App = () => {
   const [whatsappModal, setWhatsappModal] = useState<{ isOpen: boolean, teamName: string, text: string }>({ isOpen: false, teamName: '', text: '' });
   const [teamInputs, setTeamInputs] = useState<Record<string, { progress: number, delayReason: string, observations: string }>>({});
   const [teamSubmitSuccess, setTeamSubmitSuccess] = useState<boolean>(false);
+  const [projectCity, setProjectCity] = useState<string>("Curitiba, PR");
+  const [weatherApiKey, setWeatherApiKey] = useState<string>("");
+  const [weatherCache, setWeatherCache] = useState<Record<string, { tempMax: number, tempMin: number, precip: number, conditions: string, icon: string }>>({});
+  const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
+
   // Estados UI Globais
   const [activeFloor, setActiveFloor] = useState<any>('');
   const [activeSection, setActiveSection] = useState<any>('estrutura');
@@ -823,6 +899,10 @@ const App = () => {
         setTeams(d.teams || INITIAL_TEAMS);
         setTeamPhones(d.teamPhones || {});
         setDelayReasons(d.delayReasons || INITIAL_DELAYS);
+        setProjectCity(d.projectCity || "Curitiba, PR");
+        setWeatherApiKey(d.weatherApiKey || "");
+        setWeatherCache(d.weatherCache || {});
+
         let loadedPpcHistory = d.ppcHistory || [];
         if (typeof loadedPpcHistory === 'string') {
           try { loadedPpcHistory = JSON.parse(decompressIfNeeded(loadedPpcHistory)); } catch { loadedPpcHistory = []; }
@@ -867,6 +947,99 @@ const App = () => {
     return () => unsubscribe();
   }, [db, userId, isTeamMode, urlUserId]);
 
+  useEffect(() => {
+    const loadWeather = async () => {
+      if (isTeamMode) return;
+      if (!currentWeekStart) return;
+
+      const monday = currentWeekStart;
+      const daysToFetch = [];
+      const newCache = { ...weatherCache };
+      let changed = false;
+
+      for (let i = 0; i < 5; i++) {
+        const dayDate = addDays(monday, i);
+        const dayStr = toISODate(dayDate);
+        const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+        if (!weatherCache[cacheKey]) {
+          daysToFetch.push(dayStr);
+        }
+      }
+
+      if (daysToFetch.length === 0) return;
+
+      if (!weatherApiKey) {
+        for (let i = 0; i < 5; i++) {
+          const dayDate = addDays(monday, i);
+          const dayStr = toISODate(dayDate);
+          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+          if (!newCache[cacheKey]) {
+            newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
+            changed = true;
+          }
+        }
+        if (changed) {
+          setWeatherCache(newCache);
+          saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, weatherApiKey, newCache);
+        }
+        return;
+      }
+
+      setWeatherLoading(true);
+      try {
+        const startDate = toISODate(monday);
+        const endDate = toISODate(addDays(monday, 4));
+        const url = `https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${encodeURIComponent(projectCity)}/${startDate}/${endDate}?unitGroup=metric&key=${weatherApiKey}&contentType=json&lang=pt`;
+        
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`API response status: ${res.status}`);
+        }
+        const data = await res.json();
+        
+        if (data && data.days) {
+          data.days.forEach((dayData) => {
+            const dayStr = dayData.datetime;
+            const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+            newCache[cacheKey] = {
+              tempMax: Math.round(dayData.tempmax),
+              tempMin: Math.round(dayData.tempmin),
+              precip: dayData.precip || 0,
+              conditions: dayData.conditions || '',
+              icon: dayData.icon || 'clear-day'
+            };
+            changed = true;
+          });
+        }
+        
+        if (changed) {
+          setWeatherCache(newCache);
+          saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, weatherApiKey, newCache);
+        }
+      } catch (err) {
+        console.error("Error fetching weather:", err);
+        setNotification({ message: "Erro ao consultar clima na API. Usando dados locais.", type: "error" });
+        for (let i = 0; i < 5; i++) {
+          const dayDate = addDays(monday, i);
+          const dayStr = toISODate(dayDate);
+          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+          if (!newCache[cacheKey]) {
+            newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
+            changed = true;
+          }
+        }
+        if (changed) {
+          setWeatherCache(newCache);
+        }
+      } finally {
+        setWeatherLoading(false);
+      }
+    };
+
+    loadWeather();
+  }, [currentWeekStart, projectCity, weatherApiKey, isTeamMode]);
+
+
   const saveToDB = async (
     fls = floors,
     data = allFloorsData,
@@ -879,7 +1052,10 @@ const App = () => {
     ppcHist = ppcHistory,
     mats = matrices,
     tPhones = teamPhones,
-    targetUserId = (urlUserId ? urlUserId : 'projeto_principal')
+    targetUserId = (urlUserId ? urlUserId : 'projeto_principal'),
+    pCity = projectCity,
+    wApiKey = weatherApiKey,
+    wCache = weatherCache
   ) => {
     if (!db || !targetUserId) return;
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetUserId);
@@ -906,6 +1082,9 @@ const App = () => {
         delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
         ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
         matrices: compressStringUnicode(matricesStr),
+        projectCity: pCity || "Curitiba, PR",
+        weatherApiKey: wApiKey || "",
+        weatherCache: wCache || {},
         lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
         lastUpdated: new Date() 
       });
@@ -917,6 +1096,7 @@ const App = () => {
       throw e;
     }
   };
+
 
   const getMacroTitle = (sId) => {
     for (const floor of Object.keys(allFloorsData)) {
@@ -3062,31 +3242,58 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
                   { label: 'Responsável / Equipa', key: 'responsible', cls: 'w-40 text-center' },
                   { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
-                  { label: 'Dias de Trabalho (S-S)', key: null, cls: 'text-center w-56' },
+                  { label: 'Dias de Trabalho', key: null, cls: 'text-center w-56', isWeather: true },
                   { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-48' },
                   { label: 'Motivo de Atraso', key: null, cls: 'text-center w-40' },
                   { label: 'Observações', key: null, cls: 'w-56' },
                   { label: 'Ação', key: null, cls: 'text-center w-12' },
-                ].map(({ label, key, cls }) => (
-                  <th
-                    key={label}
-                    className={`p-3 border-r border-slate-700 select-none ${cls} ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''}`}
-                    onClick={() => {
-                      if (!key) return;
-                      if (planningSortKey === key) setPlanningSortDir(d => d === 'asc' ? 'desc' : 'asc');
-                      else { setPlanningSortKey(key); setPlanningSortDir('asc'); }
-                    }}
-                  >
-                    <span className="flex items-center gap-1">
-                      {label}
-                      {key && (
-                        <span className={`text-[10px] ${planningSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
-                          {planningSortKey === key ? (planningSortDir === 'asc' ? '▲' : '▼') : '⇕'}
-                        </span>
-                      )}
-                    </span>
-                  </th>
-                ))}
+                ].map((col) => {
+                  if (col.isWeather) {
+                    return (
+                      <th key={col.label} className={`p-2 border-r border-slate-700 text-center ${col.cls}`}>
+                        <div className="flex flex-col items-center justify-center">
+                          <span className="text-[8px] text-slate-300 font-bold uppercase mb-1">Dias de Trabalho</span>
+                          <div className="flex gap-1 justify-center">
+                            {['S', 'T', 'Q', 'Q', 'S'].map((dayChar, idx) => {
+                              const dayDate = addDays(currentWeekStart, idx);
+                              const dayStr = toISODate(dayDate);
+                              const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+                              const weather = weatherCache[cacheKey];
+                              const weatherEmoji = weather ? getWeatherEmoji(weather.icon) : '☀️';
+                              const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : 'Sem dados';
+                              return (
+                                <div key={idx} className="flex flex-col items-center w-8 group relative cursor-help" title={`${dayChar} (${formatDateBR(dayDate.toISOString())}) - Clima: ${tempInfo}`}>
+                                  <span className="text-[13px] leading-none mb-0.5">{weatherEmoji}</span>
+                                  <span className="text-[8px] font-black text-slate-400">{dayChar}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </th>
+                    );
+                  }
+                  return (
+                    <th
+                      key={col.label}
+                      className={`p-3 border-r border-slate-700 select-none ${col.cls} ${col.key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''}`}
+                      onClick={() => {
+                        if (!col.key) return;
+                        if (planningSortKey === col.key) setPlanningSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                        else { setPlanningSortKey(col.key); setPlanningSortDir('asc'); }
+                      }}
+                    >
+                      <span className="flex items-center gap-1 justify-center">
+                        {col.label}
+                        {col.key && (
+                          <span className={`text-[10px] ${planningSortKey === col.key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
+                            {planningSortKey === col.key ? (planningSortDir === 'asc' ? '▲' : '▼') : '⇕'}
+                          </span>
+                        )}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -3623,6 +3830,37 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
+        <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800">5. Configurações de Clima (Visual Crossing Weather API)</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Cidade do Projeto (Formato: Cidade, Estado)</label>
+            <input
+              type="text"
+              placeholder="Ex: Curitiba, PR"
+              className="w-full p-2.5 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+              value={projectCity}
+              onChange={(e) => setProjectCity(e.target.value)}
+              onBlur={(e) => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, e.target.value, weatherApiKey)}
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Chave de API Visual Crossing</label>
+            <input
+              type="password"
+              placeholder="Digite a chave da API..."
+              className="w-full p-2.5 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+              value={weatherApiKey}
+              onChange={(e) => setWeatherApiKey(e.target.value)}
+              onBlur={(e) => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="text-[10px] text-slate-400 leading-relaxed font-bold">
+          💡 Nota: Se nenhuma chave for fornecida, o aplicativo usará dados climáticos simulados deterministicamente com base no clima de {projectCity}.
+        </p>
       </div>
     </div>
   );
