@@ -308,6 +308,17 @@ const toISODate = (date) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+const parseISODateLocal = (dateStr) => {
+  if (!dateStr) return new Date();
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return new Date(dateStr);
+  const yyyy = parseInt(parts[0], 10);
+  const mm = parseInt(parts[1], 10) - 1;
+  const dd = parseInt(parts[2], 10);
+  return new Date(yyyy, mm, dd, 0, 0, 0, 0);
+};
+
+
 const generateMockWeather = (city, dateStr) => {
   let seed = 0;
   const locationStr = String(city || "Curitiba, PR");
@@ -3272,11 +3283,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
                               const weather = isWithinRange ? weatherCache[cacheKey] : null;
                               
-                              const weatherEmoji = isWithinRange ? (weather ? getWeatherEmoji(weather.icon) : '☀️') : '';
-                              const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange ? 'Carregando...' : 'Fora do período de 15 dias');
+                              const weatherEmoji = isWithinRange && weather ? getWeatherEmoji(weather.icon) : (isWithinRange && weatherLoading ? '⏳' : '');
+                              const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                               
                               return (
-                                <div key={idx} className="flex flex-col items-center w-8 group relative cursor-help" title={`${dayChar} (${formatDateBR(dayDate.toISOString())})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
+                                <div key={idx} className="flex flex-col items-center w-8 group relative cursor-help" title={`${dayChar} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
                                   <span className="text-[13px] leading-none mb-0.5 select-none">{weatherEmoji || '\u00a0'}</span>
                                   <span className="text-[8px] font-black text-slate-400">{dayChar}</span>
                                 </div>
@@ -3615,7 +3626,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <td className="p-2.5 border-r text-center">
                       <div className="flex gap-1 justify-center items-end h-9">
                         {(t?.dailyWork || [0,0,0,0,0]).map((dw, i) => {
-                          const weekDate = new Date((t.weekId || '') + 'T00:00:00');
+                          const weekDate = parseISODateLocal(t.weekId);
                           const dayDate = addDays(weekDate, i);
                           const dayStr = toISODate(dayDate);
                           
@@ -3627,12 +3638,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                           
                           const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
                           const weather = isWithinRange ? weatherCache[cacheKey] : null;
-                          const weatherEmoji = weather ? getWeatherEmoji(weather.icon) : '';
-                          const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : 'Sem dados';
+                          const weatherEmoji = isWithinRange && weather ? getWeatherEmoji(weather.icon) : (isWithinRange && weatherLoading ? '⏳' : '');
+                          const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                           
                           return (
-                            <div key={i} className="flex flex-col items-center group relative cursor-help" title={`${['Seg','Ter','Qua','Qui','Sex'][i]} (${formatDateBR(dayDate.toISOString())})${isWithinRange && weather ? ` - Clima: ${tempInfo}` : ''}`}>
-                              <span className="text-[10px] leading-none mb-0.5 select-none">{isWithinRange && weatherEmoji ? weatherEmoji : '\u00a0'}</span>
+                            <div key={i} className="flex flex-col items-center group relative cursor-help" title={`${['Seg','Ter','Qua','Qui','Sex'][i]} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
+                              <span className="text-[10px] leading-none mb-0.5 select-none">{weatherEmoji || '\u00a0'}</span>
                               <span className={`w-6 h-6 rounded-full text-[8px] font-black flex items-center justify-center ${dw ? 'bg-slate-300 text-slate-700 shadow-inner border border-slate-400/20' : 'bg-slate-100 text-slate-300'}`}>
                                 {['S','T','Q','Q','S'][i]}
                               </span>
