@@ -1784,293 +1784,377 @@ const App = () => {
     const analysisMonth = MONTHS_PT[currentWeekStart.getMonth()];
     const sortedFloors = [...floors].reverse();
 
+    const overallActual = (() => {
+      if (!cronogramaInicial || cronogramaInicial.length === 0) return 0;
+      let totalCost = 0;
+      let weightedProgress = 0;
+      cronogramaInicial.forEach(c => {
+        if (!c) return;
+        const cost = typeof c.cost === 'number' ? c.cost : 0;
+        const act = getActivityActualProgress(c);
+        totalCost += cost;
+        weightedProgress += act * cost;
+      });
+      if (totalCost > 0) return weightedProgress / totalCost;
+      const sum = cronogramaInicial.reduce((acc, c) => acc + getActivityActualProgress(c), 0);
+      return sum / cronogramaInicial.length;
+    })();
+
     return (
-      <div className="flex bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden min-h-[600px] animate-in fade-in duration-300">
-        {/* Left vertical sidebar */}
-        <div className="w-16 bg-slate-900 flex flex-col items-center py-6 border-r border-slate-800 flex-shrink-0">
-          {/* Company/Brand logo icon */}
-          <div className="mb-8">
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-emerald-400">
-              <path d="M12 4V28M4 12H28M8 8L24 24M8 24L24 8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-            </svg>
+      <div className="space-y-6 animate-in fade-in duration-300">
+        {/* Top Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <StatCard title="Avanço Físico Real" value={`${overallActual.toFixed(2)}%`} color="bg-emerald-600" />
+          <StatCard title="Meta Semanal Ativa" value={`${weeklyTasks.length} Serviços`} color="bg-indigo-600" />
+          <StatCard title="Média de PPC" value={ppcHistory.length > 0 ? `${(ppcHistory.reduce((a, b) => a + b.ppc, 0) / ppcHistory.length).toFixed(1)}%` : '0.0%'} color="bg-cyan-600" />
+          <StatCard title="Equipas Registadas" value={`${teams.length} Grupos`} color="bg-slate-800" />
+        </div>
+
+        {/* Middle mockup dashboard layout */}
+        <div className="flex bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden min-h-[600px]">
+          {/* Left vertical sidebar */}
+          <div className="w-16 bg-slate-900 flex flex-col items-center py-6 border-r border-slate-800 flex-shrink-0">
+            {/* Company/Brand logo icon */}
+            <div className="mb-8">
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-emerald-400">
+                <path d="M12 4V28M4 12H28M8 8L24 24M8 24L24 8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+              </svg>
+            </div>
+            
+            {/* Tower selectors */}
+            <div className="flex flex-col gap-6 w-full items-center">
+              {['Bloom', 'Glow', 'Take'].map(tower => {
+                const isActive = activeTower === tower;
+                return (
+                  <button
+                    key={tower}
+                    onClick={() => setActiveTower(tower)}
+                    className={`w-full py-3 text-[10px] font-black uppercase tracking-wider text-center transition-all duration-300 relative border-l-4 ${
+                      isActive 
+                        ? 'border-emerald-400 text-white bg-slate-800' 
+                        : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'
+                    }`}
+                  >
+                    {tower}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          
-          {/* Tower selectors */}
-          <div className="flex flex-col gap-6 w-full items-center">
-            {['Bloom', 'Glow', 'Take'].map(tower => {
-              const isActive = activeTower === tower;
-              return (
-                <button
-                  key={tower}
-                  onClick={() => setActiveTower(tower)}
-                  className={`w-full py-3 text-[10px] font-black uppercase tracking-wider text-center transition-all duration-300 relative border-l-4 ${
-                    isActive 
-                      ? 'border-emerald-400 text-white bg-slate-800' 
-                      : 'border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'
-                  }`}
-                >
-                  {tower}
-                </button>
-              );
-            })}
+
+          {/* Main dashboard content */}
+          <div className="flex-1 bg-slate-50 p-6 flex flex-col gap-6 overflow-y-auto">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-4 gap-4">
+              <div>
+                <h2 className="text-xl font-black text-slate-800 tracking-tight">
+                  Situação da obra em <span className="text-blue-600 capitalize">{analysisMonth}</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-1 uppercase font-bold tracking-wider">
+                  Torre {activeTower} &bull; Mapeamento Físico Semanal por Pavimento e Pacote
+                </p>
+              </div>
+
+              {/* Week Navigation */}
+              <div className="flex items-center space-x-2 bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
+                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">◀</button>
+                <div className="text-center min-w-[160px]">
+                  <div className="text-[8px] uppercase font-black text-slate-400">Semana Ativa</div>
+                  <div className="text-xs font-black text-slate-700">
+                    {currentWeekStart.toLocaleDateString('pt-BR')} - {new Date(currentWeekStart.getTime() + 4*86400000).toLocaleDateString('pt-BR')}
+                  </div>
+                </div>
+                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">▶</button>
+              </div>
+            </div>
+
+            {/* Grid containing the two main panels */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left Column: Evolução física por lote */}
+              <div className="lg:col-span-7 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
+                <div className="flex justify-between items-center mb-4 border-b pb-2">
+                  <div>
+                    <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Evolução física por lote</h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Visão vertical acumulada dos pavimentos no mês</p>
+                  </div>
+                  
+                  {/* Horizontal Legend */}
+                  <div className="flex gap-3">
+                    <div className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 bg-blue-500 rounded-full"></span>
+                      <span className="text-[8px] font-black text-slate-500 uppercase">Realizado</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 bg-cyan-200 rounded-full"></span>
+                      <span className="text-[8px] font-black text-slate-500 uppercase">Previsto</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* List of horizontal progress bars */}
+                <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1 custom-scrollbar">
+                  {sortedFloors.map((floorName, idx) => {
+                    const floorActivities = getActivitiesForMonth(floorName);
+                    const stats = getMonthProgressStats(floorActivities);
+                    
+                    return (
+                      <div key={idx} className="flex items-center gap-3">
+                        {/* Floor Label */}
+                        <div className="w-24 text-right text-[10px] font-black text-slate-600 uppercase truncate" title={floorName}>
+                          {floorName}
+                        </div>
+                        
+                        {/* Progress Container */}
+                        <div className="flex-1 bg-slate-100 h-9 rounded-md relative flex flex-col justify-between p-1 border border-slate-200/60 overflow-hidden">
+                          {/* Previsto Bar */}
+                          <div 
+                            className="bg-cyan-200 h-3 rounded transition-all duration-500" 
+                            style={{ width: `${stats.previsto}%` }}
+                            title={`Previsto: ${stats.previsto.toFixed(1)}%`}
+                          ></div>
+                          {/* Realizado Bar */}
+                          <div 
+                            className="bg-blue-500 h-3 rounded transition-all duration-500 shadow-sm" 
+                            style={{ width: `${stats.realizado}%` }}
+                            title={`Realizado: ${stats.realizado.toFixed(1)}%`}
+                          ></div>
+                        </div>
+
+                        {/* Numerical Realized Value */}
+                        <div className="w-12 text-left text-[10px] font-mono font-black text-slate-700">
+                          {stats.realizado.toFixed(2)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Right Column: Aderência (Top) and Pacotes (Bottom) */}
+              <div className="lg:col-span-5 flex flex-col gap-6">
+                {/* Top Panel: Aderência ao longo prazo */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center">
+                  <div className="w-full border-b pb-2 mb-4 text-left">
+                    <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Aderência ao longo prazo</h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Relação de conformidade física geral (SPI = EV/PV)</p>
+                  </div>
+
+                  {/* SVG Gauge */}
+                  {(() => {
+                    const spiVal = getAderenciaStats();
+                    const clampedSpi = Math.min(1.0, Math.max(0.0, spiVal));
+                    const strokeLength = 251.3;
+                    const offset = strokeLength * (1 - clampedSpi);
+
+                    const targetVal = 0.90;
+                    const angleTarget = (1 - targetVal) * Math.PI;
+                    const R = 80;
+                    const cx = 100;
+                    const cy = 100;
+
+                    const x1 = cx + 72 * Math.cos(angleTarget);
+                    const y1 = cy - 72 * Math.sin(angleTarget);
+                    const x2 = cx + 88 * Math.cos(angleTarget);
+                    const y2 = cy - 88 * Math.sin(angleTarget);
+
+                    const xText = cx + 96 * Math.cos(angleTarget);
+                    const yText = cy - 96 * Math.sin(angleTarget);
+
+                    return (
+                      <div className="w-full max-w-[240px] relative flex flex-col items-center">
+                        <svg viewBox="0 0 200 120" className="w-full">
+                          {/* Background Semi-circle */}
+                          <path 
+                            d="M 20 100 A 80 80 0 0 1 180 100" 
+                            fill="none" 
+                            stroke="#f1f5f9" 
+                            strokeWidth="14" 
+                            strokeLinecap="round" 
+                          />
+                          
+                          {/* Foreground Semi-circle */}
+                          <path 
+                            d="M 20 100 A 80 80 0 0 1 180 100" 
+                            fill="none" 
+                            stroke="#3b82f6" 
+                            strokeWidth="14" 
+                            strokeLinecap="round" 
+                            strokeDasharray={strokeLength} 
+                            strokeDashoffset={offset}
+                            className="transition-all duration-700 ease-out"
+                          />
+
+                          {/* Target Tick Mark at 0.90 */}
+                          <line 
+                            x1={x1} 
+                            y1={y1} 
+                            x2={x2} 
+                            y2={y2} 
+                            stroke="#0f172a" 
+                            strokeWidth="2.5" 
+                          />
+                          
+                          {/* Target Label */}
+                          <text 
+                            x={xText} 
+                            y={yText} 
+                            fontSize="9" 
+                            fontWeight="900" 
+                            textAnchor="middle" 
+                            fill="#0f172a"
+                          >
+                            {targetVal.toFixed(2).replace('.', ',')}
+                          </text>
+
+                          {/* Left label (0,00) */}
+                          <text x="5" y="105" fontSize="8" fontWeight="bold" textAnchor="middle" fill="#94a3b8">0,00</text>
+                          
+                          {/* Right label (1,00) */}
+                          <text x="195" y="105" fontSize="8" fontWeight="bold" textAnchor="middle" fill="#94a3b8">1,00</text>
+
+                          {/* Center big number */}
+                          <text 
+                            x="100" 
+                            y="92" 
+                            fontSize="26" 
+                            fontWeight="900" 
+                            textAnchor="middle" 
+                            fill="#1e293b"
+                          >
+                            {spiVal.toFixed(2).replace('.', ',')}
+                          </text>
+                        </svg>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Bottom Panel: Evolução física por pacote */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col flex-1">
+                  <div className="w-full border-b pb-2 mb-4">
+                    <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Evolução física por pacote</h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Comparativo do planejado vs executado das macroatividades</p>
+                  </div>
+
+                  {/* Vertical Bar Chart Container */}
+                  <div className="relative h-56 w-full flex items-end pl-8 pr-2 pt-6">
+                    {/* Grid Lines & Y-Axis */}
+                    <div className="absolute left-0 top-6 bottom-0 w-8 flex flex-col justify-between text-[8px] font-black text-slate-400 text-right pr-2 select-none pointer-events-none">
+                      <span>100</span>
+                      <span>80</span>
+                      <span>60</span>
+                      <span>40</span>
+                      <span>20</span>
+                      <span>0</span>
+                    </div>
+                    <div className="absolute left-8 right-2 top-6 bottom-0 flex flex-col justify-between pointer-events-none z-0">
+                      {[100, 80, 60, 40, 20, 0].map(val => (
+                        <div key={val} className="w-full border-t border-slate-100 h-0"></div>
+                      ))}
+                    </div>
+
+                    {/* Bars rendering */}
+                    <div className="relative z-10 flex-1 flex h-full items-end gap-3 justify-around">
+                      {allPossibleMacros.map(macroId => {
+                        const macroActivities = getActivitiesForMonth(undefined, macroId);
+                        const stats = getMonthProgressStats(macroActivities);
+                        const title = getMacroTitle(macroId);
+                        
+                        return (
+                          <div key={macroId} className="flex-1 flex flex-col items-center h-full justify-end group">
+                            {/* Stacked bars next to each other */}
+                            <div className="flex items-end gap-0.5 h-full w-full justify-center">
+                              {/* Realizado Bar (Blue) */}
+                              <div 
+                                className="w-4 bg-blue-500 rounded-t transition-all duration-500 ease-out hover:opacity-90 relative"
+                                style={{ height: `${stats.realizado}%` }}
+                                title={`Realizado: ${stats.realizado.toFixed(1)}%`}
+                              >
+                                {/* Value overlay at the top of Realizado bar */}
+                                <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[8px] font-black text-slate-700">
+                                  {stats.realizado.toFixed(0)}
+                                </span>
+                              </div>
+
+                              {/* Previsto Bar (Cyan) */}
+                              <div 
+                                className="w-4 bg-cyan-200 rounded-t transition-all duration-500 ease-out hover:opacity-90"
+                                style={{ height: `${stats.previsto}%` }}
+                                title={`Previsto: ${stats.previsto.toFixed(1)}%`}
+                              ></div>
+                            </div>
+                            
+                            {/* Package Name (Truncated) */}
+                            <span 
+                              className="text-[8px] font-black text-slate-500 uppercase truncate w-full text-center mt-1.5"
+                              title={title}
+                            >
+                              {title.length > 8 ? title.slice(0, 6) + '..' : title}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Main dashboard content */}
-        <div className="flex-1 bg-slate-50 p-6 flex flex-col gap-6 overflow-y-auto">
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-4 gap-4">
-            <div>
-              <h2 className="text-xl font-black text-slate-800 tracking-tight">
-                Situação da obra em <span className="text-blue-600 capitalize">{analysisMonth}</span>
-              </h2>
-              <p className="text-xs text-slate-500 mt-1 uppercase font-bold tracking-wider">
-                Torre {activeTower} &bull; Mapeamento Físico Semanal por Pavimento e Pacote
-              </p>
-            </div>
-
-            {/* Week Navigation */}
-            <div className="flex items-center space-x-2 bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
-              <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">◀</button>
-              <div className="text-center min-w-[160px]">
-                <div className="text-[8px] uppercase font-black text-slate-400">Semana Ativa</div>
-                <div className="text-xs font-black text-slate-700">
-                  {currentWeekStart.toLocaleDateString('pt-BR')} - {new Date(currentWeekStart.getTime() + 4*86400000).toLocaleDateString('pt-BR')}
+        {/* Bottom charts (PPC & Delay analysis) */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
+            <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Evolução do PPC</h3>
+            <p className="text-[10px] text-slate-500 mb-4">Percentual de Planos Concluídos ao longo das semanas.</p>
+            <div className="relative flex-1 flex items-end gap-2 pb-6 px-2 min-h-[200px]">
+              <div className="absolute left-0 right-0 bottom-6 top-0 pointer-events-none">
+                <div className="absolute w-full border-t-2 border-dashed border-emerald-400 z-0" style={{ bottom: '75%' }}>
+                  <span className="absolute -top-4 left-0 text-[9px] font-black text-emerald-600 bg-white px-1 rounded">META 75%</span>
                 </div>
               </div>
-              <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">▶</button>
+              {ppcChartData.length === 0 ? (
+                <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs italic">Nenhum dado de PPC registado.</div>
+              ) : (
+                ppcChartData.map((d, i) => {
+                  const ppcVal = typeof d?.ppc === 'number' ? d.ppc : parseFloat(d?.ppc) || 0;
+                  const completedVal = d?.completed ?? 0;
+                  const totalPlannedVal = d?.totalPlanned ?? 0;
+                  return (
+                    <div key={i} className="flex-1 flex flex-col items-center justify-end h-full z-10 group relative">
+                      <div className="opacity-0 group-hover:opacity-100 absolute -top-8 bg-slate-800 text-white text-[10px] px-2 py-1 rounded pointer-events-none transition-opacity whitespace-nowrap z-20 shadow-lg">
+                        {ppcVal.toFixed(1)}% ({completedVal}/{totalPlannedVal})
+                      </div>
+                      <div className={`w-full max-w-[40px] rounded-t-md transition-all cursor-pointer ${ppcVal > 74.9 ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-rose-500 hover:bg-rose-400'}`} style={{ height: `${Math.max(ppcVal, 2)}%` }}></div>
+                      <span className="text-[8px] text-slate-500 mt-2 font-bold rotate-45 origin-top-left absolute -bottom-6 whitespace-nowrap">{formatDateBR(d?.weekStart).slice(0,5)}</span>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
-          {/* Grid containing the two main panels */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Left Column: Evolução física por lote */}
-            <div className="lg:col-span-7 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
-              <div className="flex justify-between items-center mb-4 border-b pb-2">
-                <div>
-                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Evolução física por lote</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Visão vertical acumulada dos pavimentos no mês</p>
-                </div>
-                
-                {/* Horizontal Legend */}
-                <div className="flex gap-3">
-                  <div className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 bg-blue-500 rounded-full"></span>
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Realizado</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 bg-cyan-200 rounded-full"></span>
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Previsto</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* List of horizontal progress bars */}
-              <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1 custom-scrollbar">
-                {sortedFloors.map((floorName, idx) => {
-                  const floorActivities = getActivitiesForMonth(floorName);
-                  const stats = getMonthProgressStats(floorActivities);
-                  
-                  return (
-                    <div key={idx} className="flex items-center gap-3">
-                      {/* Floor Label */}
-                      <div className="w-24 text-right text-[10px] font-black text-slate-600 uppercase truncate" title={floorName}>
-                        {floorName}
+          <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
+            <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Principais Causas de Atraso (Top 5)</h3>
+            <p className="text-[10px] text-slate-500 mb-4">Frequência e percentual acumulado dos motivos de desvio.</p>
+            <div className="flex-1 flex flex-col justify-center">
+              {delayStats.length === 0 ? (
+                <div className="w-full flex items-center justify-center text-slate-400 text-xs italic h-full">Nenhum atraso com motivo registado.</div>
+              ) : (
+                <div className="space-y-4">
+                  {delayStats.map((d, i) => (
+                    <div key={i} className="relative">
+                      <div className="flex justify-between text-[10px] font-bold mb-1">
+                        <span className="text-slate-700 truncate pr-2" title={d.reason}>{d.reason}</span>
+                        <span className="text-rose-600 whitespace-nowrap">{d.count} ocorrência(s) ({d.cumulativePercent.toFixed(1)}% acum.)</span>
                       </div>
-                      
-                      {/* Progress Container */}
-                      <div className="flex-1 bg-slate-100 h-9 rounded-md relative flex flex-col justify-between p-1 border border-slate-200/60 overflow-hidden">
-                        {/* Previsto Bar */}
-                        <div 
-                          className="bg-cyan-200 h-3 rounded transition-all duration-500" 
-                          style={{ width: `${stats.previsto}%` }}
-                          title={`Previsto: ${stats.previsto.toFixed(1)}%`}
-                        ></div>
-                        {/* Realizado Bar */}
-                        <div 
-                          className="bg-blue-500 h-3 rounded transition-all duration-500 shadow-sm" 
-                          style={{ width: `${stats.realizado}%` }}
-                          title={`Realizado: ${stats.realizado.toFixed(1)}%`}
-                        ></div>
-                      </div>
-
-                      {/* Numerical Realized Value */}
-                      <div className="w-12 text-left text-[10px] font-mono font-black text-slate-700">
-                        {stats.realizado.toFixed(2)}%
+                      <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden relative">
+                        <div className="bg-rose-500 h-full rounded-full transition-all" style={{ width: `${d.percent}%` }}></div>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Right Column: Aderência (Top) and Pacotes (Bottom) */}
-            <div className="lg:col-span-5 flex flex-col gap-6">
-              {/* Top Panel: Aderência ao longo prazo */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center">
-                <div className="w-full border-b pb-2 mb-4 text-left">
-                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Aderência ao longo prazo</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Relação de conformidade física geral (SPI = EV/PV)</p>
+                  ))}
                 </div>
-
-                {/* SVG Gauge */}
-                {(() => {
-                  const spiVal = getAderenciaStats();
-                  const clampedSpi = Math.min(1.0, Math.max(0.0, spiVal));
-                  const strokeLength = 251.3;
-                  const offset = strokeLength * (1 - clampedSpi);
-
-                  const targetVal = 0.90;
-                  const angleTarget = (1 - targetVal) * Math.PI;
-                  const R = 80;
-                  const cx = 100;
-                  const cy = 100;
-
-                  const x1 = cx + 72 * Math.cos(angleTarget);
-                  const y1 = cy - 72 * Math.sin(angleTarget);
-                  const x2 = cx + 88 * Math.cos(angleTarget);
-                  const y2 = cy - 88 * Math.sin(angleTarget);
-
-                  const xText = cx + 96 * Math.cos(angleTarget);
-                  const yText = cy - 96 * Math.sin(angleTarget);
-
-                  return (
-                    <div className="w-full max-w-[240px] relative flex flex-col items-center">
-                      <svg viewBox="0 0 200 120" className="w-full">
-                        {/* Background Semi-circle */}
-                        <path 
-                          d="M 20 100 A 80 80 0 0 1 180 100" 
-                          fill="none" 
-                          stroke="#f1f5f9" 
-                          strokeWidth="14" 
-                          strokeLinecap="round" 
-                        />
-                        
-                        {/* Foreground Semi-circle */}
-                        <path 
-                          d="M 20 100 A 80 80 0 0 1 180 100" 
-                          fill="none" 
-                          stroke="#3b82f6" 
-                          strokeWidth="14" 
-                          strokeLinecap="round" 
-                          strokeDasharray={strokeLength} 
-                          strokeDashoffset={offset}
-                          className="transition-all duration-700 ease-out"
-                        />
-
-                        {/* Target Tick Mark at 0.90 */}
-                        <line 
-                          x1={x1} 
-                          y1={y1} 
-                          x2={x2} 
-                          y2={y2} 
-                          stroke="#0f172a" 
-                          strokeWidth="2.5" 
-                        />
-                        
-                        {/* Target Label */}
-                        <text 
-                          x={xText} 
-                          y={yText} 
-                          fontSize="9" 
-                          fontWeight="900" 
-                          textAnchor="middle" 
-                          fill="#0f172a"
-                        >
-                          {targetVal.toFixed(2).replace('.', ',')}
-                        </text>
-
-                        {/* Left label (0,00) */}
-                        <text x="5" y="105" fontSize="8" fontWeight="bold" textAnchor="middle" fill="#94a3b8">0,00</text>
-                        
-                        {/* Right label (1,00) */}
-                        <text x="195" y="105" fontSize="8" fontWeight="bold" textAnchor="middle" fill="#94a3b8">1,00</text>
-
-                        {/* Center big number */}
-                        <text 
-                          x="100" 
-                          y="92" 
-                          fontSize="26" 
-                          fontWeight="900" 
-                          textAnchor="middle" 
-                          fill="#1e293b"
-                        >
-                          {spiVal.toFixed(2).replace('.', ',')}
-                        </text>
-                      </svg>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Bottom Panel: Evolução física por pacote */}
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col flex-1">
-                <div className="w-full border-b pb-2 mb-4">
-                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Evolução física por pacote</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Comparativo do planejado vs executado das macroatividades</p>
-                </div>
-
-                {/* Vertical Bar Chart Container */}
-                <div className="relative h-56 w-full flex items-end pl-8 pr-2 pt-6">
-                  {/* Grid Lines & Y-Axis */}
-                  <div className="absolute left-0 top-6 bottom-0 w-8 flex flex-col justify-between text-[8px] font-black text-slate-400 text-right pr-2 select-none pointer-events-none">
-                    <span>100</span>
-                    <span>80</span>
-                    <span>60</span>
-                    <span>40</span>
-                    <span>20</span>
-                    <span>0</span>
-                  </div>
-                  <div className="absolute left-8 right-2 top-6 bottom-0 flex flex-col justify-between pointer-events-none z-0">
-                    {[100, 80, 60, 40, 20, 0].map(val => (
-                      <div key={val} className="w-full border-t border-slate-100 h-0"></div>
-                    ))}
-                  </div>
-
-                  {/* Bars rendering */}
-                  <div className="relative z-10 flex-1 flex h-full items-end gap-3 justify-around">
-                    {allPossibleMacros.map(macroId => {
-                      const macroActivities = getActivitiesForMonth(undefined, macroId);
-                      const stats = getMonthProgressStats(macroActivities);
-                      const title = getMacroTitle(macroId);
-                      
-                      return (
-                        <div key={macroId} className="flex-1 flex flex-col items-center h-full justify-end group">
-                          {/* Stacked bars next to each other */}
-                          <div className="flex items-end gap-0.5 h-full w-full justify-center">
-                            {/* Realizado Bar (Blue) */}
-                            <div 
-                              className="w-4 bg-blue-500 rounded-t transition-all duration-500 ease-out hover:opacity-90 relative"
-                              style={{ height: `${stats.realizado}%` }}
-                              title={`Realizado: ${stats.realizado.toFixed(1)}%`}
-                            >
-                              {/* Value overlay at the top of Realizado bar */}
-                              <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[8px] font-black text-slate-700">
-                                {stats.realizado.toFixed(0)}
-                              </span>
-                            </div>
-
-                            {/* Previsto Bar (Cyan) */}
-                            <div 
-                              className="w-4 bg-cyan-200 rounded-t transition-all duration-500 ease-out hover:opacity-90"
-                              style={{ height: `${stats.previsto}%` }}
-                              title={`Previsto: ${stats.previsto.toFixed(1)}%`}
-                            ></div>
-                          </div>
-                          
-                          {/* Package Name (Truncated) */}
-                          <span 
-                            className="text-[8px] font-black text-slate-500 uppercase truncate w-full text-center mt-1.5"
-                            title={title}
-                          >
-                            {title.length > 8 ? title.slice(0, 6) + '..' : title}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
