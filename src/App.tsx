@@ -913,6 +913,40 @@ const App = () => {
 
   const macroEvolutionHistory = useMemo(() => {
     const map: Record<string, any> = {};
+    
+    // Initialize map with all packages that currently have progress > 0
+    Object.keys(allFloorsData).forEach(floor => {
+      const floorData = allFloorsData[floor];
+      if (!floorData) return;
+      Object.keys(floorData).forEach(macro => {
+        const section = floorData[macro];
+        if (!section || !Array.isArray(section.items)) return;
+        
+        const totalItems = section.items.length || 1;
+        const currentProgressSum = section.items.reduce((sum, item) => sum + (item.actualPercent || 0), 0);
+        const currentPackageProgress = currentProgressSum / totalItems;
+        
+        if (currentPackageProgress > 0) {
+          if (!map[macro]) {
+            map[macro] = { 
+              sectionId: macro, 
+              sectionTitle: getMacroTitle(macro), 
+              floors: {} 
+            };
+          }
+          if (!map[macro].floors[floor]) {
+            map[macro].floors[floor] = { 
+              floor, 
+              weeks: {},
+              finalProgress: currentPackageProgress,
+              totalItems: totalItems,
+              totalHistoryDelta: 0
+            };
+          }
+        }
+      });
+    });
+
     const sortedHistory = [...history].sort((a, b) => {
       const dateA = a && a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const dateB = b && b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -924,12 +958,12 @@ const App = () => {
       const floor = record.floor || 'Sem Pavimento';
       const macro = record.sectionId || 'Sem Macro';
       const itemId = record.itemId || 'Sem Item';
+      const progressAchieved = Number(record.progressAchieved) || 0;
       
       const recDate = record.timestamp ? new Date(record.timestamp) : new Date();
       const validDate = isNaN(recDate.getTime()) ? new Date() : recDate;
       const weekStr = getWeekStartDate(validDate).toISOString().split('T')[0];
 
-      // Group by macroactivity (sectionId) first
       if (!map[macro]) {
         map[macro] = { 
           sectionId: macro, 
@@ -937,14 +971,19 @@ const App = () => {
           floors: {} 
         };
       }
-      
-      // Inside macroactivity, group by floor
       if (!map[macro].floors[floor]) {
+        const totalItems = allFloorsData[floor]?.[macro]?.items?.length || 1;
+        const currentProgressSum = allFloorsData[floor]?.[macro]?.items?.reduce((sum, item) => sum + (item.actualPercent || 0), 0) || 0;
         map[macro].floors[floor] = { 
           floor, 
-          weeks: {} 
+          weeks: {},
+          finalProgress: currentProgressSum / totalItems,
+          totalItems: totalItems,
+          totalHistoryDelta: 0
         };
       }
+
+      map[macro].floors[floor].totalHistoryDelta += progressAchieved;
 
       if (!map[macro].floors[floor].weeks[weekStr]) {
         map[macro].floors[floor].weeks[weekStr] = { 
@@ -957,7 +996,7 @@ const App = () => {
       
       map[macro].floors[floor].weeks[weekStr].services.push({ 
         name: record.itemName || 'Sem Nome', 
-        delta: Number(record.progressAchieved) || 0 
+        delta: progressAchieved 
       });
     });
 
@@ -968,18 +1007,34 @@ const App = () => {
 
       Object.keys(macroData.floors).forEach(fKey => {
         const floorData = macroData.floors[fKey];
-        const totalItems = allFloorsData[floorData.floor]?.[mId]?.items?.length || 1;
-        let cumulativeMacroPct = 0;
+        const totalItems = floorData.totalItems || 1;
+        
+        // Calculate initial progress (before any recorded history)
+        const historyDeltaProgress = floorData.totalHistoryDelta / totalItems;
+        const initialProgress = Math.max(0, floorData.finalProgress - historyDeltaProgress);
+        
+        let cumulativeMacroPct = initialProgress;
         const sortedWeeks = Object.keys(floorData.weeks).sort();
         const changes = [];
 
+        // If there was initial progress before history, add an "Importado" start block
+        if (initialProgress > 0) {
+          changes.push({
+            dateStr: 'Importado',
+            macroDelta: initialProgress,
+            macroPercent: initialProgress,
+            isImported: true,
+            services: [{ name: 'Avanço inicial/importado', delta: initialProgress * totalItems }]
+          });
+        }
+
         sortedWeeks.forEach(wKey => {
           const weekData = floorData.weeks[wKey];
-          const totalItemDelta = (weekData.services || []).reduce((sum, s) => sum + (Number(s.delta) || 0), 0);
+          const totalItemDelta = (weekData.services || []).reduce((sum, s) => sum + s.delta, 0);
           const weekMacroDelta = totalItemDelta / totalItems;
           cumulativeMacroPct += weekMacroDelta;
           weekData.macroDelta = weekMacroDelta;
-          weekData.macroPercent = cumulativeMacroPct;
+          weekData.macroPercent = Math.min(100, Math.max(0, cumulativeMacroPct));
           if (weekMacroDelta !== 0) changes.push(weekData);
         });
 
@@ -2155,26 +2210,55 @@ const App = () => {
               <div className="space-y-3 divide-y divide-slate-100">
                 {(macro?.floors || []).map((fData, fIdx) => (
                   <div key={fIdx} className={`flex flex-col sm:flex-row sm:items-center gap-3 ${fIdx > 0 ? 'pt-3' : ''}`}>
-                    <div className="sm:w-20 shrink-0">
+                    <div className="sm:w-20 shrink-0 flex items-center">
                       <span className="text-xs font-black text-slate-700 uppercase">{fData.floor}</span>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap flex-1">
                       <span className="text-[10px] font-bold text-slate-400">0%</span>
+                      <span className="text-slate-300">→</span>
                       {(fData?.changes || []).map((change, cIdx) => {
-                        const changeDelta = Number(change?.delta) || 0;
-                        const isDeltaNegative = 0 > changeDelta;
+                        const pctVal = Number(change?.macroPercent) || 0;
+                        const isImported = change?.isImported;
+                        
+                        // Premium card-like styling for each weekly milestone
+                        let boxBg = 'bg-slate-800 border-slate-700 hover:bg-slate-700';
+                        let textColor = 'text-white';
+                        let subTextColor = 'text-slate-400';
+                        let labelText = change?.dateStr;
+                        
+                        if (isImported) {
+                          boxBg = 'bg-slate-200 border-slate-300 hover:bg-slate-300';
+                          textColor = 'text-slate-800';
+                          subTextColor = 'text-slate-500';
+                          labelText = 'Medido/Importado';
+                        } else if (pctVal >= 99.9) {
+                          boxBg = 'bg-emerald-600 border-emerald-500 hover:bg-emerald-700';
+                          textColor = 'text-white';
+                          subTextColor = 'text-emerald-200';
+                        }
+                        
                         return (
                           <React.Fragment key={cIdx}>
-                            <span className="text-slate-300">→</span>
-                            <div className="bg-slate-800 px-2.5 py-1.5 rounded-lg text-center cursor-help transition-all hover:shadow-md hover:-translate-y-0.5 relative group">
-                              <div className={`text-[9px] font-black ${isDeltaNegative ? 'text-rose-400' : 'text-emerald-400'}`}>{isDeltaNegative ? '' : '+'}{changeDelta.toFixed(1)}%</div>
-                              <div className="text-[8px] text-slate-400 font-mono">{change?.dateStr}</div>
+                            {cIdx > 0 && <span className="text-slate-300">→</span>}
+                            <div className={`${boxBg} border px-3 py-2 rounded-lg text-center cursor-help transition-all hover:shadow-md hover:-translate-y-0.5 relative group min-w-[70px]`}>
+                              <div className={`text-xs font-black ${textColor}`}>{pctVal.toFixed(1)}%</div>
+                              <div className={`text-[8px] font-mono font-bold ${subTextColor}`}>{labelText}</div>
+                              
+                              {/* Detailed Hover Tooltip */}
                               <div className="opacity-0 group-hover:opacity-100 pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-900 text-white text-[10px] p-3 rounded shadow-xl whitespace-nowrap z-10 transition-opacity border border-slate-700">
-                                <p className="font-bold text-indigo-300 border-b border-slate-700 pb-1 mb-1">Serviços na Semana:</p>
+                                <p className="font-bold text-indigo-300 border-b border-slate-700 pb-1 mb-1">
+                                  {isImported ? 'Medição Inicial/Importação:' : 'Serviços na Semana:'}
+                                </p>
                                 {(change?.services || []).map((s, sIdx) => {
                                   const sDelta = Number(s?.delta) || 0;
-                                  const sIsNeg = 0 > sDelta;
-                                  return <div key={sIdx} className="flex justify-between gap-4"><span>{s?.name || 'Sem Nome'}</span><span className={sIsNeg ? 'text-rose-400' : 'text-emerald-400'}>{!sIsNeg ? '+' : ''}{sDelta.toFixed(1)}%</span></div>;
+                                  return (
+                                    <div key={sIdx} className="flex justify-between gap-4">
+                                      <span>{s?.name || 'Sem Nome'}</span>
+                                      <span className={sDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                        {sDelta >= 0 ? '+' : ''}{sDelta.toFixed(1)}%
+                                      </span>
+                                    </div>
+                                  );
                                 })}
                                 <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900"></div>
                               </div>
