@@ -950,47 +950,38 @@ const App = () => {
   useEffect(() => {
     const loadWeather = async () => {
       if (isTeamMode) return;
-      if (!currentWeekStart) return;
 
-      const monday = currentWeekStart;
-      const daysToFetch = [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const startDate = addDays(today, -15);
+      const endDate = addDays(today, 15);
+
+      const missingDates = [];
       const newCache = { ...weatherCache };
       let changed = false;
 
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-
-      const activeDaysInRange = [];
-      for (let i = 0; i < 5; i++) {
-        const dayDate = addDays(monday, i);
-        const diffTime = dayDate.getTime() - todayStart.getTime();
-        const diffDays = Math.round(diffTime / 86400000);
-        if (diffDays >= -15 && diffDays <= 15) {
-          activeDaysInRange.push(dayDate);
-        }
-      }
-
-      if (activeDaysInRange.length === 0) return;
-
-      activeDaysInRange.forEach(dayDate => {
+      for (let i = -15; i <= 15; i++) {
+        const dayDate = addDays(today, i);
         const dayStr = toISODate(dayDate);
         const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
         if (!weatherCache[cacheKey]) {
-          daysToFetch.push(dayStr);
+          missingDates.push(dayStr);
         }
-      });
+      }
 
-      if (daysToFetch.length === 0) return;
+      if (missingDates.length === 0) return;
 
       if (!weatherApiKey) {
-        activeDaysInRange.forEach(dayDate => {
+        for (let i = -15; i <= 15; i++) {
+          const dayDate = addDays(today, i);
           const dayStr = toISODate(dayDate);
           const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
           if (!newCache[cacheKey]) {
             newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
             changed = true;
           }
-        });
+        }
         if (changed) {
           setWeatherCache(newCache);
           saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, weatherApiKey, newCache);
@@ -1000,10 +991,9 @@ const App = () => {
 
       setWeatherLoading(true);
       try {
-        const sortedDates = [...activeDaysInRange].sort((a, b) => a.getTime() - b.getTime());
-        const startDate = toISODate(sortedDates[0]);
-        const endDate = toISODate(sortedDates[sortedDates.length - 1]);
-        const url = `https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${encodeURIComponent(projectCity)}/${startDate}/${endDate}?unitGroup=metric&key=${weatherApiKey}&contentType=json&lang=pt`;
+        const startStr = toISODate(startDate);
+        const endStr = toISODate(endDate);
+        const url = `https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${encodeURIComponent(projectCity)}/${startStr}/${endStr}?unitGroup=metric&key=${weatherApiKey}&contentType=json&lang=pt`;
         
         const res = await fetch(url);
         if (!res.ok) {
@@ -1033,14 +1023,15 @@ const App = () => {
       } catch (err) {
         console.error("Error fetching weather:", err);
         setNotification({ message: "Erro ao consultar clima na API. Usando dados locais.", type: "error" });
-        activeDaysInRange.forEach(dayDate => {
+        for (let i = -15; i <= 15; i++) {
+          const dayDate = addDays(today, i);
           const dayStr = toISODate(dayDate);
           const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
           if (!newCache[cacheKey]) {
             newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
             changed = true;
           }
-        });
+        }
         if (changed) {
           setWeatherCache(newCache);
         }
@@ -1050,7 +1041,7 @@ const App = () => {
     };
 
     loadWeather();
-  }, [currentWeekStart, projectCity, weatherApiKey, isTeamMode]);
+  }, [projectCity, weatherApiKey, isTeamMode]);
 
 
 
@@ -3621,7 +3612,35 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <td className="p-2.5 border-r font-black text-slate-800 uppercase">{t?.activityName}</td>
                     <td className="p-2.5 border-r uppercase font-bold text-indigo-900 whitespace-nowrap">{t?.responsible}</td>
                     <td className="p-2.5 border-r text-center font-black">{cPlan}%</td>
-                    <td className="p-2.5 border-r text-center"><div className="flex gap-1 justify-center">{(t?.dailyWork || [0,0,0,0,0]).map((dw, i) => <span key={i} className={`w-6 h-6 rounded-full text-[8px] font-black flex items-center justify-center ${dw ? 'bg-slate-300 text-slate-700 shadow-inner' : 'bg-slate-100 text-slate-300'}`}>{['S','T','Q','Q','S'][i]}</span>)}</div></td>
+                    <td className="p-2.5 border-r text-center">
+                      <div className="flex gap-1 justify-center items-end h-9">
+                        {(t?.dailyWork || [0,0,0,0,0]).map((dw, i) => {
+                          const weekDate = new Date((t.weekId || '') + 'T00:00:00');
+                          const dayDate = addDays(weekDate, i);
+                          const dayStr = toISODate(dayDate);
+                          
+                          const todayStart = new Date();
+                          todayStart.setHours(0, 0, 0, 0);
+                          const diffTime = dayDate.getTime() - todayStart.getTime();
+                          const diffDays = Math.round(diffTime / 86400000);
+                          const isWithinRange = diffDays >= -15 && diffDays <= 15;
+                          
+                          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+                          const weather = isWithinRange ? weatherCache[cacheKey] : null;
+                          const weatherEmoji = weather ? getWeatherEmoji(weather.icon) : '';
+                          const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : 'Sem dados';
+                          
+                          return (
+                            <div key={i} className="flex flex-col items-center group relative cursor-help" title={`${['Seg','Ter','Qua','Qui','Sex'][i]} (${formatDateBR(dayDate.toISOString())})${isWithinRange && weather ? ` - Clima: ${tempInfo}` : ''}`}>
+                              <span className="text-[10px] leading-none mb-0.5 select-none">{isWithinRange && weatherEmoji ? weatherEmoji : '\u00a0'}</span>
+                              <span className={`w-6 h-6 rounded-full text-[8px] font-black flex items-center justify-center ${dw ? 'bg-slate-300 text-slate-700 shadow-inner border border-slate-400/20' : 'bg-slate-100 text-slate-300'}`}>
+                                {['S','T','Q','Q','S'][i]}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </td>
                     <td className="p-2.5 border-r text-center font-black text-emerald-600">{progressW}%</td>
                     <td className="p-2.5 border-r text-center font-black"><div className="flex items-center justify-center space-x-1.5"><div className="w-10 bg-slate-200 rounded-full h-1.5 hidden sm:block"><div className="bg-slate-700 h-1.5 rounded-full" style={{ width: `${totalAcc}%` }}></div></div><span>{totalAcc.toFixed(0)}%</span></div></td>
                     <td className="p-2.5 border-r text-center font-bold">{isDelayed ? <span className="text-red-600 text-[10px] leading-tight block">⚠️ {t?.delayReason || 'N/A'}</span> : <span className="text-emerald-600">✓ Concluído</span>}</td>
