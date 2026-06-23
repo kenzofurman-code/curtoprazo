@@ -520,6 +520,23 @@ const App = () => {
   const [giantFloorFilter, setHistoryFloorFilter] = useState<string>('');
   const [giantMacroFilter, setHistoryMacroFilter] = useState<string>('');
   const [giantStatusFilter, setHistoryStatusFilter] = useState<string>('');
+  const [giantSortKey, setGiantSortKey] = useState<string>('weekId');
+  const [giantSortDir, setGiantSortDir] = useState<'asc'|'desc'>('desc');
+
+  // Filtros Cronograma
+  const [cronoSearch, setCronoSearch] = useState<string>('');
+  const [cronoFloorFilter, setCronoFloorFilter] = useState<string>('');
+  const [cronoMacroFilter, setCronoMacroFilter] = useState<string>('');
+  const [cronoProgressFilter, setCronoProgressFilter] = useState<string>('');
+  const [cronoSortKey, setCronoSortKey] = useState<string>('');
+  const [cronoSortDir, setCronoSortDir] = useState<'asc'|'desc'>('asc');
+
+  // Filtros Planejamento Semanal
+  const [planningSearch, setPlanningSearch] = useState<string>('');
+  const [planningTeamFilter, setPlanningTeamFilter] = useState<string>('');
+  const [planningStatusFilter, setPlanningStatusFilter] = useState<string>('');
+  const [planningSortKey, setPlanningSortKey] = useState<string>('');
+  const [planningSortDir, setPlanningSortDir] = useState<'asc'|'desc'>('asc');
 
   // Dashboard Interatividade
   const [dashboardTargetMonth, setDashboardTargetMonth] = useState<string>(getTodayDateString().slice(0, 7));
@@ -757,48 +774,60 @@ const App = () => {
     return c.progress ?? 0;
   };
 
-  const getActivitiesForMonth = (floorName?: string, macroId?: string) => {
-    const year = currentWeekStart.getFullYear();
-    const month = currentWeekStart.getMonth();
-    const startOfMonth = new Date(year, month, 1);
-    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999);
+  const getActivityProgressAtDate = (c: any, maxDate: Date) => {
+    if (!c) return 0;
+    let progress = getActivityActualProgress(c);
+    
+    (history || []).forEach(record => {
+      if (record && record.itemId === c.id && record.floor === c.floor) {
+        const recordDate = new Date(record.timestamp);
+        if (!isNaN(recordDate.getTime()) && recordDate > maxDate) {
+          progress -= record.progressAchieved;
+        }
+      }
+    });
+    
+    return Math.max(0, Math.min(100, progress));
+  };
 
-    let items = cronogramaInicial.filter(c => {
-      if (!c) return false;
+  const getProjectActivities = (floorName?: string, macroId?: string) => {
+    let items = cronogramaInicial;
+    if (!items || items.length === 0) {
+      const list = [];
+      Object.keys(allFloorsData).forEach(f => {
+        const fData = allFloorsData[f];
+        if (fData) {
+          Object.keys(fData).forEach(m => {
+            const sec = fData[m];
+            if (sec && Array.isArray(sec.items)) {
+              sec.items.forEach(item => {
+                list.push({
+                  id: item.id,
+                  floor: f,
+                  macro: sec.title || m,
+                  service: item.name,
+                  cost: 0,
+                  progress: item.actualPercent
+                });
+              });
+            }
+          });
+        }
+      });
+      items = list;
+    }
+
+    return items.filter(c => {
       if (floorName && c.floor !== floorName) return false;
       if (macroId && slugify(c.macro) !== slugify(macroId)) return false;
       return true;
     });
-
-    let filtered = items.filter(c => {
-      if (!c.start || !c.end) return false;
-      const s = new Date(c.start);
-      const e = new Date(c.end);
-      return s >= startOfMonth && e <= endOfMonth;
-    });
-
-    if (filtered.length === 0) {
-      filtered = items.filter(c => {
-        if (!c.start || !c.end) return false;
-        const s = new Date(c.start);
-        const e = new Date(c.end);
-        return s <= endOfMonth && e >= startOfMonth;
-      });
-    }
-
-    if (filtered.length === 0) {
-      filtered = items;
-    }
-
-    return filtered;
   };
 
-  const getMonthProgressStats = (activities: any[]) => {
+  const getCumulativeProgressStats = (activities: any[]) => {
     if (!activities || activities.length === 0) return { previsto: 0, realizado: 0 };
 
     const targetDate = new Date(currentWeekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
-    const endOfMonth = new Date(currentWeekStart.getFullYear(), currentWeekStart.getMonth() + 1, 0, 23, 59, 59, 999);
-    const reportingDate = new Date(Math.min(targetDate.getTime(), endOfMonth.getTime()));
 
     let totalCost = 0;
     let weightedPrevisto = 0;
@@ -807,17 +836,17 @@ const App = () => {
     activities.forEach(c => {
       if (!c) return;
       const cost = typeof c.cost === 'number' ? c.cost : 0;
-      const act = getActivityActualProgress(c);
+      const act = getActivityProgressAtDate(c, targetDate);
       
       let expected = 0;
       if (c.start && c.end) {
         const s = new Date(c.start);
         const e = new Date(c.end);
-        if (reportingDate >= e) expected = 100;
-        else if (reportingDate <= s) expected = 0;
+        if (targetDate >= e) expected = 100;
+        else if (targetDate <= s) expected = 0;
         else {
           const totalMs = e.getTime() - s.getTime();
-          const elapsedMs = reportingDate.getTime() - s.getTime();
+          const elapsedMs = targetDate.getTime() - s.getTime();
           expected = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 100;
         }
       }
@@ -836,16 +865,16 @@ const App = () => {
       let sumPrevisto = 0;
       let sumRealizado = 0;
       activities.forEach(c => {
-        sumRealizado += getActivityActualProgress(c);
+        sumRealizado += getActivityProgressAtDate(c, targetDate);
         let expected = 0;
         if (c.start && c.end) {
           const s = new Date(c.start);
           const e = new Date(c.end);
-          if (reportingDate >= e) expected = 100;
-          else if (reportingDate <= s) expected = 0;
+          if (targetDate >= e) expected = 100;
+          else if (targetDate <= s) expected = 0;
           else {
             const totalMs = e.getTime() - s.getTime();
-            const elapsedMs = reportingDate.getTime() - s.getTime();
+            const elapsedMs = targetDate.getTime() - s.getTime();
             expected = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 100;
           }
         }
@@ -861,8 +890,6 @@ const App = () => {
   const getAderenciaStats = () => {
     if (!cronogramaInicial || cronogramaInicial.length === 0) return 1.0;
     const targetDate = new Date(currentWeekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
-    const endOfMonth = new Date(currentWeekStart.getFullYear(), currentWeekStart.getMonth() + 1, 0, 23, 59, 59, 999);
-    const reportingDate = new Date(Math.min(targetDate.getTime(), endOfMonth.getTime()));
 
     let totalPV = 0;
     let totalEV = 0;
@@ -871,17 +898,17 @@ const App = () => {
     cronogramaInicial.forEach(c => {
       if (!c) return;
       const cost = typeof c.cost === 'number' ? c.cost : 0;
-      const act = getActivityActualProgress(c);
+      const act = getActivityProgressAtDate(c, targetDate);
       
       let expected = 0;
       if (c.start && c.end) {
         const s = new Date(c.start);
         const e = new Date(c.end);
-        if (reportingDate >= e) expected = 100;
-        else if (reportingDate <= s) expected = 0;
+        if (targetDate >= e) expected = 100;
+        else if (targetDate <= s) expected = 0;
         else {
           const totalMs = e.getTime() - s.getTime();
-          const elapsedMs = reportingDate.getTime() - s.getTime();
+          const elapsedMs = targetDate.getTime() - s.getTime();
           expected = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 100;
         }
       }
@@ -899,16 +926,16 @@ const App = () => {
       let sumExpected = 0;
       let sumActual = 0;
       cronogramaInicial.forEach(c => {
-        sumActual += getActivityActualProgress(c);
+        sumActual += getActivityProgressAtDate(c, targetDate);
         let expected = 0;
         if (c.start && c.end) {
           const s = new Date(c.start);
           const e = new Date(c.end);
-          if (reportingDate >= e) expected = 100;
-          else if (reportingDate <= s) expected = 0;
+          if (targetDate >= e) expected = 100;
+          else if (targetDate <= s) expected = 0;
           else {
             const totalMs = e.getTime() - s.getTime();
-            const elapsedMs = reportingDate.getTime() - s.getTime();
+            const elapsedMs = targetDate.getTime() - s.getTime();
             expected = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 100;
           }
         }
@@ -1167,7 +1194,7 @@ const App = () => {
   }, [history, allFloorsData]);
 
   const filteredGiantPlanningTasks = useMemo(() => {
-    return planning.filter(t => {
+    const sorted = planning.filter(t => {
       if (!t) return false;
       const actName = t.activityName ? String(t.activityName) : '';
       const respName = t.responsible ? String(t.responsible) : '';
@@ -1179,8 +1206,100 @@ const App = () => {
       const matchesMacro = !giantMacroFilter || slugify(t.sectionId) === slugify(giantMacroFilter);
       const matchesStatus = !giantStatusFilter || (giantStatusFilter === 'finalized' ? t.finalized : !t.finalized);
       return matchesSearch && matchesFloor && matchesMacro && matchesStatus;
-    }).sort((a, b) => (b.weekId || '').localeCompare(a.weekId || ''));
-  }, [planning, giantSearch, giantFloorFilter, giantMacroFilter, giantStatusFilter]);
+    });
+
+    const key = giantSortKey;
+    const dir = giantSortDir === 'asc' ? 1 : -1;
+    sorted.sort((a, b) => {
+      let aVal: any = '';
+      let bVal: any = '';
+      if (key === 'weekId') { aVal = a.weekId || ''; bVal = b.weekId || ''; }
+      else if (key === 'floor') { aVal = a.floor || ''; bVal = b.floor || ''; }
+      else if (key === 'sectionId') { aVal = a.sectionId || ''; bVal = b.sectionId || ''; }
+      else if (key === 'activityName') { aVal = a.activityName || ''; bVal = b.activityName || ''; }
+      else if (key === 'responsible') { aVal = a.responsible || ''; bVal = b.responsible || ''; }
+      else if (key === 'plannedThisWeek') { aVal = a.plannedThisWeek ?? 0; bVal = b.plannedThisWeek ?? 0; }
+      else if (key === 'progressThisWeek') { aVal = a.progressThisWeek ?? 0; bVal = b.progressThisWeek ?? 0; }
+      else if (key === 'accumulated') {
+        aVal = Math.min(100, (Number(a.executedBefore) || 0) + (Number(a.progressThisWeek) || 0));
+        bVal = Math.min(100, (Number(b.executedBefore) || 0) + (Number(b.progressThisWeek) || 0));
+      }
+      else { aVal = a.weekId || ''; bVal = b.weekId || ''; }
+      if (typeof aVal === 'number') return (aVal - bVal) * dir;
+      return String(aVal).localeCompare(String(bVal)) * dir;
+    });
+    return sorted;
+  }, [planning, giantSearch, giantFloorFilter, giantMacroFilter, giantStatusFilter, giantSortKey, giantSortDir]);
+
+  const filteredCronograma = useMemo(() => {
+    let items = (cronogramaInicial || []).filter(item => {
+      if (!item) return false;
+      const matchesSearch = !cronoSearch ||
+        (item.service || '').toLowerCase().includes(cronoSearch.toLowerCase()) ||
+        (item.macro || '').toLowerCase().includes(cronoSearch.toLowerCase()) ||
+        (item.responsible || '').toLowerCase().includes(cronoSearch.toLowerCase());
+      const matchesFloor = !cronoFloorFilter || item.floor === cronoFloorFilter;
+      const matchesMacro = !cronoMacroFilter || slugify(item.macro) === slugify(cronoMacroFilter);
+      let matchesProgress = true;
+      if (cronoProgressFilter === 'notstarted') matchesProgress = (item.progress ?? 0) === 0;
+      else if (cronoProgressFilter === 'inprogress') matchesProgress = (item.progress ?? 0) > 0 && (item.progress ?? 0) < 100;
+      else if (cronoProgressFilter === 'done') matchesProgress = (item.progress ?? 0) >= 100;
+      return matchesSearch && matchesFloor && matchesMacro && matchesProgress;
+    });
+
+    if (cronoSortKey) {
+      const dir = cronoSortDir === 'asc' ? 1 : -1;
+      items = [...items].sort((a, b) => {
+        let aVal: any = '';
+        let bVal: any = '';
+        if (cronoSortKey === 'macro') { aVal = a.macro || ''; bVal = b.macro || ''; }
+        else if (cronoSortKey === 'floor') { aVal = a.floor || ''; bVal = b.floor || ''; }
+        else if (cronoSortKey === 'service') { aVal = a.service || ''; bVal = b.service || ''; }
+        else if (cronoSortKey === 'duration') { aVal = a.duration ?? 0; bVal = b.duration ?? 0; }
+        else if (cronoSortKey === 'end') { aVal = a.end || ''; bVal = b.end || ''; }
+        else if (cronoSortKey === 'progress') { aVal = a.progress ?? 0; bVal = b.progress ?? 0; }
+        else if (cronoSortKey === 'cost') { aVal = a.cost ?? 0; bVal = b.cost ?? 0; }
+        if (typeof aVal === 'number') return (aVal - bVal) * dir;
+        return String(aVal).localeCompare(String(bVal)) * dir;
+      });
+    }
+    return items;
+  }, [cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
+
+  const filteredWeeklyTasks = useMemo(() => {
+    let tasks = (weeklyTasks || []).filter(t => {
+      if (!t) return false;
+      const matchesSearch = !planningSearch ||
+        (t.activityName || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
+        (t.responsible || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
+        (t.observations || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
+        (t.floor || '').toLowerCase().includes(planningSearch.toLowerCase());
+      const matchesTeam = !planningTeamFilter || t.responsible === planningTeamFilter;
+      let matchesStatus = true;
+      const progVal = t.progressThisWeek ?? 0;
+      const planVal = t.plannedThisWeek ?? 100;
+      if (planningStatusFilter === 'ok') matchesStatus = !t.finalized && progVal >= planVal;
+      else if (planningStatusFilter === 'delayed') matchesStatus = !t.finalized && progVal < planVal;
+      else if (planningStatusFilter === 'finalized') matchesStatus = !!t.finalized;
+      return matchesSearch && matchesTeam && matchesStatus;
+    });
+
+    if (planningSortKey) {
+      const dir = planningSortDir === 'asc' ? 1 : -1;
+      tasks = [...tasks].sort((a, b) => {
+        let aVal: any = '';
+        let bVal: any = '';
+        if (planningSortKey === 'activityName') { aVal = a.activityName || ''; bVal = b.activityName || ''; }
+        else if (planningSortKey === 'floor') { aVal = a.floor || ''; bVal = b.floor || ''; }
+        else if (planningSortKey === 'responsible') { aVal = a.responsible || ''; bVal = b.responsible || ''; }
+        else if (planningSortKey === 'plannedThisWeek') { aVal = a.plannedThisWeek ?? 0; bVal = b.plannedThisWeek ?? 0; }
+        else if (planningSortKey === 'progressThisWeek') { aVal = a.progressThisWeek ?? 0; bVal = b.progressThisWeek ?? 0; }
+        if (typeof aVal === 'number') return (aVal - bVal) * dir;
+        return String(aVal).localeCompare(String(bVal)) * dir;
+      });
+    }
+    return tasks;
+  }, [weeklyTasks, planningSearch, planningTeamFilter, planningStatusFilter, planningSortKey, planningSortDir]);
 
   // --- Handlers de Ações ---
   const handleIncludeDrawerActivities = async () => {
@@ -1785,19 +1904,9 @@ const App = () => {
     const sortedFloors = [...floors].reverse();
 
     const overallActual = (() => {
-      if (!cronogramaInicial || cronogramaInicial.length === 0) return 0;
-      let totalCost = 0;
-      let weightedProgress = 0;
-      cronogramaInicial.forEach(c => {
-        if (!c) return;
-        const cost = typeof c.cost === 'number' ? c.cost : 0;
-        const act = getActivityActualProgress(c);
-        totalCost += cost;
-        weightedProgress += act * cost;
-      });
-      if (totalCost > 0) return weightedProgress / totalCost;
-      const sum = cronogramaInicial.reduce((acc, c) => acc + getActivityActualProgress(c), 0);
-      return sum / cronogramaInicial.length;
+      const activities = getProjectActivities();
+      const stats = getCumulativeProgressStats(activities);
+      return stats.realizado;
     })();
 
     return (
@@ -1905,8 +2014,8 @@ const App = () => {
                   {sortedFloors
                     .filter(floorName => visibleFloors.length === 0 || visibleFloors.includes(floorName))
                     .map((floorName, idx) => {
-                      const floorActivities = getActivitiesForMonth(floorName);
-                      const stats = getMonthProgressStats(floorActivities);
+                      const floorActivities = getProjectActivities(floorName);
+                      const stats = getCumulativeProgressStats(floorActivities);
                       
                       return (
                         <div key={idx} className="flex items-center gap-3">
@@ -2067,8 +2176,8 @@ const App = () => {
                     {/* Bars rendering */}
                     <div className="relative z-10 flex-1 flex h-full items-end gap-3 justify-around">
                       {allPossibleMacros.map(macroId => {
-                        const macroActivities = getActivitiesForMonth(undefined, macroId);
-                        const stats = getMonthProgressStats(macroActivities);
+                        const macroActivities = getProjectActivities(undefined, macroId);
+                        const stats = getCumulativeProgressStats(macroActivities);
                         const title = getMacroTitle(macroId);
                         
                         return (
@@ -2207,29 +2316,107 @@ const App = () => {
       </div>
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-          <h3 className="text-sm font-black text-slate-800 uppercase">Atividades do Cronograma Ativo ({cronogramaInicial.length})</h3>
+          <h3 className="text-sm font-black text-slate-800 uppercase">
+            Atividades do Cronograma Ativo
+            <span className="ml-2 text-indigo-600">({filteredCronograma.length}/{cronogramaInicial.length})</span>
+          </h3>
           {lastUpdatedTime && (
             <span className="text-[10px] font-bold text-slate-500 uppercase">
               Última Importação: <strong className="text-indigo-600">{lastUpdatedTime}</strong>
             </span>
           )}
         </div>
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
+
+        {/* Filter Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
+            <input
+              type="text"
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
+              placeholder="Serviço, macro, equipa..."
+              value={cronoSearch}
+              onChange={e => setCronoSearch(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={cronoFloorFilter}
+              onChange={e => setCronoFloorFilter(e.target.value)}
+            >
+              <option value="">-- Todos --</option>
+              {(floors || []).map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={cronoMacroFilter}
+              onChange={e => setCronoMacroFilter(e.target.value)}
+            >
+              <option value="">-- Todas --</option>
+              {(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Progresso</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={cronoProgressFilter}
+              onChange={e => setCronoProgressFilter(e.target.value)}
+            >
+              <option value="">-- Todos --</option>
+              <option value="notstarted">⬜ Não iniciado (0%)</option>
+              <option value="inprogress">🔵 Em andamento</option>
+              <option value="done">✅ Concluído (100%)</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-[520px]">
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider">
+            <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
               <tr>
-                <th className="p-3">Etapa (Macro)</th>
-                <th className="p-3">Pavimento (Lote)</th>
-                <th className="p-3">Serviço</th>
-                <th className="p-3 text-center">Dias</th>
-                <th className="p-3 text-center">Fim Planeado</th>
-                <th className="p-3 text-center">Último Realizado</th>
-                <th className="p-3 text-center">Equipa Associada</th>
-                <th className="p-3 text-right">Custo Estimado</th>
+                {[
+                  { label: 'Etapa (Macro)', key: 'macro' },
+                  { label: 'Pavimento (Lote)', key: 'floor' },
+                  { label: 'Serviço', key: 'service' },
+                  { label: 'Dias', key: 'duration', center: true },
+                  { label: 'Fim Planeado', key: 'end', center: true },
+                  { label: 'Realizado', key: 'progress', center: true },
+                  { label: 'Equipa', key: null, center: true },
+                  { label: 'Custo Estimado', key: 'cost', right: true },
+                ].map(({ label, key, center, right }) => (
+                  <th
+                    key={label}
+                    className={`p-3 select-none ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''} ${center ? 'text-center' : right ? 'text-right' : ''}`}
+                    onClick={() => {
+                      if (!key) return;
+                      if (cronoSortKey === key) {
+                        setCronoSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setCronoSortKey(key);
+                        setCronoSortDir('asc');
+                      }
+                    }}
+                  >
+                    <span className="flex items-center gap-1 justify-inherit">
+                      {label}
+                      {key && (
+                        <span className={`text-[10px] transition-opacity ${cronoSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
+                          {cronoSortKey === key ? (cronoSortDir === 'asc' ? '▲' : '▼') : '⇕'}
+                        </span>
+                      )}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
-              {cronogramaInicial.map((item, idx) => (
+              {filteredCronograma.map((item, idx) => (
                 <tr key={idx} className="hover:bg-slate-50">
                   <td className="p-3 font-bold text-indigo-900">{item.macro}</td>
                   <td className="p-3 text-slate-600">{item.floor}</td>
@@ -2241,6 +2428,13 @@ const App = () => {
                   <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                 </tr>
               ))}
+              {filteredCronograma.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="p-10 text-center text-slate-400 italic font-medium">
+                    Nenhuma atividade encontrada com os filtros aplicados.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -2266,7 +2460,7 @@ const App = () => {
       </div>
 
       <div className="bg-white p-4 rounded-2xl shadow-md border border-slate-200">
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6">
+        <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
           <div className="flex items-center space-x-2 bg-slate-100 p-1.5 rounded-xl">
             <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">◀</button>
             <div className="text-center min-w-[180px]">
@@ -2285,22 +2479,81 @@ const App = () => {
           </div>
         </div>
 
+        {/* Planning Filter Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
+            <input
+              type="text"
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
+              placeholder="Atividade, pavimento, observação..."
+              value={planningSearch}
+              onChange={e => setPlanningSearch(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Equipa</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={planningTeamFilter}
+              onChange={e => setPlanningTeamFilter(e.target.value)}
+            >
+              <option value="">-- Todas --</option>
+              {(teams || []).map(team => <option key={team} value={team}>{team}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Estado</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={planningStatusFilter}
+              onChange={e => setPlanningStatusFilter(e.target.value)}
+            >
+              <option value="">-- Todos --</option>
+              <option value="ok">✅ Conforme</option>
+              <option value="delayed">⚠️ Com Atraso</option>
+              <option value="finalized">🔒 Finalizado</option>
+            </select>
+          </div>
+        </div>
+
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="w-full text-xs text-left border-collapse">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
-                <th className="p-3 border-r border-slate-700 w-44">Serviço / Pavimento</th>
-                <th className="p-3 border-r border-slate-700 w-40 text-center">Responsável / Equipa</th>
-                <th className="p-3 border-r border-slate-700 text-center w-48 bg-slate-900">Meta Planeada</th>
-                <th className="p-3 border-r border-slate-700 text-center w-56">Dias de Trabalho (S-S)</th>
-                <th className="p-3 border-r border-slate-700 text-center w-48">Progresso da Semana</th>
-                <th className="p-3 border-r border-slate-700 text-center w-40">Motivo de Atraso</th>
-                <th className="p-3 w-56">Observações (Toque no 🎙️ para falar)</th>
-                <th className="p-3 text-center w-12">Ação</th>
+                {[
+                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
+                  { label: 'Responsável / Equipa', key: 'responsible', cls: 'w-40 text-center' },
+                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
+                  { label: 'Dias de Trabalho (S-S)', key: null, cls: 'text-center w-56' },
+                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-48' },
+                  { label: 'Motivo de Atraso', key: null, cls: 'text-center w-40' },
+                  { label: 'Observações', key: null, cls: 'w-56' },
+                  { label: 'Ação', key: null, cls: 'text-center w-12' },
+                ].map(({ label, key, cls }) => (
+                  <th
+                    key={label}
+                    className={`p-3 border-r border-slate-700 select-none ${cls} ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''}`}
+                    onClick={() => {
+                      if (!key) return;
+                      if (planningSortKey === key) setPlanningSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setPlanningSortKey(key); setPlanningSortDir('asc'); }
+                    }}
+                  >
+                    <span className="flex items-center gap-1">
+                      {label}
+                      {key && (
+                        <span className={`text-[10px] ${planningSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
+                          {planningSortKey === key ? (planningSortDir === 'asc' ? '▲' : '▼') : '⇕'}
+                        </span>
+                      )}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {weeklyTasks.map(t => {
+              {filteredWeeklyTasks.map(t => {
                 const currentPlan = t.plannedThisWeek ?? 100;
                 const progVal = t.progressThisWeek ?? 0;
                 const showDelayAlert = currentPlan > progVal;
@@ -2388,6 +2641,9 @@ const App = () => {
           </table>
           {weeklyTasks.length === 0 && (
             <div className="p-12 text-center text-slate-400 font-medium italic">Nenhuma atividade agendada para esta semana. Toque no botão acima para adicionar.</div>
+          )}
+          {weeklyTasks.length > 0 && filteredWeeklyTasks.length === 0 && (
+            <div className="p-12 text-center text-slate-400 font-medium italic">Nenhuma atividade encontrada com os filtros aplicados.</div>
           )}
         </div>
       </div>
@@ -2499,7 +2755,39 @@ const App = () => {
           <table className="w-full text-[11px] text-left border-collapse">
             <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-tight sticky top-0 z-10">
               <tr>
-                <th className="p-3 border-r border-slate-700">Semana ID</th><th className="p-3 border-r border-slate-700">Pavimento</th><th className="p-3 border-r border-slate-700">Macroatividade</th><th className="p-3 border-r border-slate-700">Serviço</th><th className="p-3 border-r border-slate-700">Equipa</th><th className="p-3 border-r border-slate-700 text-center">Meta Plan.</th><th className="p-3 border-r border-slate-700 text-center">Dias Ativos</th><th className="p-3 border-r border-slate-700 text-center">Avanço Sem.</th><th className="p-3 border-r border-slate-700 text-center">Acumulado</th><th className="p-3 border-r border-slate-700 text-center">Desvio/Atraso</th><th className="p-3 border-r border-slate-700">Observações</th><th className="p-3 text-center">Estado</th>
+                {[
+                  { label: 'Semana ID', key: 'weekId', cls: '' },
+                  { label: 'Pavimento', key: 'floor', cls: '' },
+                  { label: 'Macroatividade', key: 'sectionId', cls: '' },
+                  { label: 'Serviço', key: 'activityName', cls: '' },
+                  { label: 'Equipa', key: 'responsible', cls: '' },
+                  { label: 'Meta Plan.', key: 'plannedThisWeek', cls: 'text-center' },
+                  { label: 'Dias Ativos', key: null, cls: 'text-center' },
+                  { label: 'Avanço Sem.', key: 'progressThisWeek', cls: 'text-center' },
+                  { label: 'Acumulado', key: 'accumulated', cls: 'text-center' },
+                  { label: 'Desvio/Atraso', key: null, cls: 'text-center' },
+                  { label: 'Observações', key: null, cls: '' },
+                  { label: 'Estado', key: null, cls: 'text-center' },
+                ].map(({ label, key, cls }) => (
+                  <th
+                    key={label}
+                    className={`p-3 border-r border-slate-700 select-none whitespace-nowrap ${cls} ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''}`}
+                    onClick={() => {
+                      if (!key) return;
+                      if (giantSortKey === key) setGiantSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setGiantSortKey(key); setGiantSortDir('asc'); }
+                    }}
+                  >
+                    <span className="flex items-center gap-1">
+                      {label}
+                      {key && (
+                        <span className={`text-[10px] ${giantSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
+                          {giantSortKey === key ? (giantSortDir === 'asc' ? '▲' : '▼') : '⇕'}
+                        </span>
+                      )}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
