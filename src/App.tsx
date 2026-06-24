@@ -3072,7 +3072,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 ].map((col) => {
                   if (col.isWeather) {
                     return (
-                      <th key={col.label} className={`p-2 border-r border-slate-700 text-center ${col.cls}`}>
+                      <th key={col.label} className={`p-2 border-r border-slate-700 text-center sticky top-0 z-20 bg-slate-800 ${col.cls}`}>
                         <div className="flex flex-col items-center justify-center">
                           <span className="text-[8px] text-slate-300 font-bold uppercase mb-1">Dias de Trabalho</span>
                           <div className="flex gap-1 justify-center">
@@ -3107,7 +3107,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   return (
                     <th
                       key={col.label}
-                      className={`p-3 border-r border-slate-700 select-none ${col.cls} ${col.key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''}`}
+                      className={`p-3 border-r border-slate-700 select-none sticky top-0 z-20 bg-slate-800 ${col.cls} ${col.key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''}`}
                       onClick={() => {
                         if (!col.key) return;
                         if (planningSortKey === col.key) setPlanningSortDir(d => d === 'asc' ? 'desc' : 'asc');
