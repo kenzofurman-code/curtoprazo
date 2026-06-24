@@ -511,6 +511,9 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
   const cumulativeProgress = {};
   
   const recalculatedPlanning = sortedPlanning.map(task => {
+    if (task.isManual) {
+      return task;
+    }
     const key = `${task.floor}||${task.sectionId}||${task.itemId}`;
     if (cumulativeProgress[key] === undefined) {
       cumulativeProgress[key] = roundDown25(task.executedBefore || 0);
@@ -754,6 +757,11 @@ const App = () => {
   const [planningStatusFilter, setPlanningStatusFilter] = useState<string>('');
   const [planningSortKey, setPlanningSortKey] = useState<string>('');
   const [planningSortDir, setPlanningSortDir] = useState<'asc'|'desc'>('asc');
+
+  // Estados para Atividades Extras (Manuais)
+  const [isAddingManual, setIsAddingManual] = useState<boolean>(false);
+  const [manualServiceName, setManualServiceName] = useState<string>('');
+  const [manualFloor, setManualFloor] = useState<string>('');
 
   // Dashboard Interatividade
   const [dashboardTargetMonth, setDashboardTargetMonth] = useState<string>(getTodayDateString().slice(0, 7));
@@ -1727,6 +1735,53 @@ const App = () => {
     }
   };
 
+  const handleAddManualActivity = async () => {
+    if (!manualServiceName.trim()) {
+      setNotification({ message: 'Digite o nome do serviço!', type: 'error' });
+      return;
+    }
+    if (!manualFloor) {
+      setNotification({ message: 'Selecione o pavimento!', type: 'error' });
+      return;
+    }
+    
+    const currentWeekId = toLocalDateString(currentWeekStart);
+    
+    const exists = weeklyTasks.some(t => t.floor === manualFloor && t.activityName.trim().toUpperCase() === manualServiceName.trim().toUpperCase());
+    if (exists) {
+      setNotification({ message: 'Esta atividade já está incluída para este pavimento na semana!', type: 'error' });
+      return;
+    }
+
+    const newTask = {
+      id: crypto.randomUUID(),
+      weekId: currentWeekId,
+      floor: manualFloor,
+      sectionId: 'manual',
+      itemId: 'manual_' + crypto.randomUUID().slice(0, 8),
+      activityName: manualServiceName.trim(),
+      responsible: teams[0] || 'Equipa Geral',
+      weight: 100,
+      executedBefore: 0,
+      plannedThisWeek: 100,
+      progressThisWeek: 0,
+      finishDate: toLocalDateString(new Date()),
+      dailyWork: [0, 0, 0, 0, 0],
+      observations: '',
+      delayReason: '',
+      finalized: false,
+      isManual: true
+    };
+
+    const updatedPlanning = [...planning, newTask];
+    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    
+    setManualServiceName('');
+    setManualFloor('');
+    setIsAddingManual(false);
+    setNotification({ message: 'Atividade extra adicionada com sucesso!', type: 'success' });
+  };
+
   const handleDailyWorkChange = async (taskId, newDW) => {
     const updatedPlanning = planning.map(p => p.id === taskId ? { ...p, dailyWork: newDW } : p);
     await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
@@ -1738,6 +1793,10 @@ const App = () => {
     const isCurrentActive = (currentTask.plannedThisWeek ?? 100) === value;
     const numericVal = isCurrentActive ? 0 : value;
     const updatedPlanning = planning.map(t => t.id === taskId ? { ...t, plannedThisWeek: numericVal } : t);
+    if (currentTask.isManual) {
+      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      return;
+    }
     const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
     await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
   };
@@ -1753,6 +1812,11 @@ const App = () => {
       ...t, progressThisWeek: newWeeklyProgress, delayReason: (newWeeklyProgress >= (t.plannedThisWeek ?? 100)) ? '' : t.delayReason,
       lastUpdatedBy: plannerUsername || 'Sistema'
     } : t);
+    
+    if (task.isManual) {
+      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      return;
+    }
     
     const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
     const sectionKey = task.sectionId || 'estrutura';
@@ -1832,7 +1896,13 @@ const App = () => {
   };
 
   const handleRemoveTask = async (taskId) => {
+    const targetTask = planning.find(t => t.id === taskId);
     const updatedPlanning = planning.filter(t => t.id !== taskId);
+    if (targetTask && targetTask.isManual) {
+      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      setNotification({ message: 'Atividade extra removida.', type: 'success' });
+      return;
+    }
     const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
     await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
     setNotification({ message: 'Atividade removida do planeamento.', type: 'success' });
@@ -3137,6 +3207,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <td className="p-3 border-r">
                       <div className="flex items-center space-x-1.5">
                         {t.finalized && <span className="text-[10px] text-slate-500" title="Semana Finalizada">🔒</span>}
+                        {t.isManual && (
+                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0">
+                            Extra
+                          </span>
+                        )}
                         <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight truncate">{t.activityName}</div>
                       </div>
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
@@ -3268,6 +3343,58 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           )}
           {weeklyTasks.length > 0 && filteredWeeklyTasks.length === 0 && (
             <div className="p-12 text-center text-slate-400 font-medium italic">Nenhuma atividade encontrada com os filtros aplicados.</div>
+          )}
+        </div>
+
+        {/* Container para Inclusão de Atividades Manuais (Extras) */}
+        <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button 
+              type="button"
+              onClick={() => setIsAddingManual(!isAddingManual)}
+              className={`w-8 h-8 rounded-full border flex items-center justify-center font-black text-sm transition shadow-xs active:scale-95 cursor-pointer ${isAddingManual ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'}`}
+              title="Adicionar atividade extra fora de cronograma"
+            >
+              {isAddingManual ? '×' : '+'}
+            </button>
+            <div className="flex flex-col">
+              <span className="text-[11px] font-black uppercase text-slate-700 tracking-tight">Atividade Extra</span>
+              <span className="text-[9px] text-slate-400 font-bold uppercase">Incluir tarefa pontual fora do cronograma principal</span>
+            </div>
+          </div>
+
+          {isAddingManual && (
+            <div className="flex flex-1 flex-col sm:flex-row gap-3 items-stretch sm:items-center max-w-2xl animate-in fade-in slide-in-from-left duration-200">
+              <div className="flex-1">
+                <input
+                  type="text"
+                  placeholder="Descrição do serviço extra (ex: Limpeza final, Ajuste de prumo...)"
+                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-400 outline-none bg-slate-50 focus:bg-white transition"
+                  value={manualServiceName}
+                  onChange={(e) => setManualServiceName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleAddManualActivity(); }}
+                />
+              </div>
+              <div className="w-full sm:w-48">
+                <select
+                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none bg-slate-50 focus:bg-white transition cursor-pointer"
+                  value={manualFloor}
+                  onChange={(e) => setManualFloor(e.target.value)}
+                >
+                  <option value="">-- Pavimento --</option>
+                  {(floors || []).map(f => (
+                    <option key={f} value={f}>{f}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddManualActivity}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase tracking-wider rounded-lg shadow-sm transition active:scale-95 cursor-pointer whitespace-nowrap"
+              >
+                Incluir
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -3837,7 +3964,14 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       {/* Task Title */}
                       <div className="flex justify-between items-start border-b pb-2">
                         <div>
-                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-tight leading-tight">{t.activityName}</h4>
+                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-tight leading-tight flex items-center gap-1.5">
+                            {t.isManual && (
+                              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-200 text-[8px] font-black rounded uppercase tracking-tight select-none">
+                                Extra
+                              </span>
+                            )}
+                            <span>{t.activityName}</span>
+                          </h4>
                           <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">📍 {t.floor}</p>
                         </div>
                         <span className="px-2 py-0.5 bg-slate-100 border text-[9px] font-black text-slate-500 rounded-md uppercase">
