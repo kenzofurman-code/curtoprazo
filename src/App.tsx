@@ -3058,7 +3058,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="w-full text-xs text-left border-collapse">
-            <thead className="sticky top-0 z-10">
+            <thead className="sticky top-[118px] z-20 bg-slate-800">
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
                 {[
                   { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
