@@ -2619,7 +2619,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
 
         {/* Middle mockup dashboard layout */}
-        <div className="bg-white rounded-3xl shadow-xl border border-slate-100 p-6 flex flex-col gap-6 min-h-[600px] bg-slate-50">
+        <div className="bg-white rounded-3xl shadow-xl border border-slate-100 p-6 flex flex-col gap-4 bg-slate-50">
           {/* Header */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-4 gap-4">
             <div>
@@ -2645,7 +2645,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </div>
 
             {/* AI Analysis Panel (Replaces old grid) */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-5 flex justify-between items-center border-b border-slate-100 bg-slate-50/50">
                 <div className="flex items-center gap-3">
                   <div className="text-2xl opacity-80">🤖</div>
