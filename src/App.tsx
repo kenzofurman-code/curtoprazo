@@ -2085,11 +2085,11 @@ const App = () => {
           });
 
           const existingMatrices = matrices.length > 0 ? matrices : [{ id: 'default_matrix', name: 'Matriz Principal', floors: [], macros: [] }];
-          const updatedMatrices = existingMatrices.map((m, idx) => idx === 0 ? {
+          const updatedMatrices = existingMatrices.map(m => ({
             ...m,
             floors: Array.from(new Set([...(m.floors || []), ...updatedFloorsList])),
             macros: Array.from(new Set([...(m.macros || []), ...Array.from(importedMacroKeys)]))
-          } : m);
+          }));
 
           // Maintain historical planning tasks for finalized/past weeks, overwrite active week tasks
           const pastPlanning = planning.filter(t => t.weekId < currentWeekId);
@@ -2147,7 +2147,12 @@ const App = () => {
     const updatedWeights = cloneDeep(weights);
     updatedData[floor] = cloneDeep(INITIAL_STRUCTURE);
     updatedWeights[floor] = { estrutura: 50, instalacoes: 50 };
-    await saveToDB(updatedFloors, updatedData, history, updatedWeights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    const updatedMats = matrices.map(m => ({
+      ...m,
+      floors: !(m.floors || []).includes(floor) ? [...(m.floors || []), floor] : m.floors
+    }));
+    setMatrices(updatedMats);
+    await saveToDB(updatedFloors, updatedData, history, updatedWeights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updatedMats);
     setNewFloorName('');
     setNotification({ message: 'Pavimento adicionado!', type: 'success' });
   };
@@ -2178,7 +2183,12 @@ const App = () => {
       if (!updatedWeights[f]) updatedWeights[f] = {};
       updatedWeights[f][id] = 0;
     });
-    await saveToDB(floors, updatedData, history, updatedWeights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    const updatedMats = matrices.map(m => ({
+      ...m,
+      macros: !(m.macros || []).includes(id) ? [...(m.macros || []), id] : m.macros
+    }));
+    setMatrices(updatedMats);
+    await saveToDB(floors, updatedData, history, updatedWeights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updatedMats);
     setNewPackageName('');
     setActiveSection(id);
     setNotification({ message: `Pacote "${title}" criado!`, type: 'success' });
@@ -2301,7 +2311,14 @@ const App = () => {
   };
 
   const handleCreateMatrix = async () => {
-    const newMatrix = { id: crypto.randomUUID(), name: `Nova Matriz ${matrices.length + 1}`, floors: [], macros: [] };
+    // Clona pavimentos e macroatividades da primeira matriz (Matriz Principal) para herdar a mesma formatação e sequência de colunas/linhas
+    const baseMatrix = matrices[0];
+    const newMatrix = {
+      id: crypto.randomUUID(),
+      name: `Nova Matriz ${matrices.length + 1}`,
+      floors: baseMatrix ? [...(baseMatrix.floors || [])] : [...floors],
+      macros: baseMatrix ? [...(baseMatrix.macros || [])] : [...allPossibleMacros]
+    };
     const updated = [...matrices, newMatrix];
     setMatrices(updated);
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updated);
