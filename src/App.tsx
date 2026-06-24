@@ -763,6 +763,11 @@ const App = () => {
   const [manualServiceName, setManualServiceName] = useState<string>('');
   const [manualFloor, setManualFloor] = useState<string>('');
 
+  // Estados para Detalhamento PPC
+  const [ppcSelectedContractor, setPpcSelectedContractor] = useState<string>('');
+  const [ppcStartWeek, setPpcStartWeek] = useState<string>('');
+  const [ppcEndWeek, setPpcEndWeek] = useState<string>('');
+
   // Dashboard Interatividade
   const [dashboardTargetMonth, setDashboardTargetMonth] = useState<string>(getTodayDateString().slice(0, 7));
   const [selectedDashboardFloor, setSelectedDashboardFloor] = useState<any>('');
@@ -1587,6 +1592,290 @@ const App = () => {
 
     return result;
   }, [history, allFloorsData]);
+
+  // --- Memória do Detalhamento PPC ---
+  const uniqueContractors = useMemo(() => {
+    const set = new Set<string>();
+    (teams || []).forEach(t => {
+      if (t) set.add(t);
+    });
+    planning.forEach(t => {
+      if (t && t.responsible) set.add(t.responsible);
+    });
+    return Array.from(set).sort();
+  }, [teams, planning]);
+
+  const availableWeeks = useMemo(() => {
+    const set = new Set<string>();
+    planning.forEach(t => {
+      if (t && t.weekId) set.add(t.weekId);
+    });
+    if (set.size === 0) {
+      set.add(toLocalDateString(currentWeekStart));
+    }
+    return Array.from(set).sort();
+  }, [planning, currentWeekStart]);
+
+  const contractorsInPeriod = useMemo(() => {
+    const set = new Set<string>();
+    if (ppcStartWeek && ppcEndWeek) {
+      planning.forEach(t => {
+        if (t && t.weekId >= ppcStartWeek && t.weekId <= ppcEndWeek && t.responsible) {
+          set.add(t.responsible);
+        }
+      });
+    } else {
+      planning.forEach(t => {
+        if (t && t.responsible) set.add(t.responsible);
+      });
+    }
+    if (set.size === 0) {
+      return uniqueContractors;
+    }
+    return Array.from(set).sort();
+  }, [planning, ppcStartWeek, ppcEndWeek, uniqueContractors]);
+
+  // Sync state once lists are computed
+  useEffect(() => {
+    if (contractorsInPeriod.length > 0) {
+      if (!ppcSelectedContractor || !contractorsInPeriod.includes(ppcSelectedContractor)) {
+        setPpcSelectedContractor(contractorsInPeriod[0]);
+      }
+    }
+  }, [contractorsInPeriod, ppcSelectedContractor]);
+
+  useEffect(() => {
+    if (availableWeeks.length > 0) {
+      if (!ppcStartWeek) {
+        setPpcStartWeek(availableWeeks[0]);
+      }
+      if (!ppcEndWeek) {
+        setPpcEndWeek(availableWeeks[availableWeeks.length - 1]);
+      }
+    }
+  }, [availableWeeks, ppcStartWeek, ppcEndWeek]);
+
+  // Helper: format weekId "YYYY-MM-DD" to "DD/MM/YYYY"
+  const formatWeekId = (wId: string) => {
+    if (!wId) return '';
+    const parts = wId.split('-');
+    if (parts.length !== 3) return wId;
+    const [y, m, d] = parts;
+    return `${d}/${m}/${y}`;
+  };
+
+  // Calculate Weekly PPC for contractor
+  const contractorWeeklyPpcData = useMemo(() => {
+    if (!ppcSelectedContractor || !ppcStartWeek || !ppcEndWeek) return [];
+    
+    const selectedWeeks = availableWeeks.filter(w => w >= ppcStartWeek && w <= ppcEndWeek);
+    
+    return selectedWeeks.map(wId => {
+      const weekTasks = planning.filter(t => t.weekId === wId && t.responsible === ppcSelectedContractor);
+      const plannedTasks = weekTasks.filter(t => (t.plannedThisWeek ?? 100) > 0);
+      const completedTasks = plannedTasks.filter(t => (t.progressThisWeek ?? 0) >= (t.plannedThisWeek ?? 100));
+      
+      const weekStart = new Date(wId + 'T00:00:00');
+      const weekEnd = new Date(weekStart.getTime() + 6 * 86400000); // Sunday
+      
+      if (plannedTasks.length === 0) {
+        return {
+          weekId: wId,
+          startDateStr: formatWeekId(wId),
+          endDateStr: weekEnd.toLocaleDateString('pt-BR'),
+          ppc: null,
+          plannedCount: 0,
+          completedCount: 0
+        };
+      }
+      
+      const ppcVal = (completedTasks.length / plannedTasks.length) * 100;
+      return {
+        weekId: wId,
+        startDateStr: formatWeekId(wId),
+        endDateStr: weekEnd.toLocaleDateString('pt-BR'),
+        ppc: Math.round(ppcVal),
+        plannedCount: plannedTasks.length,
+        completedCount: completedTasks.length
+      };
+    });
+  }, [ppcSelectedContractor, ppcStartWeek, ppcEndWeek, availableWeeks, planning]);
+
+  // Calculate overall average PPC for the period
+  const averagePpc = useMemo(() => {
+    const validWeeks = contractorWeeklyPpcData.filter(d => d.ppc !== null);
+    if (validWeeks.length === 0) return 0;
+    const sum = validWeeks.reduce((acc, d) => acc + d.ppc!, 0);
+    return Math.round(sum / validWeeks.length);
+  }, [contractorWeeklyPpcData]);
+
+  // Calculate Delay Causes (7 largest) for selected period
+  const delayCausesData = useMemo(() => {
+    if (!ppcSelectedContractor || !ppcStartWeek || !ppcEndWeek) return [];
+    
+    const reasonsMap: Record<string, number> = {};
+    
+    planning.forEach(t => {
+      if (t && t.weekId >= ppcStartWeek && t.weekId <= ppcEndWeek && t.responsible === ppcSelectedContractor) {
+        const planned = t.plannedThisWeek ?? 100;
+        const progress = t.progressThisWeek ?? 0;
+        if (progress < planned) {
+          const reason = t.delayReason ? t.delayReason.trim() : 'Sem motivo definido';
+          reasonsMap[reason] = (reasonsMap[reason] || 0) + 1;
+        }
+      }
+    });
+    
+    const totalDelays = Object.values(reasonsMap).reduce((a, b) => a + b, 0);
+    if (totalDelays === 0) return [];
+    
+    const list = Object.entries(reasonsMap).map(([reason, count]) => {
+      const percent = Math.round((count / totalDelays) * 100);
+      return { reason, count, percent };
+    }).sort((a, b) => b.count - a.count);
+    
+    // Limit to 7 categories
+    if (list.length > 7) {
+      const top6 = list.slice(0, 6);
+      const rest = list.slice(6);
+      const restCount = rest.reduce((acc, item) => acc + item.count, 0);
+      const restPercent = Math.round((restCount / totalDelays) * 100);
+      top6.push({ reason: 'Outros motivos', count: restCount, percent: restPercent });
+      return top6;
+    }
+    
+    return list;
+  }, [ppcSelectedContractor, ppcStartWeek, ppcEndWeek, planning]);
+
+  // SVG Line Chart Generation (PPC Evolution)
+  const ppcEvolutionChart = useMemo(() => {
+    const width = 600;
+    const height = 300;
+    const mLeft = 50;
+    const mRight = 20;
+    const mTop = 35;
+    const mBottom = 55;
+    
+    const chartW = width - mLeft - mRight;
+    const chartH = height - mTop - mBottom;
+    
+    // Filter valid points (weeks with active tasks)
+    const validPoints = contractorWeeklyPpcData
+      .map((d, index) => ({ ...d, index }))
+      .filter(d => d.ppc !== null);
+      
+    if (contractorWeeklyPpcData.length === 0) return null;
+    
+    const getX = (index: number) => {
+      const total = contractorWeeklyPpcData.length;
+      if (total <= 1) return mLeft + chartW / 2;
+      return mLeft + (index / (total - 1)) * chartW;
+    };
+    
+    const getY = (val: number) => {
+      return mTop + chartH - (val / 120) * chartH;
+    };
+    
+    // Build lines path
+    let pathD = '';
+    if (validPoints.length > 1) {
+      pathD = validPoints.map((pt, i) => {
+        const x = getX(pt.index);
+        const y = getY(pt.ppc!);
+        return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+      }).join(' ');
+    }
+    
+    // Meta target is constant 80
+    const yMeta = getY(80);
+    
+    // Build vertical grid lines & X-axis labels
+    const xLabels = contractorWeeklyPpcData.map((d, index) => {
+      const x = getX(index);
+      const total = contractorWeeklyPpcData.length;
+      const interval = Math.max(1, Math.ceil(total / 8));
+      const shouldShow = index % interval === 0 || index === total - 1;
+      
+      return {
+        x,
+        text: d.startDateStr.slice(0, 5), // Only "DD/MM"
+        fullText: d.startDateStr,
+        shouldShow
+      };
+    });
+
+    // Y-axis ticks
+    const yTicks = [0, 20, 40, 60, 80, 100, 120];
+    
+    return {
+      width,
+      height,
+      mLeft,
+      chartW,
+      chartH,
+      pathD,
+      yMeta,
+      xLabels,
+      yTicks,
+      validPoints,
+      getX,
+      getY
+    };
+  }, [contractorWeeklyPpcData]);
+
+  // Render coordinates for Pie Chart SVG
+  const pieChartSlices = useMemo(() => {
+    const radius = 80;
+    let currentPercent = 0;
+    
+    const colors = [
+      '#6366f1', // Indigo
+      '#ec4899', // Pink
+      '#f59e0b', // Amber
+      '#10b981', // Emerald
+      '#3b82f6', // Blue
+      '#a855f7', // Purple
+      '#f43f5e', // Rose
+    ];
+    
+    return delayCausesData.map((d, idx) => {
+      const startPercent = currentPercent;
+      const percentVal = d.percent / 100;
+      currentPercent += percentVal;
+      const endPercent = currentPercent;
+      
+      const getCoordinatesForPercent = (p: number) => {
+        const angle = (p * 360 - 90) * (Math.PI / 180);
+        return {
+          x: radius * Math.cos(angle),
+          y: radius * Math.sin(angle)
+        };
+      };
+      
+      const startCoords = getCoordinatesForPercent(startPercent);
+      const endCoords = getCoordinatesForPercent(endPercent);
+      
+      const largeArcFlag = percentVal > 0.5 ? 1 : 0;
+      
+      const pathData = `M 0 0 L ${startCoords.x} ${startCoords.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${endCoords.x} ${endCoords.y} Z`;
+      
+      const midPercent = startPercent + percentVal / 2;
+      const midAngle = (midPercent * 360 - 90) * (Math.PI / 180);
+      const labelRadius = radius * 0.65;
+      const labelCoords = {
+        x: labelRadius * Math.cos(midAngle),
+        y: labelRadius * Math.sin(midAngle)
+      };
+      
+      return {
+        ...d,
+        pathData,
+        color: colors[idx % colors.length],
+        labelCoords,
+        percentVal
+      };
+    });
+  }, [delayCausesData]);
 
   const filteredGiantPlanningTasks = useMemo(() => {
     const sorted = planning.filter(t => {
@@ -3492,13 +3781,396 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     </div>
   );
 
-  const renderDetalhamentoPpc = () => (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 text-center py-12">
-        <p className="text-sm font-bold uppercase tracking-wider text-slate-400 italic">Espaço reservado para o Detalhamento PPC.</p>
+  const renderDetalhamentoPpc = () => {
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300">
+        {/* Selector Header Panel */}
+        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
+          <div className="flex items-center space-x-3 mb-4">
+            <h2 className="text-sm font-black text-indigo-900 uppercase tracking-tight">Filtros de Detalhamento</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Empreiteiro / Equipe</label>
+              <select
+                className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none cursor-pointer focus:bg-white transition"
+                value={ppcSelectedContractor}
+                onChange={e => setPpcSelectedContractor(e.target.value)}
+              >
+                {contractorsInPeriod.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+                {contractorsInPeriod.length === 0 && (
+                  <option value="">Nenhum empreiteiro no período</option>
+                )}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Semana Inicial</label>
+              <select
+                className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none cursor-pointer focus:bg-white transition"
+                value={ppcStartWeek}
+                onChange={e => {
+                  const val = e.target.value;
+                  setPpcStartWeek(val);
+                  if (ppcEndWeek && val > ppcEndWeek) {
+                    setPpcEndWeek(val);
+                  }
+                }}
+              >
+                {availableWeeks.map(wId => (
+                  <option key={wId} value={wId}>{formatWeekId(wId)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Semana Final</label>
+              <select
+                className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none cursor-pointer focus:bg-white transition"
+                value={ppcEndWeek}
+                onChange={e => {
+                  const val = e.target.value;
+                  setPpcEndWeek(val);
+                  if (ppcStartWeek && val < ppcStartWeek) {
+                    setPpcStartWeek(val);
+                  }
+                }}
+              >
+                {availableWeeks.map(wId => (
+                  <option key={wId} value={wId}>{formatWeekId(wId)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Info Panel matching the photo */}
+        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 font-sans text-slate-900">
+          <div className="space-y-2 text-sm md:text-base font-bold">
+            <div className="flex">
+              <span className="w-32 inline-block">EMPRESA:</span>
+              <span className="text-slate-800 font-black uppercase">{ppcSelectedContractor || '-'}</span>
+            </div>
+            <div className="flex">
+              <span className="w-32 inline-block">Semana inicial:</span>
+              <span className="text-slate-800">{formatWeekId(ppcStartWeek) || '-'}</span>
+            </div>
+            <div className="flex">
+              <span className="w-32 inline-block">Semana final:</span>
+              <span className="text-slate-800">{formatWeekId(ppcEndWeek) || '-'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Dashboard Content Layout */}
+        {ppcSelectedContractor ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            
+            {/* Left Column: Variable-height PPC Table */}
+            <div className="lg:col-span-5 bg-white p-5 rounded-2xl shadow-md border border-slate-200">
+              <div className="border-b border-slate-100 pb-3 mb-4 flex justify-between items-center">
+                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider">Histórico Semanal</h3>
+                <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">Período Selecionado</span>
+              </div>
+              
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-xs text-left border-collapse border border-slate-300">
+                  <thead className="bg-yellow-400 text-slate-900 border border-slate-300 uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="p-2 border border-slate-300 text-center font-bold">Início</th>
+                      <th className="p-2 border border-slate-300 text-center font-bold">Fim</th>
+                      <th className="p-2 border border-slate-300 text-center font-bold">PPC</th>
+                      <th className="p-2 border border-slate-300 text-center font-bold">FAROL</th>
+                      <th className="p-2 border border-slate-300 text-center font-bold">Meta</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 font-medium">
+                    {contractorWeeklyPpcData.map(row => {
+                      let farolLabel = '';
+                      if (row.ppc !== null) {
+                        if (row.ppc >= 80) {
+                          farolLabel = 'ICONE ROSTO FELIZ';
+                        } else if (row.ppc >= 50) {
+                          farolLabel = 'CONE ROSTO NORMAL';
+                        }
+                      }
+
+                      return (
+                        <tr key={row.weekId} className="hover:bg-slate-50 transition">
+                          <td className="p-2 border border-slate-300 text-center font-mono text-[10px] text-slate-800">{row.startDateStr}</td>
+                          <td className="p-2 border border-slate-300 text-center font-mono text-[10px] text-slate-800">{row.endDateStr}</td>
+                          <td className="p-2 border border-slate-300 text-center font-bold text-slate-800">
+                            {row.ppc !== null ? `${row.ppc}%` : ''}
+                          </td>
+                          <td className="p-2 border border-slate-300 text-center font-black text-[9px] text-slate-800 uppercase tracking-tighter">
+                            {farolLabel}
+                          </td>
+                          <td className="p-2 border border-slate-300 text-center text-slate-800 font-bold">80%</td>
+                        </tr>
+                      );
+                    })}
+                    {contractorWeeklyPpcData.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="p-8 text-center text-slate-400 italic font-medium">
+                          Nenhuma semana encontrada no período selecionado.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                  {/* Footer: Média row */}
+                  <tfoot className="border-t-2 border-slate-400 text-slate-950 font-bold">
+                    <tr>
+                      <td colSpan={2} className="p-2 text-center bg-yellow-400 border border-slate-300 text-xs font-black uppercase text-slate-950">Média</td>
+                      <td className="p-2 text-center bg-pink-300 border border-slate-300 text-xs font-black text-slate-950">
+                        {averagePpc}%
+                      </td>
+                      <td className="p-2 text-center bg-yellow-400 border border-slate-300"></td>
+                      <td className="p-2 text-center bg-yellow-400 border border-slate-300"></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* Right Column: Graphs */}
+            <div className="lg:col-span-7 space-y-6">
+              
+              {/* PPC Evolution Line Chart */}
+              <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
+                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Evolução do PPC</h3>
+                <p className="text-[10px] text-slate-500 mb-4">Comportamento semanal de cumprimento de metas no período selecionado.</p>
+                
+                {ppcEvolutionChart && ppcEvolutionChart.validPoints.length > 0 ? (
+                  <div className="w-full overflow-hidden flex justify-center py-2">
+                    <svg 
+                      viewBox={`0 0 ${ppcEvolutionChart.width} ${ppcEvolutionChart.height}`} 
+                      className="w-full max-w-2xl font-sans"
+                    >
+                      {/* PPC Centered Large Title in Chart */}
+                      <text 
+                        x={ppcEvolutionChart.width / 2} 
+                        y={24} 
+                        textAnchor="middle" 
+                        className="text-base font-black fill-slate-800 tracking-wider"
+                      >
+                        PPC
+                      </text>
+
+                      {/* Grid Lines */}
+                      {ppcEvolutionChart.yTicks.map(val => {
+                        const y = ppcEvolutionChart.getY(val);
+                        return (
+                          <g key={val} className="opacity-20">
+                            <line 
+                              x1={ppcEvolutionChart.mLeft} 
+                              y1={y} 
+                              x2={ppcEvolutionChart.width - 20} 
+                              y2={y} 
+                              stroke="#64748b" 
+                              strokeWidth="1"
+                            />
+                            <text 
+                              x={ppcEvolutionChart.mLeft - 8} 
+                              y={y + 4} 
+                              textAnchor="end" 
+                              className="text-[9px] font-bold fill-slate-500"
+                            >
+                              {val}%
+                            </text>
+                          </g>
+                        );
+                      })}
+
+                      {/* X-axis labels and vertical ticks */}
+                      {ppcEvolutionChart.xLabels.map((lbl, idx) => {
+                        if (!lbl.shouldShow) return null;
+                        return (
+                          <g key={idx}>
+                            <line 
+                              x1={lbl.x} 
+                              y1={ppcEvolutionChart.height - 50} 
+                              x2={lbl.x} 
+                              y2={ppcEvolutionChart.height - 55} 
+                              stroke="#94a3b8" 
+                              strokeWidth="1"
+                            />
+                            <text 
+                              x={lbl.x} 
+                              y={ppcEvolutionChart.height - 35} 
+                              textAnchor="middle" 
+                              className="text-[9px] font-black fill-slate-400 uppercase tracking-tighter"
+                            >
+                              {lbl.text}
+                            </text>
+                          </g>
+                        );
+                      })}
+
+                      {/* Meta Target line (Constant 80%) */}
+                      <line 
+                        x1={ppcEvolutionChart.mLeft} 
+                        y1={ppcEvolutionChart.yMeta} 
+                        x2={ppcEvolutionChart.width - 20} 
+                        y2={ppcEvolutionChart.yMeta} 
+                        stroke="#84cc16" 
+                        strokeWidth="3" 
+                      />
+
+                      {/* Line connecting the points */}
+                      {ppcEvolutionChart.pathD && (
+                        <path 
+                          d={ppcEvolutionChart.pathD} 
+                          fill="none" 
+                          stroke="#6366f1" 
+                          strokeWidth="3" 
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      )}
+
+                      {/* Points markers and percentage values */}
+                      {ppcEvolutionChart.validPoints.map((pt, idx) => {
+                        const x = ppcEvolutionChart.getX(pt.index);
+                        const y = ppcEvolutionChart.getY(pt.ppc!);
+                        return (
+                          <g key={idx} className="group cursor-pointer">
+                            <circle 
+                              cx={x} 
+                              cy={y} 
+                              r="5" 
+                              fill="#6366f1" 
+                              stroke="#ffffff" 
+                              strokeWidth="1.5"
+                              className="transition-transform group-hover:scale-125"
+                            />
+                            <text 
+                              x={x} 
+                              y={y - 8} 
+                              textAnchor="middle" 
+                              stroke="#ffffff"
+                              strokeWidth="3"
+                              paintOrder="stroke fill"
+                              className="text-[9px] font-black fill-slate-800"
+                            >
+                              {pt.ppc}%
+                            </text>
+                          </g>
+                        );
+                      })}
+
+                      {/* Legend at the bottom */}
+                      <g transform={`translate(${ppcEvolutionChart.width / 2 - 50}, ${ppcEvolutionChart.height - 12})`} className="text-[10px] font-bold">
+                        <line x1="0" y1="-3" x2="15" y2="-3" stroke="#6366f1" strokeWidth="3" />
+                        <text x="20" y="1" className="fill-slate-600 font-black">PPC</text>
+                        
+                        <line x1="60" y1="-3" x2="75" y2="-3" stroke="#84cc16" strokeWidth="3" />
+                        <text x="80" y="1" className="fill-slate-600 font-black">META</text>
+                      </g>
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="py-12 text-center text-slate-400 text-xs font-bold uppercase italic">
+                    Nenhum dado disponível para plotagem da curva neste período.
+                  </div>
+                )}
+              </div>
+
+              {/* Delay Causes (Pie Chart) */}
+              <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200">
+                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Causas</h3>
+                <p className="text-[10px] text-slate-500 mb-4">Proporção dos maiores motivos de desvio nas atividades neste período.</p>
+                
+                {delayCausesData.length > 0 ? (
+                  <div className="flex flex-col sm:flex-row items-center justify-around gap-6 py-2">
+                    
+                    {/* SVG Pie Chart (Solid) */}
+                    <div className="w-48 h-48 relative flex-shrink-0">
+                      <svg viewBox="-90 -90 180 180" className="w-full h-full transform -rotate-90">
+                        {pieChartSlices.map((slice, idx) => {
+                          if (slice.percentVal >= 0.99) {
+                            return (
+                              <circle 
+                                key={idx} 
+                                cx="0" 
+                                cy="0" 
+                                r="80" 
+                                fill={slice.color} 
+                              />
+                            );
+                          }
+                          return (
+                            <path 
+                              key={idx} 
+                              d={slice.pathData} 
+                              fill={slice.color}
+                              className="hover:opacity-90 transition-opacity cursor-pointer"
+                            >
+                              <title>{`${slice.reason}: ${slice.count} (${slice.percent}%)`}</title>
+                            </path>
+                          );
+                        })}
+                        
+                        {/* Slice percentages inside slices */}
+                        {pieChartSlices.map((slice, idx) => {
+                          if (slice.percent < 4) return null;
+                          const labelCoords = slice.labelCoords;
+                          return (
+                            <text
+                              key={idx}
+                              x={labelCoords.x}
+                              y={labelCoords.y}
+                              transform={`rotate(90, ${labelCoords.x}, ${labelCoords.y})`}
+                              textAnchor="middle"
+                              dominantBaseline="central"
+                              className="text-[9px] font-black fill-white pointer-events-none"
+                            >
+                              {slice.percent}%
+                            </text>
+                          );
+                        })}
+                      </svg>
+                    </div>
+
+                    {/* Legend */}
+                    <div className="flex-1 space-y-2">
+                      <div className="text-[9px] font-black text-slate-400 uppercase tracking-tight border-b pb-1 mb-2">Motivos de Desvio</div>
+                      {pieChartSlices.map((slice, idx) => (
+                        <div key={idx} className="flex items-start gap-2 text-xs">
+                          <span 
+                            className="w-3.5 h-3.5 rounded-sm mt-0.5 flex-shrink-0" 
+                            style={{ backgroundColor: slice.color }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold text-slate-700 truncate text-[11px]" title={slice.reason}>
+                              {slice.reason}
+                            </p>
+                            <p className="text-[9px] text-slate-400 font-bold uppercase">
+                              {slice.count} {slice.count === 1 ? 'ocorrência' : 'ocorrências'} ({slice.percent}%)
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                  </div>
+                ) : (
+                  <div className="py-12 text-center text-slate-400 text-xs font-bold uppercase italic">
+                    Sem justificativas de atraso registradas para este período.
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+          </div>
+        ) : (
+          <div className="bg-white p-12 rounded-2xl shadow-md border border-slate-200 text-center text-slate-400 font-medium italic">
+            Selecione um empreiteiro para visualizar os detalhamentos de PPC e desvios.
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderInfographic = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
