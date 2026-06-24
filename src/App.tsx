@@ -763,6 +763,12 @@ const App = () => {
   const [lastUpdatedTime, setLastUpdatedTime] = useState<string>('');
   const [activeTower, setActiveTower] = useState<string>('Bloom');
 
+  // Estados para drag-and-drop na matriz geral
+  const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
+  const [draggedColMatrixId, setDraggedColMatrixId] = useState<string | null>(null);
+  const [draggedRowIdx, setDraggedRowIdx] = useState<number | null>(null);
+  const [draggedRowMatrixId, setDraggedRowMatrixId] = useState<string | null>(null);
+
   // Análise IA
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
   const [aiLoading, setAiLoading] = useState<boolean>(false);
@@ -2342,6 +2348,64 @@ const App = () => {
     setMatrixSelection({ isOpen: false, matrixId: '', type: 'macro' });
   };
 
+  const handleDragColStart = (e, matrixId, idx) => {
+    setDraggedColIdx(idx);
+    setDraggedColMatrixId(matrixId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragColOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDropCol = async (e, matrixId, targetIdx) => {
+    e.preventDefault();
+    if (draggedColIdx === null || draggedColMatrixId !== matrixId || draggedColIdx === targetIdx) return;
+    
+    const updated = matrices.map(m => {
+      if (m.id === matrixId) {
+        const newMacros = [...(m.macros || [])];
+        const [movedCol] = newMacros.splice(draggedColIdx, 1);
+        newMacros.splice(targetIdx, 0, movedCol);
+        return { ...m, macros: newMacros };
+      }
+      return m;
+    });
+    setMatrices(updated);
+    await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updated);
+    setDraggedColIdx(null);
+    setDraggedColMatrixId(null);
+  };
+
+  const handleDragRowStart = (e, matrixId, idx) => {
+    setDraggedRowIdx(idx);
+    setDraggedRowMatrixId(matrixId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragRowOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDropRow = async (e, matrixId, targetIdx) => {
+    e.preventDefault();
+    if (draggedRowIdx === null || draggedRowMatrixId !== matrixId || draggedRowIdx === targetIdx) return;
+    
+    const updated = matrices.map(m => {
+      if (m.id === matrixId) {
+        const newFloors = [...(m.floors || [])];
+        const [movedRow] = newFloors.splice(draggedRowIdx, 1);
+        newFloors.splice(targetIdx, 0, movedRow);
+        return { ...m, floors: newFloors };
+      }
+      return m;
+    });
+    setMatrices(updated);
+    await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updated);
+    setDraggedRowIdx(null);
+    setDraggedRowMatrixId(null);
+  };
+
   const handleExportCSV = () => {
     const headers = ['Semana ID', 'Pavimento', 'Macroatividade', 'Serviço', 'Responsável', 'Meta Planeada (%)', 'Dias Ativos', 'Progresso Semana (%)', 'Progresso Acumulado (%)', 'Motivo Atraso', 'Observações', 'Status'];
     const rows = filteredGiantPlanningTasks.map(t => [
@@ -3199,7 +3263,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-5 rounded-2xl shadow-md border border-slate-200 gap-4">
         <div>
           <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Matrizes de Visualização</h2>
-          <p className="text-xs text-slate-500">Crie painéis customizados para visualizar o avanço de pavimentos e etapas específicas.</p>
+          <p className="text-xs text-slate-500">Crie painéis customizados para visualizar o avanço de pavimentos e etapas específicas. Arraste as linhas e colunas para reordenar.</p>
         </div>
         <button onClick={handleCreateMatrix} className="px-5 py-2.5 bg-indigo-600 text-white font-black uppercase tracking-wider rounded-xl text-xs hover:bg-indigo-700 transition shadow-md whitespace-nowrap">+ NOVA MATRIZ</button>
       </div>
@@ -3213,25 +3277,49 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             )}
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table className="w-full text-xs border-collapse">
               <thead className="bg-slate-900 text-white uppercase text-[9px] tracking-wider">
                 <tr>
                   <th className="p-4 text-left sticky left-0 bg-slate-900 z-10 w-48 border-r border-slate-700">Pavimento</th>
-                  {matrix.macros.map(mId => (
-                    <th key={mId} className="p-3 text-center group relative min-w-[120px] border-r border-slate-700">
-                      {getMacroTitle(mId)}
-                      <button onClick={() => removeMatrixColumn(matrix.id, mId)} className="absolute top-1 right-2 opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300 font-black text-xs leading-none" title="Remover Coluna">&times;</button>
+                  {matrix.macros.map((mId, idx) => (
+                    <th 
+                      key={mId} 
+                      draggable
+                      onDragStart={(e) => handleDragColStart(e, matrix.id, idx)}
+                      onDragOver={handleDragColOver}
+                      onDrop={(e) => handleDropCol(e, matrix.id, idx)}
+                      className="p-3 text-center group relative min-w-[125px] border-r border-slate-700 cursor-grab active:cursor-grabbing hover:bg-slate-800 transition select-none"
+                      title="Arraste para reordenar esta coluna"
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        <span className="text-slate-500 font-black text-[9px] tracking-tighter">⋮⋮</span>
+                        <span className="truncate max-w-[90px]">{getMacroTitle(mId)}</span>
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); removeMatrixColumn(matrix.id, mId); }} className="absolute top-1 right-2 opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300 font-black text-xs leading-none" title="Remover Coluna">&times;</button>
                     </th>
                   ))}
                   <th onClick={() => setMatrixSelection({ isOpen: true, matrixId: matrix.id, type: 'macro' })} className="p-3 text-center text-indigo-300 cursor-pointer hover:bg-slate-800 hover:text-white transition whitespace-nowrap min-w-[150px]">+ ADICIONAR ETAPA</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {matrix.floors.map(fId => (
-                  <tr key={fId} className="hover:bg-slate-50 transition group">
-                    <td className="p-3 font-black text-slate-700 bg-slate-50 sticky left-0 z-10 border-r border-slate-200 flex justify-between items-center min-w-[180px]">
-                      <span>{fId}</span>
-                      <button onClick={() => removeMatrixRow(matrix.id, fId)} className="opacity-0 group-hover:opacity-100 text-rose-500 font-black hover:bg-rose-100 px-1.5 rounded" title="Remover Linha">&times;</button>
+                {matrix.floors.map((fId, idx) => (
+                  <tr 
+                    key={fId} 
+                    draggable
+                    onDragStart={(e) => handleDragRowStart(e, matrix.id, idx)}
+                    onDragOver={handleDragRowOver}
+                    onDrop={(e) => handleDropRow(e, matrix.id, idx)}
+                    className="hover:bg-slate-50/80 transition group"
+                  >
+                    <td 
+                      className="p-3 font-black text-slate-700 bg-slate-50 sticky left-0 z-10 border-r border-slate-200 flex justify-between items-center min-w-[180px] cursor-grab active:cursor-grabbing select-none"
+                      title="Arraste para reordenar este pavimento"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-black text-[9px] tracking-tighter">⋮⋮</span>
+                        <span>{fId}</span>
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); removeMatrixRow(matrix.id, fId); }} className="opacity-0 group-hover:opacity-100 text-rose-500 font-black hover:bg-rose-100 px-1.5 rounded" title="Remover Linha">&times;</button>
                     </td>
                     {matrix.macros.map(mId => {
                       const sec = allFloorsData[fId]?.[mId];
@@ -3485,111 +3573,129 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
   const renderConfig = () => (
     <div className="space-y-6 animate-in fade-in duration-300 pb-20">
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
-        <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800">1. Gestão de Pavimentos / Lotes</h2>
-        <div className="flex gap-2 max-w-md">
-          <input type="text" placeholder="EX: TÉRREO, SUBSOLO..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newFloorName} onChange={(e) => setNewFloorName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddFloor()} />
-          <button onClick={handleAddFloor} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-900 transition">ADICIONAR</button>
-        </div>
-        <div className="flex flex-wrap gap-2 mt-4">
-          {floors.map(floor => (
-            <div key={floor} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-bold text-slate-700 border">
-              <span>{floor}</span>
-              <button onClick={() => triggerConfirm('Remover Pavimento', `Tem a certeza que deseja excluir "${floor}"?`, () => handleDeleteFloor(floor))} className="text-red-500 hover:text-red-700 font-black ml-1">&times;</button>
+      {/* 2-Column responsive grid for main config cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Column 1 */}
+        <div className="space-y-6 flex flex-col">
+          {/* Card 1: Gestão de Pavimentos / Lotes */}
+          <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 flex-1 flex flex-col">
+            <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800 mb-4">1. Gestão de Pavimentos / Lotes</h2>
+            <div className="flex gap-2">
+              <input type="text" placeholder="EX: TÉRREO, SUBSOLO..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newFloorName} onChange={(e) => setNewFloorName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddFloor()} />
+              <button onClick={handleAddFloor} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-900 transition">ADICIONAR</button>
             </div>
-          ))}
-        </div>
-      </div>
+            <div className="flex flex-wrap gap-2 mt-4 overflow-y-auto max-h-[220px] pr-1">
+              {floors.map(floor => (
+                <div key={floor} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-bold text-slate-700 border">
+                  <span>{floor}</span>
+                  <button onClick={() => triggerConfirm('Remover Pavimento', `Tem a certeza que deseja excluir "${floor}"?`, () => handleDeleteFloor(floor))} className="text-red-500 hover:text-red-700 font-black ml-1">&times;</button>
+                </div>
+              ))}
+            </div>
+          </div>
 
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-6">
-        <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800">2. Estrutura de Macroatividades e Serviços</h2>
-        <div className="bg-slate-50 p-4 rounded-xl border">
-          <h3 className="text-xs font-black uppercase text-indigo-600 mb-3">Criar Novo Pacote / Etapa</h3>
-          <div className="flex gap-2">
-            <input type="text" placeholder="EX: ALVENARIA, ACABAMENTOS..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newPackageName} onChange={(e) => setNewPackageName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddNewPackageConfig()} />
-            <button onClick={handleAddNewPackageConfig} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">CRIAR</button>
+          {/* Card 4: Padronização de Motivos de Atraso */}
+          <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 flex-1 flex flex-col">
+            <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800 mb-4">4. Padronização de Motivos de Atraso</h2>
+            <div className="flex gap-2 mb-4">
+              <input type="text" placeholder="Descrição do motivo..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-bold" value={newDelayReason} onChange={(e) => setNewDelayReason(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddDelayReason()} />
+              <button onClick={handleAddDelayReason} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">REGISTAR</button>
+            </div>
+            <div className="flex flex-wrap gap-2 overflow-y-auto max-h-[220px] pr-1">
+              {delayReasons.map(reason => (
+                <div key={reason} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-bold text-slate-700 border">
+                  <span>{reason}</span>
+                  <button onClick={() => triggerConfirm('Remover Motivo', `Deseja remover "${reason}"?`, () => handleDeleteDelayReason(reason))} className="text-red-500 hover:text-red-700 font-black ml-1">&times;</button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="max-w-xl">
-          <h3 className="text-xs font-black uppercase text-slate-600 mb-3">Adicionar Item ao Pacote Selecionado</h3>
-          <div className="flex flex-wrap gap-1 mb-3">
-            {allPossibleMacros.map(sId => (
-              <button key={sId} onClick={() => setActiveSection(sId)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition ${activeSection === sId ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{getMacroTitle(sId)}</button>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <input type="text" placeholder="EX: REBOCO, MASSA..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newItemName} onChange={(e) => setNewItemName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddNewItemConfig()} />
-            <button onClick={handleAddNewItemConfig} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">ADICIONAR</button>
-          </div>
-          <div className="space-y-1 max-h-40 overflow-y-auto mt-4 border-t pt-2">
-            {configItemsToDisplay.map(item => (
-              <div key={item.id} className="flex justify-between items-center p-2 bg-slate-50 rounded-lg text-xs">
-                <span className="font-bold text-slate-700">{item.name}</span>
-                <button onClick={() => handleDeleteItemConfig(item)} className="text-red-500 text-[10px] font-bold hover:underline">Excluir</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
-        <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800">3. Gestão de Equipas / Empreiteiros</h2>
-        <div className="flex gap-2 max-w-md mb-4">
-          <input type="text" placeholder="Nome da Equipa..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddTeam()} />
-          <button onClick={handleAddTeam} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">REGISTAR</button>
-        </div>
-        <div className="space-y-2 max-w-lg max-h-60 overflow-y-auto pr-2">
-          {teams.map(team => (
-            <div key={team} className="flex justify-between items-center p-2.5 bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-xl transition duration-200">
-              <div className="flex-1 min-w-0 pr-3">
-                <div className="text-xs font-black text-slate-800 truncate uppercase">{team}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Telefone:</span>
-                <input
-                  type="text"
-                  placeholder="+55 11 99999-9999"
-                  className="w-40 p-1.5 text-[10px] border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white font-mono outline-none"
-                  value={teamPhones[team] || ''}
-                  onChange={(e) => {
-                    const newPhones = { ...teamPhones, [team]: e.target.value };
-                    setTeamPhones(newPhones);
-                  }}
-                  onBlur={() => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones)}
-                />
-                <button
-                  onClick={() => triggerConfirm('Remover Equipa', `Deseja realmente excluir "${team}"?`, () => handleDeleteTeam(team))}
-                  className="p-1.5 hover:bg-red-50 text-red-500 hover:text-red-700 rounded-lg transition"
-                  title="Remover equipa"
-                >
-                  🗑️
-                </button>
+        {/* Column 2 */}
+        <div className="space-y-6 flex flex-col">
+          {/* Card 2: Estrutura de Macroatividades e Serviços */}
+          <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-6 flex-1 flex flex-col">
+            <div>
+              <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800 mb-4">2. Estrutura de Macroatividades e Serviços</h2>
+              <div className="bg-slate-50 p-4 rounded-xl border">
+                <h3 className="text-xs font-black uppercase text-indigo-600 mb-3">Criar Novo Pacote / Etapa</h3>
+                <div className="flex gap-2">
+                  <input type="text" placeholder="EX: ALVENARIA, ACABAMENTOS..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newPackageName} onChange={(e) => setNewPackageName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddNewPackageConfig()} />
+                  <button onClick={handleAddNewPackageConfig} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">CRIAR</button>
+                </div>
               </div>
             </div>
-          ))}
-          {teams.length === 0 && (
-            <div className="text-center py-6 text-slate-400 italic text-xs font-bold uppercase">Nenhuma equipa registada.</div>
-          )}
-        </div>
-      </div>
 
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
-        <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800">4. Padronização de Motivos de Atraso</h2>
-        <div className="flex gap-2 max-w-lg mb-4">
-          <input type="text" placeholder="Descrição do motivo..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-bold" value={newDelayReason} onChange={(e) => setNewDelayReason(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddDelayReason()} />
-          <button onClick={handleAddDelayReason} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">REGISTAR</button>
-        </div>
-        <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-          {delayReasons.map(reason => (
-            <div key={reason} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-lg text-xs font-bold text-slate-700 border">
-              <span>{reason}</span>
-              <button onClick={() => triggerConfirm('Remover Motivo', `Deseja remover "${reason}"?`, () => handleDeleteDelayReason(reason))} className="text-red-500 hover:text-red-700 font-bold ml-1">&times;</button>
+            <div>
+              <h3 className="text-xs font-black uppercase text-slate-600 mb-3">Adicionar Item ao Pacote Selecionado</h3>
+              <div className="flex flex-wrap gap-1 mb-3">
+                {allPossibleMacros.map(sId => (
+                  <button key={sId} onClick={() => setActiveSection(sId)} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition ${activeSection === sId ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{getMacroTitle(sId)}</button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input type="text" placeholder="EX: REBOCO, MASSA..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newItemName} onChange={(e) => setNewItemName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddNewItemConfig()} />
+                <button onClick={handleAddNewItemConfig} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">ADICIONAR</button>
+              </div>
+              <div className="flex flex-wrap gap-2 mt-4 border-t pt-3 overflow-y-auto max-h-[160px] pr-1">
+                {configItemsToDisplay.map(item => (
+                  <div key={item.id} className="flex items-center space-x-2 px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-bold text-slate-700 border">
+                    <span>{item.name}</span>
+                    <button onClick={() => handleDeleteItemConfig(item)} className="text-red-500 hover:text-red-700 font-black ml-1">&times;</button>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          </div>
+
+          {/* Card 3: Gestão de Equipas / Empreiteiros */}
+          <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 flex-1 flex flex-col">
+            <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800 mb-4">3. Gestão de Equipas / Empreiteiros</h2>
+            <div className="flex gap-2 mb-4">
+              <input type="text" placeholder="Nome da Equipa..." className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none uppercase font-bold" value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddTeam()} />
+              <button onClick={handleAddTeam} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-indigo-700 transition">REGISTAR</button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 overflow-y-auto max-h-[260px] pr-1">
+              {teams.map(team => (
+                <div key={team} className="flex justify-between items-center p-2.5 bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-xl transition duration-200">
+                  <div className="flex-1 min-w-0 pr-2">
+                    <div className="text-xs font-black text-slate-800 truncate uppercase">{team}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Tel:</span>
+                    <input
+                      type="text"
+                      placeholder="+55 11 99999-9999"
+                      className="w-28 p-1 text-[10px] border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white font-mono outline-none"
+                      value={teamPhones[team] || ''}
+                      onChange={(e) => {
+                        const newPhones = { ...teamPhones, [team]: e.target.value };
+                        setTeamPhones(newPhones);
+                      }}
+                      onBlur={() => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones)}
+                    />
+                    <button
+                      onClick={() => triggerConfirm('Remover Equipa', `Deseja realmente excluir "${team}"?`, () => handleDeleteTeam(team))}
+                      className="p-1 hover:bg-red-50 text-red-500 hover:text-red-700 rounded transition text-xs"
+                      title="Remover equipa"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {teams.length === 0 && (
+                <div className="col-span-full text-center py-6 text-slate-400 italic text-xs font-bold uppercase">Nenhuma equipa registada.</div>
+              )}
+            </div>
+          </div>
         </div>
+
       </div>
 
+      {/* Card 5: Configurações de Clima */}
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
         <h2 className="text-md font-black uppercase border-b pb-2 text-slate-800">5. Configurações de Clima (Visual Crossing Weather API)</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
