@@ -3974,7 +3974,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 relative overflow-x-hidden">
       <header className="bg-slate-900 p-4 text-white shadow-xl sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
+        <div className="max-w-[1600px] w-full mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center space-x-3">
             <span className="text-3xl">🏗️</span>
             <div><h1 className="text-lg font-black tracking-tight leading-none">CONSTRUGEST PRO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Modo Touch Total & Controlo de Obra</span></div>
@@ -4007,7 +4007,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-4 md:p-6 pb-24">
+      <main className="max-w-[1600px] w-full mx-auto p-4 md:p-6 pb-24">
         <nav className="flex gap-1 border-b border-slate-300 mb-6 overflow-x-auto pb-1 no-scrollbar sticky top-[68px] bg-slate-50 z-30 pt-2">
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>🏠 Painel</button>
           <button onClick={() => setActiveTab('cronograma-inicial')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'cronograma-inicial' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>📅 Cronograma</button>
