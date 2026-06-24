@@ -768,6 +768,19 @@ const App = () => {
   const [ppcStartWeek, setPpcStartWeek] = useState<string>('');
   const [ppcEndWeek, setPpcEndWeek] = useState<string>('');
 
+  // Estados para Múltiplos Projetos
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(() => {
+    return localStorage.getItem('selected_project_id') || '';
+  });
+  const [projects, setProjects] = useState<any[]>([]);
+  const [showAddProjectModal, setShowAddProjectModal] = useState<boolean>(false);
+  const [newProjName, setNewProjName] = useState<string>('');
+  const [newProjArea, setNewProjArea] = useState<string>('');
+  const [newProjAddress, setNewProjAddress] = useState<string>('');
+  const [newProjBadges, setNewProjBadges] = useState<string>('');
+  const [newProjImageUrl, setNewProjImageUrl] = useState<string>('');
+  const [projectSearchQuery, setProjectSearchQuery] = useState<string>('');
+
   // Dashboard Interatividade
   const [dashboardTargetMonth, setDashboardTargetMonth] = useState<string>(getTodayDateString().slice(0, 7));
   const [selectedDashboardFloor, setSelectedDashboardFloor] = useState<any>('');
@@ -867,9 +880,77 @@ const App = () => {
     return () => unsubscribe();
   }, []);
 
+  // Carrega a lista de projetos do Firestore
   useEffect(() => {
     if (!db || !userId) return;
-    const targetId = urlUserId ? urlUserId : 'projeto_principal';
+    const projectsDocRef = doc(db, `artifacts/${appId}/public/data/projects_list`, 'all_projects');
+    const unsubscribe = onSnapshot(projectsDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setProjects(data.list || []);
+      } else {
+        const defaultList = [
+          {
+            id: 'pace',
+            name: 'PACE',
+            type: 'Obra',
+            area: '24170.23',
+            badges: ['WB', 'PE', 'PK', 'PE', 'RT', 'AO', 'GP', 'AS', 'LF'],
+            address: 'Rua Monsenhor Ivo Zanlorenzi, 1230 - Mossunguê, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'glb_partilha',
+            name: 'GLB PARTILHA',
+            type: 'Obra',
+            area: '10984.93',
+            badges: ['WB', 'EL', 'LR', 'PE', 'PK', 'PE', 'RT', 'RF', 'MB', 'GP', 'AS', 'dcfi', 'LF'],
+            address: 'Rua Bispo Dom José, 2423 - Batel, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'icaro_casa_terrea',
+            name: 'ÍCARO CASA TÉRREA',
+            type: 'Obra',
+            area: '53681.76',
+            badges: ['WB', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'GP', 'AS', 'KF', 'LR', 'OB', 'AH', 'AS', 'dcfi', 'LF'],
+            address: 'Rua Catarina Margarida Luvizoto Gobbo, 120 - Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'qoya',
+            name: 'QOYA',
+            type: 'Obra',
+            area: '16777.23',
+            badges: ['PF', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'JM', 'GP', 'AS', 'dcfi', 'LF'],
+            address: 'R. Buenos Aires, 572 - Água Verde, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1582407947304-fd86f028f716?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'alberi',
+            name: 'ALBERI',
+            type: 'Obra',
+            area: '24801.92',
+            badges: ['AV', 'CS', 'PE', 'PK', 'WH', 'PE', 'Jd', 'MB', 'GP', 'dcfi', 'LF'],
+            address: 'R. Bom Jesus, 969 - Juvevê, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=600&auto=format&fit=crop&q=60'
+          }
+        ];
+        setDoc(projectsDocRef, { list: defaultList });
+        setProjects(defaultList);
+      }
+    });
+    return () => unsubscribe();
+  }, [db, userId]);
+
+  useEffect(() => {
+    if (!db || !userId) return;
+    const targetId = urlUserId ? urlUserId : selectedProjectId;
+    if (!targetId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
     const unsubscribe = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
@@ -965,7 +1046,7 @@ const App = () => {
         const initialData = INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: cloneDeep(INITIAL_STRUCTURE) }), {});
         const initialWeights = INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: { estrutura: 50, instalacoes: 50 } }), {});
         const initialMatrices = [{ id: 'default_matrix', name: 'Matriz Principal', floors: INITIAL_PAVIMENTOS, macros: Object.keys(INITIAL_STRUCTURE) }];
-        saveToDB(INITIAL_PAVIMENTOS, initialData, [], initialWeights, [], INITIAL_CRONOGRAMA, INITIAL_TEAMS, INITIAL_DELAYS, [], initialMatrices);
+        saveToDB(INITIAL_PAVIMENTOS, initialData, [], initialWeights, [], INITIAL_CRONOGRAMA, INITIAL_TEAMS, INITIAL_DELAYS, [], initialMatrices, {}, targetId);
         setActiveFloor(INITIAL_PAVIMENTOS[0]);
         setSelectedDashboardFloor(INITIAL_PAVIMENTOS[0]);
       }
@@ -975,7 +1056,7 @@ const App = () => {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, [db, userId, isTeamMode, urlUserId]);
+  }, [db, userId, isTeamMode, urlUserId, selectedProjectId]);
 
   useEffect(() => {
     const loadWeather = async () => {
@@ -1087,13 +1168,14 @@ const App = () => {
     ppcHist = ppcHistory,
     mats = matrices,
     tPhones = teamPhones,
-    targetUserId = (urlUserId ? urlUserId : 'projeto_principal'),
+    targetUserId = (urlUserId ? urlUserId : (selectedProjectId ? selectedProjectId : 'projeto_principal')),
     pCity = projectCity,
     wApiKey = weatherApiKey,
     wCache = weatherCache
   ) => {
-    if (!db || !targetUserId) return;
-    const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetUserId);
+    const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
+    if (!db || !resolvedTargetId) return;
+    const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, resolvedTargetId);
     const trimmedHistory = (hist || []).slice(-100);
     const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
     const serializedCrono = serializeCrono(syncedCrono);
@@ -4172,6 +4254,318 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   };
 
+  const handleSelectProject = (projId: string) => {
+    localStorage.setItem('selected_project_id', projId);
+    setSelectedProjectId(projId);
+  };
+
+  const handleAddNewProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProjName.trim() || !newProjArea.trim() || !newProjAddress.trim()) {
+      setNotification({ message: 'Por favor, preencha o nome, a área e o endereço.', type: 'error' });
+      return;
+    }
+    const cleanId = slugify(newProjName);
+    if (projects.some(p => p.id === cleanId)) {
+      setNotification({ message: 'Um projeto com esse nome já existe.', type: 'error' });
+      return;
+    }
+    const defaultImage = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
+    const newProj = {
+      id: cleanId,
+      name: newProjName.trim().toUpperCase(),
+      type: 'Obra',
+      area: parseFloat(newProjArea.trim()).toFixed(2),
+      badges: newProjBadges.split(',').map(b => b.trim().toUpperCase()).filter(b => b.length > 0),
+      address: newProjAddress.trim(),
+      imageUrl: newProjImageUrl.trim() || defaultImage
+    };
+    
+    try {
+      const updatedList = [...projects, newProj];
+      const projectsDocRef = doc(db, `artifacts/${appId}/public/data/projects_list`, 'all_projects');
+      await setDoc(projectsDocRef, { list: updatedList });
+      setProjects(updatedList);
+      
+      setShowAddProjectModal(false);
+      setNewProjName('');
+      setNewProjArea('');
+      setNewProjAddress('');
+      setNewProjBadges('');
+      setNewProjImageUrl('');
+      setNotification({ message: 'Projeto adicionado com sucesso!', type: 'success' });
+    } catch (err) {
+      console.error('Error adding project:', err);
+      setNotification({ message: 'Erro ao adicionar projeto.', type: 'error' });
+    }
+  };
+
+  const renderProjectsDashboard = () => {
+    const filteredProjects = projects.filter(p => 
+      p.name.toLowerCase().includes(projectSearchQuery.toLowerCase()) ||
+      p.address.toLowerCase().includes(projectSearchQuery.toLowerCase())
+    );
+
+    return (
+      <div className="min-h-screen bg-slate-950 font-sans text-slate-100 p-6 md:p-12 relative overflow-hidden flex flex-col justify-between">
+        {/* Background blobs */}
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-900/20 blur-[130px] pointer-events-none"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-900/10 blur-[130px] pointer-events-none"></div>
+
+        <div className="max-w-[1400px] w-full mx-auto space-y-8 relative z-10">
+          
+          {/* Header */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-6">
+            <div>
+              <h1 className="text-xl md:text-2xl font-black uppercase tracking-tight text-white leading-none">PLANEJAMENTO DE CURTO PRAZO</h1>
+              <p className="text-xs text-indigo-400 font-bold uppercase tracking-widest mt-1">Gestão e controle de obras</p>
+            </div>
+            
+            {/* Operator and Search */}
+            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+              <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/60 border border-slate-800 rounded-xl text-xs font-bold text-slate-300">
+                <span>👤 Operador: <b>{plannerUsername}</b></span>
+                <button 
+                  onClick={() => {
+                    localStorage.removeItem('planner_username');
+                    setPlannerUsername('');
+                  }}
+                  className="text-slate-550 hover:text-white font-black ml-1 text-sm leading-none"
+                  title="Alterar operador"
+                >
+                  &times;
+                </button>
+              </div>
+
+              <input 
+                type="text"
+                placeholder="Buscar projeto..."
+                value={projectSearchQuery}
+                onChange={e => setProjectSearchQuery(e.target.value)}
+                className="px-4 py-2 bg-slate-900/50 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 outline-none w-full sm:w-48 transition"
+              />
+            </div>
+          </div>
+
+          {/* Title Area */}
+          <div className="space-y-1">
+            <h2 className="text-base md:text-lg font-black uppercase tracking-tight text-slate-200">Meus projetos</h2>
+            <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Selecione uma obra abaixo para acessar as medições e planejamento semanal.</p>
+          </div>
+
+          {/* Grid of Projects */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            
+            {filteredProjects.map((p) => {
+              const maxBadges = 8;
+              const displayBadges = (p.badges || []).slice(0, maxBadges);
+              const extraBadgesCount = (p.badges || []).length - maxBadges;
+
+              return (
+                <div key={p.id} className="bg-slate-900/65 backdrop-blur-md border border-slate-800/85 rounded-2xl shadow-xl overflow-hidden flex flex-col justify-between hover:border-indigo-500/50 transition-all duration-300 group">
+                  {/* Card Image and Title */}
+                  <div>
+                    <div className="p-4 border-b border-slate-850 flex justify-between items-center bg-slate-900/30">
+                      <div>
+                        <h3 className="text-sm font-black uppercase text-white tracking-tight">{p.name}</h3>
+                        <p className="text-[10px] text-slate-500 italic font-medium">{p.type || 'Obra'}</p>
+                      </div>
+                      <button 
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (confirm(`Deseja excluir o projeto "${p.name}"? Isso não apagará seus dados históricos do banco.`)) {
+                            const newList = projects.filter(x => x.id !== p.id);
+                            const projectsDocRef = doc(db, `artifacts/${appId}/public/data/projects_list`, 'all_projects');
+                            await setDoc(projectsDocRef, { list: newList });
+                            setProjects(newList);
+                            setNotification({ message: 'Projeto removido da lista!', type: 'success' });
+                          }
+                        }}
+                        className="text-slate-600 hover:text-rose-400 p-1 rounded transition"
+                        title="Remover projeto da lista"
+                      >
+                        <span className="text-xs">🗑️</span>
+                      </button>
+                    </div>
+                    
+                    {/* Site Render image */}
+                    <div className="h-44 w-full overflow-hidden bg-slate-950 relative">
+                      <img 
+                        src={p.imageUrl} 
+                        alt={p.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-85 group-hover:opacity-100"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
+                        }}
+                      />
+                    </div>
+                    
+                    {/* Project Specs */}
+                    <div className="p-4 space-y-3.5 text-xs text-slate-300">
+                      {/* Area */}
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-slate-500 text-xs w-4 text-center">📐</span>
+                        <span className="font-bold text-[11px] text-slate-400 bg-slate-950/40 px-2 py-0.5 border border-slate-800 rounded font-mono">
+                          {p.area ? `${parseFloat(p.area).toLocaleString('pt-BR')} m²` : '0 m²'}
+                        </span>
+                      </div>
+                      
+                      {/* Badges / Equipes */}
+                      <div className="flex items-start gap-2.5">
+                        <span className="text-slate-500 text-xs w-4 text-center mt-0.5">👥</span>
+                        <div className="flex flex-wrap gap-1">
+                          {displayBadges.map((b: string, i: number) => (
+                            <span key={i} className="px-1.5 py-0.5 bg-slate-800 text-slate-400 border border-slate-700 text-[8px] font-black uppercase rounded">
+                              {b}
+                            </span>
+                          ))}
+                          {extraBadgesCount > 0 && (
+                            <span className="px-1.5 py-0.5 bg-indigo-950/50 text-indigo-400 border border-indigo-900/50 text-[8px] font-black uppercase rounded">
+                              +{extraBadgesCount}
+                            </span>
+                          )}
+                          {(p.badges || []).length === 0 && (
+                            <span className="text-[10px] text-slate-500 italic">Nenhuma equipe cadastrada</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Address */}
+                      <div className="flex items-start gap-2.5 leading-relaxed">
+                        <span className="text-slate-500 text-xs w-4 text-center mt-0.5">📍</span>
+                        <span className="text-[10px] text-slate-400 line-clamp-2" title={p.address}>
+                          {p.address}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Select button */}
+                  <div className="p-4 border-t border-slate-850/60 bg-slate-900/10">
+                    <button
+                      onClick={() => handleSelectProject(p.id)}
+                      className="w-full py-2 border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-600 hover:border-indigo-600 text-indigo-400 hover:text-white font-black uppercase text-[10px] tracking-wider rounded-xl transition active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      Selecionar
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Add New Project Card */}
+            <div 
+              onClick={() => setShowAddProjectModal(true)}
+              className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 bg-slate-900/20 hover:bg-slate-900/40 rounded-2xl min-h-[360px] flex flex-col items-center justify-center p-6 text-center cursor-pointer transition-all duration-300 group"
+            >
+              <div className="w-12 h-12 rounded-full border border-slate-800 group-hover:border-indigo-500/40 flex items-center justify-center bg-slate-900/60 group-hover:bg-indigo-500/10 text-slate-500 group-hover:text-indigo-400 text-xl font-bold transition mb-3">
+                +
+              </div>
+              <h3 className="text-xs font-black uppercase text-slate-400 group-hover:text-indigo-300 tracking-wider">Adicionar Novo Projeto</h3>
+              <p className="text-[9px] text-slate-650 group-hover:text-slate-500 uppercase tracking-tight mt-1 max-w-[200px] font-bold">Cadastrar nova obra no banco de dados.</p>
+            </div>
+
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="max-w-[1400px] w-full mx-auto text-center border-t border-slate-900 pt-6 mt-8 relative z-10 text-[9px] text-slate-600 uppercase font-black tracking-widest">
+          PLANEJAMENTO DE CURTO PRAZO &copy; {new Date().getFullYear()} &middot; Gestão e controle de obras
+        </div>
+
+        {/* Add Project Modal */}
+        {showAddProjectModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-md w-full space-y-6 animate-in zoom-in-95 duration-200 text-left text-slate-200">
+              <div className="space-y-1">
+                <h3 className="text-sm font-black uppercase tracking-tight text-white">Cadastrar Novo Projeto</h3>
+                <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Insira os dados da nova obra abaixo</p>
+              </div>
+
+              <form onSubmit={handleAddNewProject} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Nome da Obra</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: QOYA, PACE..."
+                    value={newProjName}
+                    onChange={e => setNewProjName(e.target.value)}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Área Privativa / Construída (m²)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    placeholder="Ex: 16777.23"
+                    value={newProjArea}
+                    onChange={e => setNewProjArea(e.target.value)}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Endereço Completo</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: R. Buenos Aires, 572 - Curitiba..."
+                    value={newProjAddress}
+                    onChange={e => setNewProjAddress(e.target.value)}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Siglas das Equipes (badges, separadas por vírgula)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: PF, PE, PK, RT, AO..."
+                    value={newProjBadges}
+                    onChange={e => setNewProjBadges(e.target.value)}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                  />
+                  <span className="block text-[8px] text-slate-500">Deixe em branco para usar as siglas padrão de equipes.</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">URL da Imagem de Capa (opcional)</label>
+                  <input
+                    type="url"
+                    placeholder="Ex: https://..."
+                    value={newProjImageUrl}
+                    onChange={e => setNewProjImageUrl(e.target.value)}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddProjectModal(false)}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 font-black uppercase text-[10px] tracking-wider rounded-xl transition active:scale-98 cursor-pointer text-center border border-slate-700"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl shadow-lg transition active:scale-98 cursor-pointer"
+                  >
+                    Salvar Projeto
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderInfographic = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
@@ -4878,6 +5272,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   }
 
+  if (!isTeamMode && !selectedProjectId) {
+    return renderProjectsDashboard();
+  }
+
+  const activeProjectObj = projects.find(p => p.id === selectedProjectId);
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 relative overflow-x-clip">
       <header className="bg-slate-900 p-4 text-white shadow-xl sticky top-0 z-40">
@@ -4886,9 +5286,24 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-300">
-              ID: {urlUserId ? `${urlUserId} (Compartilhado)` : 'projeto_principal (Padrão)'}
+            <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-350">
+              ID: {urlUserId ? `${urlUserId} (Compartilhado)` : `${selectedProjectId} (${activeProjectObj?.name || 'Projeto'})`}
             </span>
+            {selectedProjectId && !urlUserId && (
+              <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/50 border border-emerald-800/40 rounded-full text-[9px] font-bold text-emerald-300">
+                <span>🏢 {activeProjectObj?.name || selectedProjectId.toUpperCase()}</span>
+                <button
+                  onClick={() => {
+                    localStorage.removeItem('selected_project_id');
+                    setSelectedProjectId('');
+                  }}
+                  className="hover:text-white font-black ml-1 text-[11px] leading-none"
+                  title="Trocar de projeto"
+                >
+                  🔄
+                </button>
+              </div>
+            )}
             {plannerUsername && (
               <div className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 border border-indigo-700/50 rounded-full text-[9px] font-bold text-indigo-200">
                 <span>👤 {plannerUsername}</span>
