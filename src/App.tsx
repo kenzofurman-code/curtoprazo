@@ -3765,7 +3765,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <div className="flex items-center space-x-2">
               <span className="text-2xl">🏗️</span>
               <div>
-                <h1 className="text-sm font-black tracking-tight leading-none">CONSTRUGEST PRO</h1>
+                <h1 className="text-sm font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1>
                 <span className="text-[8px] uppercase tracking-wider text-indigo-300 font-bold">Apontamento de Campo</span>
               </div>
             </div>
@@ -4003,7 +4003,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <div className="bg-slate-800/80 backdrop-blur-xl border border-slate-700/50 p-8 rounded-3xl shadow-2xl max-w-sm w-full space-y-6 relative z-10 text-center animate-in zoom-in-95 duration-500">
           <div className="space-y-2">
             <span className="text-4xl animate-bounce inline-block">🏗️</span>
-            <h2 className="text-xl font-black uppercase tracking-tight text-white">CONSTRUGEST PRO</h2>
+            <h2 className="text-xl font-black uppercase tracking-tight text-white">PLANEJAMENTO DE CURTO PRAZO</h2>
             <p className="text-[10px] text-indigo-300 uppercase tracking-widest font-bold">Identificação de Operador</p>
           </div>
 
@@ -4056,7 +4056,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <div className="max-w-[1600px] w-full mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center space-x-3">
             <span className="text-3xl">🏗️</span>
-            <div><h1 className="text-lg font-black tracking-tight leading-none">CONSTRUGEST PRO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Modo Touch Total & Controlo de Obra</span></div>
+            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-300">
