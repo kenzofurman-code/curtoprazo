@@ -1208,7 +1208,7 @@ const App = () => {
     try {
       const dataStr = typeof data === 'string' ? data : JSON.stringify(data || {});
       const planningStr = typeof plans === 'string' ? plans : JSON.stringify(plans || []);
-      const cronoStr = JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, 5000) : []);
+      const cronoStr = JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, 6000) : []);
       const weightsStr = typeof wts === 'string' ? wts : JSON.stringify(wts || {});
       const historyStr = JSON.stringify(trimmedHistory);
       const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
@@ -2513,9 +2513,9 @@ const App = () => {
             return;
           }
           
-          if (parsedItems.length > 5500) {
-            setNotification({ message: `Limite de segurança: Importados apenas os primeiros 5500 serviços.`, type: "error" });
-            parsedItems = parsedItems.slice(0, 5500);
+          if (parsedItems.length > 6000) {
+            setNotification({ message: `Limite de segurança: Importados apenas os primeiros 6000 serviços.`, type: "error" });
+            parsedItems = parsedItems.slice(0, 6000);
           }
 
           setImportStatus('Preparando dados e limpando registros antigos...');
