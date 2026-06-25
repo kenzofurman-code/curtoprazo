@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
-import * as XLSX from 'xlsx';
 
 declare global {
   interface Window {
@@ -65,7 +64,7 @@ const decompressString = (compressedStr: string): string => {
   if (codes.length === 0 || isNaN(codes[0])) return '';
   let word = dictionary[codes[0]];
   let result = word;
-  let entry = '';
+  let entry;
   let dictSize = 256;
   for (let i = 1; i < codes.length; i++) {
     const code = codes[i];
@@ -180,7 +179,7 @@ const decompressStringUnicode = (compressedStr: string): string => {
 
   for (let i = 1; i < r.length; i++) {
     const k = parseInt(r[i], 36);
-    let entry = '';
+  let entry;
     if (Object.prototype.hasOwnProperty.call(dictionary, k)) {
       entry = dictionary[k];
     } else if (k === dictSize) {
@@ -241,7 +240,7 @@ const parseExcelDate = (value, fallback = getTodayDateString()) => {
     return toLocalDateString(epoch);
   }
   const text = String(value).trim();
-  const br = text.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  const br = text.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
   if (br) {
     const [, d, m, y] = br;
     const yyyy = y.length === 2 ? `20${y}` : y;
@@ -619,7 +618,7 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
             start: todayStr,
             end: fiveDaysLaterStr,
             cost: 0,
-            responsible: 'EQUIPA GERAL',
+            responsible: 'EQUIPE GERAL',
             progress: item.actualPercent || 0
           });
         }
@@ -660,14 +659,14 @@ const INITIAL_STRUCTURE = {
   'instalacoes': { title: 'INSTALAÇÕES', items: [{ id: 'hidraulica', name: 'HIDRÁULICA', actualPercent: 0 }, { id: 'eletrica', name: 'ELÉTRICA', actualPercent: 0 }] }
 };
 const INITIAL_CRONOGRAMA = [];
-const INITIAL_TEAMS = ['EQUIPA CIVIL', 'EQUIPA ARMADURA', 'EQUIPA HIDRÁULICA', 'EQUIPA ELÉTRICA', 'EQUIPA ACABAMENTO'];
+const INITIAL_TEAMS = ['EQUIPE CIVIL', 'EQUIPE ARMADURA', 'EQUIPE HIDRÁULICA', 'EQUIPE ELÉTRICA', 'EQUIPE ACABAMENTO'];
 const INITIAL_DELAYS = ['Chuva / Clima Impróprio', 'Falta de Material em Obra', 'Falta de Mão de Obra / Absenteísmo', 'Atraso de Projeto ou Detalhe', 'Quebra de Equipamento / Ferramenta', 'Serviço Anterior não Concluído'];
 
 const App = () => {
   const [db, setDb] = useState<any>(null);
   const [userId, setUserId] = useState<any>(null);
 
-  // Intercepção de modo de equipa (WhatsApp/Mobile)
+  // Intercepção de modo de equipe (WhatsApp/Mobile)
   const queryParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const urlUserId = queryParams.get('u');
   const urlTeamName = queryParams.get('t');
@@ -1505,7 +1504,7 @@ const App = () => {
   }, [weeklyTasks]);
 
   const configItemsToDisplay = useMemo(() => {
-    for (let f of floors) {
+    for (const f of floors) {
       if (allFloorsData[f]?.[activeSection]?.items?.length > 0) return allFloorsData[f][activeSection].items;
     }
     return [];
@@ -2112,7 +2111,7 @@ const App = () => {
           newTasks.push({
             id: crypto.randomUUID(), weekId: currentWeekId, floor: match.floor,
             sectionId: slugify(match.macro), itemId: match.id,
-            activityName: match.service, responsible: drawerResponsible || match.responsible || (teams[0] || 'Equipa Geral'),
+            activityName: match.service, responsible: drawerResponsible || match.responsible || (teams[0] || 'Equipe Geral'),
             weight: 100, executedBefore: roundDown25(match.progress || 0), plannedThisWeek: 100, progressThisWeek: 0,
             finishDate: match.end, dailyWork: [0, 0, 0, 0, 0], observations: '', delayReason: '', finalized: false
           });
@@ -2157,7 +2156,7 @@ const App = () => {
       sectionId: 'manual',
       itemId: 'manual_' + crypto.randomUUID().slice(0, 8),
       activityName: manualServiceName.trim(),
-      responsible: teams[0] || 'Equipa Geral',
+      responsible: teams[0] || 'Equipe Geral',
       weight: 100,
       executedBefore: 0,
       plannedThisWeek: 100,
@@ -2220,7 +2219,7 @@ const App = () => {
     const itemBefore = allFloorsData[task.floor]?.[sectionKey]?.items.find(i => i.id === task.itemId);
     const itemAfter = updatedFloorsData[task.floor]?.[sectionKey]?.items.find(i => i.id === task.itemId);
     
-    let updatedHistory = [...history];
+    const updatedHistory = [...history];
     if (itemBefore && itemAfter) {
       const oldVal = itemBefore.actualPercent || 0;
       const newVal = itemAfter.actualPercent || 0;
@@ -2302,7 +2301,7 @@ const App = () => {
     }
     const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
     await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-    setNotification({ message: 'Atividade removida do planeamento.', type: 'success' });
+    setNotification({ message: 'Atividade removida do planejamento.', type: 'success' });
   };
 
   const handleVoiceInput = (taskId) => {
@@ -2363,7 +2362,6 @@ const App = () => {
   const handleFileUpload = (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (!XLSX) { setNotification({ message: "Aguarde o carregador de planilhas.", type: "error" }); return; }
 
     setIsImporting(true);
     setImportStatus('Lendo e analisando planilha Excel...');
@@ -2372,6 +2370,7 @@ const App = () => {
     reader.onload = (evt: any) => {
       setTimeout(async () => {
         try {
+          const XLSX = await import('xlsx');
           const bstr = evt.target.result as string;
           const workbook = XLSX.read(bstr, { type: 'binary' });
           const wsname = workbook.SheetNames[0];
@@ -2454,7 +2453,7 @@ const App = () => {
             const rawStart = parseExcelDate(colIdx.start !== -1 && row[colIdx.start] !== undefined ? row[colIdx.start] : undefined);
             const rawEnd = parseExcelDate(colIdx.end !== -1 && row[colIdx.end] !== undefined ? row[colIdx.end] : undefined, rawStart);
             const rawCost = colIdx.cost !== -1 && row[colIdx.cost] !== undefined ? parseFloat(String(row[colIdx.cost]).replace(/[^\d.-]/g, '')) : 0;
-            const rawResp = colIdx.responsible !== -1 && row[colIdx.responsible] !== undefined && row[colIdx.responsible] !== null ? String(row[colIdx.responsible]).trim().toUpperCase() : 'EQUIPA GERAL';
+            const rawResp = colIdx.responsible !== -1 && row[colIdx.responsible] !== undefined && row[colIdx.responsible] !== null ? String(row[colIdx.responsible]).trim().toUpperCase() : 'EQUIPE GERAL';
             let rawProgress = 0;
             if (colIdx.progress !== -1 && row[colIdx.progress] !== undefined) {
               rawProgress = parsePercent(row[colIdx.progress]);
@@ -2472,7 +2471,7 @@ const App = () => {
               start: rawStart,
               end: rawEnd,
               cost: isNaN(rawCost) ? 0 : rawCost,
-              responsible: rawResp || 'EQUIPA GERAL',
+              responsible: rawResp || 'EQUIPE GERAL',
               progress: clampPercent(rawProgress)
             });
           };
@@ -2693,16 +2692,16 @@ const App = () => {
   const handleAddTeam = async () => {
     if (!newTeamName.trim()) return;
     const upper = newTeamName.trim().toUpperCase();
-    if (teams.includes(upper)) { setNotification({ message: 'Equipa já existente.', type: 'error' }); return; }
+    if (teams.includes(upper)) { setNotification({ message: 'Equipe já existente.', type: 'error' }); return; }
     const updatedTeams = [...teams, upper];
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, updatedTeams, delayReasons, ppcHistory, matrices);
-    setNewTeamName(''); setNotification({ message: 'Equipa adicionada!', type: 'success' });
+    setNewTeamName(''); setNotification({ message: 'Equipe adicionada!', type: 'success' });
   };
 
   const handleDeleteTeam = async (teamToDelete) => {
     const updatedTeams = teams.filter(t => t !== teamToDelete);
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, updatedTeams, delayReasons, ppcHistory, matrices);
-    setNotification({ message: 'Equipa removida.', type: 'success' });
+    setNotification({ message: 'Equipe removida.', type: 'success' });
   };
 
   const handleAcceptPreFill = async (taskId: string) => {
@@ -2742,12 +2741,9 @@ const App = () => {
     
     const teamTasks = planning.filter(t => t.weekId === weekId && t.responsible === teamName && !t.finalized);
     
-    let taskLines = '';
-    if (teamTasks.length === 0) {
-      taskLines = 'Nenhuma atividade ativa planejada para esta semana.';
-    } else {
-      taskLines = teamTasks.map(t => `- *${t.floor}*: ${t.activityName} (Meta: ${t.plannedThisWeek ?? 100}%)`).join('\n');
-    }
+    const taskLines = teamTasks.length === 0
+      ? 'Nenhuma atividade ativa planejada para esta semana.'
+      : teamTasks.map(t => `- *${t.floor}*: ${t.activityName} (Meta: ${t.plannedThisWeek ?? 100}%)`).join('\n');
 
     const appUrl = `${window.location.origin}/?mode=team&u=${urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
 
@@ -2768,7 +2764,7 @@ const App = () => {
     if (delayReasons.includes(text)) return;
     const updatedDelays = [...delayReasons, text];
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, updatedDelays, ppcHistory, matrices);
-    setNewDelayReason(''); setNotification({ message: 'Motivo registado!', type: 'success' });
+    setNewDelayReason(''); setNotification({ message: 'Motivo registrado!', type: 'success' });
   };
 
   const handleDeleteDelayReason = async (reasonToDelete) => {
@@ -2903,7 +2899,7 @@ const App = () => {
     csvContent += [headers.join(';'), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(';'))].join('\n');
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csvContent));
-    link.setAttribute("download", `Tabela_Consolidada_Planeamento_Semanal_${getTodayDateString()}.csv`);
+    link.setAttribute("download", `Tabela_Consolidada_Planejamento_Semanal_${getTodayDateString()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -3099,7 +3095,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <StatCard title="Avanço Físico Real" value={`${overallActual.toFixed(2)}%`} color="bg-emerald-600" />
           <StatCard title="Meta Semanal Ativa" value={`${weeklyTasks.length} Serviços`} color="bg-indigo-600" />
           <StatCard title="Média de PPC" value={ppcHistory.length > 0 ? `${(ppcHistory.reduce((a, b) => a + b.ppc, 0) / ppcHistory.length).toFixed(1)}%` : '0.0%'} color="bg-cyan-600" />
-          <StatCard title="Equipas Registadas" value={`${teams.length} Grupos`} color="bg-slate-800" />
+          <StatCard title="Equipes Registradas" value={`${teams.length} Grupos`} color="bg-slate-800" />
         </div>
 
         {/* Middle mockup dashboard layout */}
@@ -3231,7 +3227,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 </div>
               </div>
               {ppcChartData.length === 0 ? (
-                <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs italic">Nenhum dado de PPC registado.</div>
+                <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs italic">Nenhum dado de PPC registrado.</div>
               ) : (
                 ppcChartData.map((d, i) => {
                   const ppcVal = typeof d?.ppc === 'number' ? d.ppc : parseFloat(d?.ppc) || 0;
@@ -3256,7 +3252,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <p className="text-[10px] text-slate-500 mb-4">Frequência e percentual acumulado dos motivos de desvio.</p>
             <div className="flex-1 flex flex-col justify-center">
               {delayStats.length === 0 ? (
-                <div className="w-full flex items-center justify-center text-slate-400 text-xs italic h-full">Nenhum atraso com motivo registado.</div>
+                <div className="w-full flex items-center justify-center text-slate-400 text-xs italic h-full">Nenhum atraso com motivo registrado.</div>
               ) : (
                 <div className="space-y-4">
                   {delayStats.map((d, i) => (
@@ -3285,12 +3281,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
           <div>
             <h2 className="text-lg font-black text-indigo-900 uppercase tracking-tight mb-1">Importação Directa de Planilha</h2>
-            <p className="text-xs text-slate-500">Carregue o seu ficheiro de planeamento gerado pelo seu software (Excel ou CSV).</p>
+            <p className="text-xs text-slate-500">Envie o arquivo de planejamento gerado pelo seu software (Excel ou CSV).</p>
           </div>
           <button 
             onClick={() => triggerConfirm(
               'Limpar Banco de Dados', 
-              'Deseja realmente limpar toda a base de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
+              'Deseja realmente limpar todo o banco de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
               async () => {
                 await saveToDB([], {}, [], {}, [], [], [], [], [], []);
                 setNotification({ message: 'Base de dados limpa com sucesso!', type: 'success' });
@@ -3329,7 +3325,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <input
               type="text"
               className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
-              placeholder="Serviço, macro, equipa..."
+              placeholder="Serviço, macro, equipe..."
               value={cronoSearch}
               onChange={e => setCronoSearch(e.target.value)}
             />
@@ -3382,7 +3378,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   { label: 'Dias', key: 'duration', center: true },
                   { label: 'Fim Planeado', key: 'end', center: true },
                   { label: 'Realizado', key: 'progress', center: true },
-                  { label: 'Equipa', key: null, center: true },
+                  { label: 'Equipe', key: null, center: true },
                   { label: 'Custo Estimado', key: 'cost', right: true },
                 ].map(({ label, key, center, right }) => (
                   <th
@@ -3419,7 +3415,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <td className="p-3 text-center text-slate-500">{item.duration}</td>
                   <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
                   <td className="p-3 text-center font-bold text-slate-700">{item.progress ?? 0}%</td>
-                  <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPA GERAL'}</span></td>
+                  <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
                   <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                 </tr>
               ))}
@@ -3444,7 +3440,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <div className="space-y-2">
           <span className="px-3 py-1 bg-indigo-800 text-[10px] font-black tracking-wider uppercase rounded-full border border-indigo-700 text-indigo-300">KPI Produtividade</span>
           <h2 className="text-xl font-black">PPC - Percentual de Planos Concluídos</h2>
-          <p className="text-xs text-indigo-200">Percentual de serviços planeados executados integralmente conforme a meta semanal ativa.</p>
+          <p className="text-xs text-indigo-200">Percentual de serviços planejados executados integralmente conforme a meta semanal ativa.</p>
         </div>
         <div className="flex items-center space-x-6">
           <div className="text-center bg-indigo-950/50 p-4 rounded-xl border border-indigo-800">
@@ -3495,7 +3491,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             />
           </div>
           <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Equipa</label>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Equipe</label>
             <select
               className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
               value={planningTeamFilter}
@@ -3526,7 +3522,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
                 {[
                   { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
-                  { label: 'Responsável / Equipa', key: 'responsible', cls: 'w-40 text-center' },
+                  { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-40 text-center' },
                   { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
                   { label: 'Dias de Trabalho', key: null, cls: 'text-center w-56', isWeather: true },
                   { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-48' },
@@ -4834,14 +4830,14 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </div>
             );
           })}
-          {(ppcHistory || []).length === 0 && <div className="col-span-full py-8 text-center text-xs text-slate-400 font-bold uppercase italic font-mono">Nenhuma semana encerrada na base de dados.</div>}
+          {(ppcHistory || []).length === 0 && <div className="col-span-full py-8 text-center text-xs text-slate-400 font-bold uppercase italic font-mono">Nenhuma semana encerrada no banco de dados.</div>}
         </div>
       </div>
 
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b pb-4">
           <div>
-            <h3 className="text-sm font-black text-slate-800 uppercase">Tabela Consolidada de Planeamento Semanal (Histórico Geral)</h3>
+            <h3 className="text-sm font-black text-slate-800 uppercase">Tabela Consolidada de Planejamento Semanal (Histórico Geral)</h3>
           </div>
           <button onClick={handleExportCSV} className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg flex items-center gap-2 transition"><span>📥</span> Exportar para Excel (.csv)</button>
         </div>
@@ -4862,7 +4858,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   { label: 'Pavimento', key: 'floor', cls: '' },
                   { label: 'Macroatividade', key: 'sectionId', cls: '' },
                   { label: 'Serviço', key: 'activityName', cls: '' },
-                  { label: 'Equipa', key: 'responsible', cls: '' },
+                  { label: 'Equipe', key: 'responsible', cls: '' },
                   { label: 'Meta Plan.', key: 'plannedThisWeek', cls: 'text-center' },
                   { label: 'Dias Ativos', key: null, cls: 'text-center' },
                   { label: 'Avanço Sem.', key: 'progressThisWeek', cls: 'text-center' },
@@ -5098,11 +5094,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
         </div>
 
-        {/* Card 3: Gestão de Equipas / Empreiteiros */}
+        {/* Card 3: Gestão de Equipes / Empreiteiros */}
         <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
-          <h2 className="text-sm font-black uppercase border-b pb-2 text-slate-800 tracking-wider">3. Gestão de Equipas / Empreiteiros</h2>
+          <h2 className="text-sm font-black uppercase border-b pb-2 text-slate-800 tracking-wider">3. Gestão de Equipes / Empreiteiros</h2>
           <div className="flex gap-2 mb-4">
-            <input type="text" placeholder="Nome da Equipa..." className="flex-1 p-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition outline-none uppercase font-bold text-slate-800" value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddTeam()} />
+            <input type="text" placeholder="Nome da Equipe..." className="flex-1 p-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition outline-none uppercase font-bold text-slate-800" value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddTeam()} />
             <button onClick={handleAddTeam} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm">REGISTAR</button>
           </div>
           <div className="space-y-2">
@@ -5125,9 +5121,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     onBlur={() => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones)}
                   />
                   <button
-                    onClick={() => triggerConfirm('Remover Equipa', `Deseja realmente excluir "${team}"?`, () => handleDeleteTeam(team))}
+                    onClick={() => triggerConfirm('Remover Equipe', `Deseja realmente excluir "${team}"?`, () => handleDeleteTeam(team))}
                     className="p-1.5 hover:bg-red-50 text-red-500 hover:text-red-700 rounded-lg transition text-xs"
-                    title="Remover equipa"
+                    title="Remover equipe"
                   >
                     🗑️
                   </button>
@@ -5135,7 +5131,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </div>
             ))}
             {teams.length === 0 && (
-              <div className="text-center py-6 text-slate-400 italic text-xs font-bold uppercase">Nenhuma equipa registada.</div>
+              <div className="text-center py-6 text-slate-400 italic text-xs font-bold uppercase">Nenhuma equipe registrada.</div>
             )}
           </div>
         </div>
@@ -5585,7 +5581,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <nav className="flex gap-1 border-b border-slate-300 mb-6 overflow-x-auto pb-1 no-scrollbar sticky top-[68px] bg-slate-50 z-30 pt-2">
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Painel</button>
           <button onClick={() => setActiveTab('cronograma-inicial')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'cronograma-inicial' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Cronograma</button>
-          <button onClick={() => setActiveTab('planning')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'planning' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Planeamento Semanal</button>
+          <button onClick={() => setActiveTab('planning')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'planning' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Planejamento Semanal</button>
           <button onClick={() => setActiveTab('visualization')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'visualization' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Matriz Geral</button>
           <button onClick={() => setActiveTab('detalhamento-ppc')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'detalhamento-ppc' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Detalhamento PPC</button>
           <button onClick={() => setActiveTab('historico-andamento')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'historico-andamento' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Histórico andamento</button>
@@ -5650,7 +5646,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </div>
                 </div>
                 <div className="space-y-2 border-t pt-3">
-                  <label className="block text-[10px] font-black uppercase text-slate-400">4. Atribuir Equipa</label>
+                  <label className="block text-[10px] font-black uppercase text-slate-400">4. Atribuir Equipe</label>
                   <select className="w-full p-2.5 bg-slate-100 border rounded-lg text-xs font-bold uppercase cursor-pointer" value={drawerResponsible} onChange={e => setDrawerResponsible(e.target.value)}>
                     <option value="">-- Padrão --</option>
                     {teams.map(team => <option key={team} value={team}>{team}</option>)}
@@ -5726,7 +5722,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             
             <div className="space-y-3">
               <div>
-                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Selecionar Equipa</label>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Selecionar Equipe</label>
                 <select
                   className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none uppercase"
                   value={whatsappModal.teamName}
@@ -5750,7 +5746,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </div>
                   {!teamPhones[whatsappModal.teamName] && (
                     <div className="text-[10px] text-amber-600 font-bold leading-tight">
-                      ⚠️ Nenhum telefone cadastrado para esta equipa. Adicione um nas Configurações ou você terá que digitar o telefone no WhatsApp manualmente.
+                      ⚠️ Nenhum telefone cadastrado para esta equipe. Adicione um nas Configurações ou você terá que digitar o telefone no WhatsApp manualmente.
                     </div>
                   )}
                 </div>
@@ -5790,7 +5786,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95">
             <div className="flex items-center space-x-2 text-emerald-600 mb-3"><h3 className="font-black text-sm uppercase tracking-wider">Finalizar Semana de Trabalho</h3></div>
-            <p className="text-xs text-slate-600 mb-4 leading-relaxed">Você está a concluir as atividades planeadas para a semana de <strong className="text-indigo-900">{formatDateBR(currentWeekStart)}</strong>. Isso guardará o PPC finalizado de <strong className="text-emerald-600">{currentWeekPpcStats.percent.toFixed(1)}%</strong> diretamente na base de dados.</p>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">Você está concluindo as atividades planejadas para a semana de <strong className="text-indigo-900">{formatDateBR(currentWeekStart)}</strong>. Isso salvará o PPC finalizado de <strong className="text-emerald-600">{currentWeekPpcStats.percent.toFixed(1)}%</strong> diretamente no banco de dados.</p>
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mb-6">
               <label className="flex items-start space-x-3 cursor-pointer">
                 <input type="checkbox" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 mt-0.5" checked={finalizeModal.carryOverUnfinished} onChange={(e) => setFinalizeModal({ ...finalizeModal, carryOverUnfinished: e.target.checked })} />

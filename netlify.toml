@@ -1,0 +1,11 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "VITE_APP_ID,VITE_FIREBASE_CONFIG"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

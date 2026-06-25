@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Medição de Obras</title>
+  <rect width="64" height="64" rx="14" fill="#4f46e5"/>
+  <path fill="#fff" d="M16 47h32v5H16zM20 24h7v19h-7zM29 16h7v27h-7zM38 29h7v14h-7z"/>
+  <path fill="#c7d2fe" d="M14 43h36v4H14z"/>
+</svg>

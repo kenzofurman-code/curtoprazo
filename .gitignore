@@ -79,8 +79,6 @@ dist
 
 # Gatsby files
 .cache/
-# Comment the next line if you want to cherry-pick your files from the public directory
-public
 
 # vuepress build output
 .vuepress/dist
