@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
@@ -3080,13 +3080,11 @@ const App = () => {
   };
 
   const handlePrintPlanning = () => {
-    const weekId = toLocalDateString(currentWeekStart);
     const weekEndDate = new Date(currentWeekStart.getTime() + 4 * 86400000);
     const dateRange = `${currentWeekStart.toLocaleDateString('pt-BR')} a ${weekEndDate.toLocaleDateString('pt-BR')}`;
     const tasksToPrint = filteredWeeklyTasks.length > 0 ? filteredWeeklyTasks : weeklyTasks;
     const projectName = projects.find(p => p.id === selectedProjectId)?.name || 'Planejamento Semanal';
 
-    // Serialise only the fields needed for print
     const rows = tasksToPrint.map(t => ({
       activityName: t.activityName || '',
       serviceComplement: t.serviceComplement || '',
@@ -3108,12 +3106,18 @@ const App = () => {
       return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
     });
 
+    const rowsJson = JSON.stringify(rows);
+    const dayLabelsJson = JSON.stringify(dayLabels);
+    const dayDatesJson = JSON.stringify(dayDates);
+    const totalCount = tasksToPrint.length;
+    const genTime = new Date().toLocaleString('pt-BR');
+
     const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Impressão - Planejamento Semanal</title>
+<title>Impressao - Planejamento Semanal</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:#1e293b;background:#f8fafc}
@@ -3127,181 +3131,144 @@ const App = () => {
     tr.delayed td{background:#fff1f2!important}
     tr.ok td{background:#f0fdf4!important}
     .badge{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .day-chip.worked{background:#1e293b!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   }
-  .print-page{max-width:1280px;margin:0 auto;padding:16px}
-  .toolbar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:12px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
-  .toolbar h2{font-size:13px;font-weight:900;color:#1e293b;flex:1 0 100%;margin-bottom:6px}
-  .col-toggles{display:flex;flex-wrap:wrap;gap:8px;flex:1}
-  .col-toggle{display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;font-size:11px;font-weight:700;color:#475569;padding:4px 10px;border-radius:6px;border:1.5px solid #e2e8f0;background:#f8fafc;transition:all .15s}
+  .print-page{max-width:1400px;margin:0 auto;padding:16px}
+  .toolbar{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;margin-bottom:12px;display:flex;flex-wrap:wrap;align-items:center;gap:10px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+  .toolbar-title{font-size:12px;font-weight:900;color:#1e293b;flex:1 0 100%;margin-bottom:4px}
+  .col-toggles{display:flex;flex-wrap:wrap;gap:6px;flex:1}
+  .col-toggle{display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;font-size:10.5px;font-weight:700;color:#475569;padding:3px 9px;border-radius:6px;border:1.5px solid #e2e8f0;background:#f8fafc;transition:all .15s}
   .col-toggle input{accent-color:#4f46e5}
   .col-toggle:has(input:checked){background:#eef2ff;border-color:#a5b4fc;color:#3730a3}
-  .btn-print{margin-left:auto;padding:8px 22px;background:#1e293b;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:900;cursor:pointer;letter-spacing:.03em;transition:background .15s}
+  .toolbar-actions{display:flex;gap:8px;margin-left:auto;flex-shrink:0}
+  .btn-print{padding:8px 20px;background:#1e293b;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:900;cursor:pointer;transition:background .15s}
   .btn-print:hover{background:#334155}
-  .page-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #1e293b}
-  .page-header .title h1{font-size:15px;font-weight:900;color:#1e293b;text-transform:uppercase;letter-spacing:.05em}
+  .page-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid #1e293b}
+  .page-header .title h1{font-size:14px;font-weight:900;color:#1e293b;text-transform:uppercase;letter-spacing:.05em}
   .page-header .title p{font-size:10px;color:#64748b;margin-top:2px;font-weight:600}
-  .page-header .meta{text-align:right;font-size:10px;color:#64748b;font-weight:700}
-  table{width:100%;border-collapse:collapse;border:1px solid #cbd5e1;background:#fff;border-radius:8px;overflow:hidden}
-  thead th{background:#1e293b;color:#fff;padding:7px 9px;text-align:left;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;border-right:1px solid #334155}
+  .page-header .meta{text-align:right;font-size:9px;color:#64748b;font-weight:700}
+  table{width:100%;border-collapse:collapse;border:1px solid #cbd5e1;background:#fff}
+  thead th{background:#1e293b;color:#fff;padding:6px 8px;text-align:left;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;transition:background .1s}
+  thead th:hover{background:#334155}
+  thead th.sorted{background:#312e81}
+  thead th .si{margin-left:3px;font-size:9px;opacity:.8}
   thead th:last-child{border-right:none}
   tbody tr{border-bottom:1px solid #e2e8f0}
   tbody tr:last-child{border-bottom:none}
-  tbody tr.finalized td{background:#f8fafc;color:#94a3b8}
-  tbody tr.delayed td{background:#fff7f7}
-  tbody tr.ok td{background:#f0fdf4}
-  td{padding:6px 9px;vertical-align:middle;border-right:1px solid #e2e8f0;font-size:10px}
+  tbody tr:nth-child(even) td{background:#fafafa}
+  tbody tr.finalized td{background:#f8fafc!important;color:#94a3b8}
+  tbody tr.delayed td{background:#fff7f7!important}
+  tbody tr.ok td{background:#f0fdf4!important}
+  td{padding:5px 8px;vertical-align:middle;border-right:1px solid #e2e8f0;font-size:10px}
   td:last-child{border-right:none}
   .act-name{font-weight:800;text-transform:uppercase;font-size:10px;line-height:1.3}
-  .act-floor{font-size:8px;font-weight:700;color:#4f46e5;text-transform:uppercase;margin-top:2px}
   .act-comp{font-size:8px;color:#64748b;margin-top:1px}
-  .badge{display:inline-block;padding:2px 7px;border-radius:999px;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
+  .floor-cell{font-size:9px;font-weight:800;color:#4f46e5;text-transform:uppercase;white-space:nowrap}
+  .badge{display:inline-block;padding:2px 6px;border-radius:999px;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
   .badge-green{background:#dcfce7;color:#15803d}
   .badge-red{background:#fee2e2;color:#b91c1c}
   .badge-blue{background:#dbeafe;color:#1d4ed8}
   .badge-gray{background:#f1f5f9;color:#475569}
   .badge-amber{background:#fef3c7;color:#b45309}
-  .pct{display:inline-block;font-size:9px;font-weight:900}
-  .days-cell{display:flex;gap:3px;justify-content:center;flex-wrap:wrap}
-  .day-chip{display:flex;flex-direction:column;align-items:center;font-size:7.5px;font-weight:900;padding:2px 4px;border-radius:4px}
+  .days-cell{display:flex;gap:2px;justify-content:center;flex-wrap:wrap}
+  .day-chip{display:flex;flex-direction:column;align-items:center;font-size:7px;font-weight:900;padding:2px 3px;border-radius:3px;min-width:18px}
   .day-chip.worked{background:#1e293b;color:#fff}
   .day-chip.off{background:#f1f5f9;color:#94a3b8}
   .empty-row td{text-align:center;color:#94a3b8;font-style:italic;padding:20px}
-  .summary-bar{display:flex;gap:12px;margin-bottom:12px}
-  .stat-card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;flex:1;text-align:center}
-  .stat-card .val{font-size:18px;font-weight:900;color:#4f46e5}
-  .stat-card .lbl{font-size:8px;font-weight:700;text-transform:uppercase;color:#64748b;margin-top:2px}
-  .col-hidden{display:none}
 </style>
 </head>
 <body>
 <div class="print-page">
-
-  <!-- Toolbar (hidden on print) -->
   <div class="toolbar no-print">
-    <h2>🖨️ Configurar Impressão — Selecione as colunas a exibir:</h2>
+    <div class="toolbar-title">Configurar Impressao - Selecione as colunas a exibir:</div>
     <div class="col-toggles">
-      <label class="col-toggle"><input type="checkbox" id="chk-service" checked onchange="toggleCol('col-service',this.checked)"> Serviço / Pavimento</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-team" checked onchange="toggleCol('col-team',this.checked)"> Equipe</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-before" checked onchange="toggleCol('col-before',this.checked)"> % Anterior</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-planned" checked onchange="toggleCol('col-planned',this.checked)"> Meta Planejada</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-days" checked onchange="toggleCol('col-days',this.checked)"> Dias Trabalhados</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-progress" checked onchange="toggleCol('col-progress',this.checked)"> Progresso</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-delay" checked onchange="toggleCol('col-delay',this.checked)"> Motivo de Atraso</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-obs" checked onchange="toggleCol('col-obs',this.checked)"> Observações</label>
-      <label class="col-toggle"><input type="checkbox" id="chk-status" checked onchange="toggleCol('col-status',this.checked)"> Status</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cn',this.checked)"> #</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cs',this.checked)"> Servico</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cf',this.checked)"> Pavimento</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('ct',this.checked)"> Equipe</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cb',this.checked)"> % Anterior</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cp',this.checked)"> Meta Planejada</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cd',this.checked)"> Dias Trabalhados</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cpr',this.checked)"> Progresso</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cdr',this.checked)"> Motivo de Atraso</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> Observacoes</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cst',this.checked)"> Status</label>
     </div>
-    <button class="btn-print" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
+    <div class="toolbar-actions">
+      <button class="btn-print" onclick="window.print()">Imprimir / Salvar PDF</button>
+    </div>
   </div>
-
-  <!-- Page Header -->
   <div class="page-header">
     <div class="title">
       <h1>${projectName}</h1>
-      <p>Planejamento Semanal · ${dateRange}</p>
+      <p>Planejamento Semanal &middot; ${dateRange} &middot; ${totalCount} atividade(s)</p>
     </div>
-    <div class="meta">
-      <div>Total de atividades: <strong>${tasksToPrint.length}</strong></div>
-      <div>Gerado em: ${new Date().toLocaleString('pt-BR')}</div>
-    </div>
+    <div class="meta"><div>Gerado em: ${genTime}</div></div>
   </div>
-
-  <!-- Summary Stats -->
-  <div class="summary-bar no-print">
-    <div class="stat-card"><div class="val">${tasksToPrint.length}</div><div class="lbl">Atividades</div></div>
-    <div class="stat-card"><div class="val">${tasksToPrint.filter(r => r.progressThisWeek >= r.plannedThisWeek && r.plannedThisWeek > 0).length}</div><div class="lbl">Concluídas</div></div>
-    <div class="stat-card"><div class="val">${tasksToPrint.filter(r => r.progressThisWeek < r.plannedThisWeek && r.plannedThisWeek > 0 && r.progressThisWeek > 0).length}</div><div class="lbl">Com Atraso</div></div>
-    <div class="stat-card"><div class="val">${tasksToPrint.filter(r => r.finalized).length}</div><div class="lbl">Finalizados</div></div>
-  </div>
-
-  <!-- Table -->
-  <table id="print-table">
+  <table id="pt">
     <thead>
       <tr>
-        <th class="col-service">#</th>
-        <th class="col-service">Serviço / Pavimento</th>
-        <th class="col-team">Equipe</th>
-        <th class="col-before">% Anterior</th>
-        <th class="col-planned">Meta Planejada</th>
-        <th class="col-days">Dias Trabalhados</th>
-        <th class="col-progress">Progresso</th>
-        <th class="col-delay">Motivo de Atraso</th>
-        <th class="col-obs">Observações</th>
-        <th class="col-status">Status</th>
+        <th class="cn" onclick="st('num')">#<span class="si" id="si-num"></span></th>
+        <th class="cs" onclick="st('activityName')">Servico<span class="si" id="si-activityName"></span></th>
+        <th class="cf" onclick="st('floor')">Pavimento<span class="si" id="si-floor"></span></th>
+        <th class="ct" onclick="st('responsible')">Equipe<span class="si" id="si-responsible"></span></th>
+        <th class="cb" onclick="st('executedBefore')" style="text-align:center">% Anterior<span class="si" id="si-executedBefore"></span></th>
+        <th class="cp" onclick="st('plannedThisWeek')" style="text-align:center">Meta Planejada<span class="si" id="si-plannedThisWeek"></span></th>
+        <th class="cd" style="text-align:center">Dias Trab.</th>
+        <th class="cpr" onclick="st('progressThisWeek')" style="text-align:center">Progresso<span class="si" id="si-progressThisWeek"></span></th>
+        <th class="cdr" onclick="st('delayReason')">Motivo de Atraso<span class="si" id="si-delayReason"></span></th>
+        <th class="co">Observacoes</th>
+        <th class="cst" onclick="st('status')" style="text-align:center">Status<span class="si" id="si-status"></span></th>
       </tr>
     </thead>
-    <tbody id="print-body"></tbody>
+    <tbody id="pb"></tbody>
   </table>
+  <div class="no-print" style="margin-top:8px;color:#94a3b8;font-size:10px;font-style:italic">Clique no cabecalho de qualquer coluna para ordenar.</div>
 </div>
-
 <script>
-const rows = ${JSON.stringify(rows)};
-const dayLabels = ${JSON.stringify(dayLabels)};
-const dayDates = ${JSON.stringify(dayDates)};
-
-function renderTable() {
-  const tbody = document.getElementById('print-body');
-  if (rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Nenhuma atividade encontrada para esta semana.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = rows.map((t, i) => {
-    const prog = t.progressThisWeek;
-    const planned = t.plannedThisWeek;
-    const isOk = prog >= planned && planned > 0;
-    const isDelayed = prog < planned && planned > 0;
-    const rowClass = t.finalized ? 'finalized' : isOk ? 'ok' : isDelayed ? 'delayed' : '';
-
-    const progBadge = prog === 0
-      ? '<span class="badge badge-gray">0%</span>'
-      : isOk
-        ? '<span class="badge badge-green">' + prog + '%</span>'
-        : '<span class="badge badge-red">' + prog + '%</span>';
-
-    const plannedBadge = '<span class="badge badge-blue">' + planned + '%</span>';
-    const beforeBadge = t.executedBefore > 0
-      ? '<span class="badge badge-gray">' + t.executedBefore + '%</span>'
-      : '<span style="color:#94a3b8;font-size:9px">—</span>';
-
-    const daysHtml = '<div class="days-cell">' +
-      t.dailyWork.map((w, idx) =>
-        '<div class="day-chip ' + (w ? 'worked' : 'off') + '" title="' + dayLabels[idx] + ' ' + dayDates[idx] + '">' +
-        '<span>' + dayLabels[idx].charAt(0) + '</span>' +
-        '<span>' + dayDates[idx] + '</span>' +
-        '</div>'
-      ).join('') +
-      '</div>';
-
-    let statusBadge = '';
-    if (t.finalized) statusBadge = '<span class="badge badge-gray">🔒 Finalizado</span>';
-    else if (isOk) statusBadge = '<span class="badge badge-green">✓ Conforme</span>';
-    else if (isDelayed) statusBadge = '<span class="badge badge-red">⚠ Atrasado</span>';
-    else statusBadge = '<span class="badge badge-gray">— Pendente</span>';
-
-    const comp = t.serviceComplement ? '<div class="act-comp">↳ ' + t.serviceComplement + '</div>' : '';
-    const manualBadge = t.isManual ? '<span class="badge badge-amber" style="margin-left:4px">Extra</span>' : '';
-
-    return '<tr class="' + rowClass + '">' +
-      '<td class="col-service" style="color:#94a3b8;font-weight:900;font-size:9px">' + (i+1) + '</td>' +
-      '<td class="col-service"><div class="act-name">' + t.activityName + manualBadge + '</div>' + comp + '<div class="act-floor">' + t.floor + '</div></td>' +
-      '<td class="col-team" style="font-weight:700;white-space:nowrap">' + (t.responsible || '—') + '</td>' +
-      '<td class="col-before" style="text-align:center">' + beforeBadge + '</td>' +
-      '<td class="col-planned" style="text-align:center">' + plannedBadge + '</td>' +
-      '<td class="col-days">' + daysHtml + '</td>' +
-      '<td class="col-progress" style="text-align:center">' + progBadge + '</td>' +
-      '<td class="col-delay" style="font-size:9px;color:#b91c1c">' + (t.delayReason || '<span style="color:#94a3b8">—</span>') + '</td>' +
-      '<td class="col-obs" style="font-size:9px;color:#475569">' + (t.observations || '<span style="color:#94a3b8">—</span>') + '</td>' +
-      '<td class="col-status" style="text-align:center">' + statusBadge + '</td>' +
-    '</tr>';
-  }).join('');
+var allRows=${rowsJson};
+var DL=${dayLabelsJson};
+var DD=${dayDatesJson};
+var sk=null,sd='asc';
+function gso(t){if(t.finalized)return 3;var p=t.progressThisWeek,pl=t.plannedThisWeek;if(p>=pl&&pl>0)return 0;if(p<pl&&pl>0&&p>0)return 1;return 2;}
+function sv(t,k){if(k==='status')return gso(t);var v=t[k];return typeof v==='number'?v:(v||'').toString().toLowerCase();}
+function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
+  document.querySelectorAll('.si').forEach(function(e){e.textContent='';});
+  document.querySelectorAll('thead th').forEach(function(e){e.classList.remove('sorted');});
+  var el=document.getElementById('si-'+k);
+  if(el){el.textContent=sd==='asc'?' \u25b2':' \u25bc';el.closest('th').classList.add('sorted');}
+  rt();}
+function rt(){var sorted=allRows.slice();
+  if(sk){sorted.sort(function(a,b){var va=sv(a,sk),vb=sv(b,sk);if(va<vb)return sd==='asc'?-1:1;if(va>vb)return sd==='asc'?1:-1;return 0;});}
+  var tb=document.getElementById('pb');
+  if(!sorted.length){tb.innerHTML='<tr class="empty-row"><td colspan="11">Nenhuma atividade.</td></tr>';return;}
+  tb.innerHTML=sorted.map(function(t,i){
+    var prog=t.progressThisWeek,planned=t.plannedThisWeek;
+    var isOk=prog>=planned&&planned>0,isDel=prog<planned&&planned>0;
+    var rc=t.finalized?'finalized':isOk?'ok':isDel?'delayed':'';
+    var pb2=prog===0?'<span class="badge badge-gray">0%</span>':isOk?'<span class="badge badge-green">'+prog+'%</span>':'<span class="badge badge-red">'+prog+'%</span>';
+    var plb='<span class="badge badge-blue">'+planned+'%</span>';
+    var bb=t.executedBefore>0?'<span class="badge badge-gray">'+t.executedBefore+'%</span>':'<span style="color:#94a3b8">-</span>';
+    var dh='<div class="days-cell">'+t.dailyWork.map(function(w,idx){return'<div class="day-chip '+(w?'worked':'off')+'" title="'+DL[idx]+' '+DD[idx]+'"><span>'+DL[idx].charAt(0)+'</span><span>'+DD[idx]+'</span></div>';}).join('')+'</div>';
+    var sb=t.finalized?'<span class="badge badge-gray">Finalizado</span>':isOk?'<span class="badge badge-green">Conforme</span>':isDel?'<span class="badge badge-red">Atrasado</span>':'<span class="badge badge-gray">Pendente</span>';
+    var comp=t.serviceComplement?'<div class="act-comp">'+t.serviceComplement+'</div>':'';
+    var mb=t.isManual?' <span class="badge badge-amber">Extra</span>':'';
+    return '<tr class="'+rc+'">'+
+      '<td class="cn" style="color:#94a3b8;font-weight:900;font-size:9px;text-align:center">'+(i+1)+'</td>'+
+      '<td class="cs"><div class="act-name">'+t.activityName+mb+'</div>'+comp+'</td>'+
+      '<td class="cf"><span class="floor-cell">'+(t.floor||'-')+'</span></td>'+
+      '<td class="ct" style="font-weight:700;white-space:nowrap">'+(t.responsible||'-')+'</td>'+
+      '<td class="cb" style="text-align:center">'+bb+'</td>'+
+      '<td class="cp" style="text-align:center">'+plb+'</td>'+
+      '<td class="cd">'+dh+'</td>'+
+      '<td class="cpr" style="text-align:center">'+pb2+'</td>'+
+      '<td class="cdr" style="font-size:9px;color:#b91c1c">'+(t.delayReason||'<span style="color:#94a3b8">-</span>')+'</td>'+
+      '<td class="co" style="font-size:9px;color:#475569">'+(t.observations||'<span style="color:#94a3b8">-</span>')+'</td>'+
+      '<td class="cst" style="text-align:center">'+sb+'</td>'+
+    '</tr>';}).join('');
 }
-
-function toggleCol(colClass, visible) {
-  document.querySelectorAll('.' + colClass).forEach(el => {
-    el.style.display = visible ? '' : 'none';
-  });
-}
-
-renderTable();
+function toggleCol(c,v){document.querySelectorAll('.'+c).forEach(function(e){e.style.display=v?'':'none';});}
+rt();
 </script>
 </body>
 </html>`;
@@ -3312,6 +3279,7 @@ renderTable();
       newTab.document.close();
     }
   };
+
 
   const openWhatsappShareModal = () => {
     if (teams.length === 0) return;
