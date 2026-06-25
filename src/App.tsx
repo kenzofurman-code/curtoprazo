@@ -3230,6 +3230,7 @@ var allRows=${rowsJson};
 var DL=${dayLabelsJson};
 var DD=${dayDatesJson};
 var sk=null,sd='asc';
+var hiddenCols={};
 function gso(t){if(t.finalized)return 3;var p=t.progressThisWeek,pl=t.plannedThisWeek;if(p>=pl&&pl>0)return 0;if(p<pl&&pl>0&&p>0)return 1;return 2;}
 function sv(t,k){if(k==='status')return gso(t);var v=t[k];return typeof v==='number'?v:(v||'').toString().toLowerCase();}
 function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
@@ -3266,8 +3267,16 @@ function rt(){var sorted=allRows.slice();
       '<td class="co" style="font-size:9px;color:#475569">'+(t.observations||'<span style="color:#94a3b8">-</span>')+'</td>'+
       '<td class="cst" style="text-align:center">'+sb+'</td>'+
     '</tr>';}).join('');
+  Object.keys(hiddenCols).forEach(function(c){
+    if(hiddenCols[c]){
+      document.querySelectorAll('tbody .'+c).forEach(function(e){e.style.display='none';});
+    }
+  });
 }
-function toggleCol(c,v){document.querySelectorAll('.'+c).forEach(function(e){e.style.display=v?'':'none';});}
+function toggleCol(c,v){
+  hiddenCols[c]=!v;
+  document.querySelectorAll('.'+c).forEach(function(e){e.style.display=v?'':'none';});
+}
 rt();
 </script>
 </body>
@@ -3279,8 +3288,6 @@ rt();
       newTab.document.close();
     }
   };
-
-
   const openWhatsappShareModal = () => {
     if (teams.length === 0) return;
     const initialTeam = teams[0];
