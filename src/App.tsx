@@ -536,6 +536,21 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
     }
   });
 
+  // Build lookup maps for cronogramaInicial to do O(1) lookups instead of O(N) .find on 5300+ items inside nested loops
+  const cronoById: Record<string, any> = {};
+  const cronoByKey: Record<string, any> = {};
+  
+  if (Array.isArray(cronogramaInicial)) {
+    cronogramaInicial.forEach(c => {
+      if (!c) return;
+      if (c.id) {
+        cronoById[c.id] = c;
+      }
+      const fallbackKey = `${c.floor}||${slugify(c.macro)}||${String(c.service || '').toUpperCase()}`;
+      cronoByKey[fallbackKey] = c;
+    });
+  }
+
   // Garantir que andamento atual seja o maior entre cronograma e realizado
   Object.keys(updatedFloorsData).forEach(floor => {
     if (updatedFloorsData[floor]) {
@@ -544,8 +559,8 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
         if (section && Array.isArray(section.items)) {
           section.items.forEach(item => {
             if (!item) return;
-            const cronoItem = cronogramaInicial.find(c => c && c.id === item.id) ||
-              cronogramaInicial.find(c => c && c.floor === floor && slugify(c.macro) === sectionId && String(c.service || '').toUpperCase() === String(item.name || '').toUpperCase());
+            // Use O(1) lookup
+            const cronoItem = (item.id && cronoById[item.id]) || cronoByKey[`${floor}||${sectionId}||${String(item.name || '').toUpperCase()}`];
             const cronoProgress = cronoItem ? (cronoItem.progress || 0) : 0;
             const realizedProgress = item._realized !== undefined ? item._realized : 0;
             item.actualPercent = clampPercent(Math.max(cronoProgress, realizedProgress));
@@ -589,6 +604,15 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
   // 3. Add any items from floorsData that are missing in crono
   const finalCrono = [...filteredCrono];
   
+  // Build a set of existing keys in finalCrono for O(1) checks
+  const existingCronoKeys = new Set();
+  finalCrono.forEach(c => {
+    if (c) {
+      const key = `${c.floor}||${slugify(c.macro)}||${String(c.service || '').toUpperCase()}`;
+      existingCronoKeys.add(key);
+    }
+  });
+  
   (floorsList || []).forEach(floor => {
     const floorData = floorsData[floor] || {};
     Object.keys(floorData).forEach(macroKey => {
@@ -599,17 +623,11 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
       
       items.forEach(item => {
         if (!item) return;
-        const exists = finalCrono.some(c => 
-          c && 
-          c.floor === floor && 
-          slugify(c.macro) === macroKey && 
-          String(c.service || '').toUpperCase() === String(item.name || '').toUpperCase()
-        );
-        
-        if (!exists) {
+        const key = `${floor}||${macroKey}||${String(item.name || '').toUpperCase()}`;
+        if (!existingCronoKeys.has(key)) {
           const todayStr = toLocalDateString(new Date());
           const fiveDaysLaterStr = toLocalDateString(addDays(new Date(), 5));
-          finalCrono.push({
+          const newCronoItem = {
             id: item.id || `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             macro: macroTitle,
             floor: floor,
@@ -620,7 +638,9 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
             cost: 0,
             responsible: 'EQUIPE GERAL',
             progress: item.actualPercent || 0
-          });
+          };
+          finalCrono.push(newCronoItem);
+          existingCronoKeys.add(key); // prevent future duplicates in the loop
         }
       });
     });
