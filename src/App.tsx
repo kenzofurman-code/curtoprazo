@@ -3148,7 +3148,7 @@ const App = () => {
   .page-header .title p{font-size:10px;color:#64748b;margin-top:2px;font-weight:600}
   .page-header .meta{text-align:right;font-size:9px;color:#64748b;font-weight:700}
   table{width:100%;border-collapse:collapse;border:1px solid #cbd5e1;background:#fff}
-  thead th{background:#1e293b;color:#fff;padding:6px 8px;text-align:left;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;transition:background .1s}
+  thead th{background:#1e293b;color:#fff;padding:6px 8px;text-align:left;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.05em;white-space:normal;vertical-align:bottom;border-right:1px solid #334155;cursor:pointer;user-select:none;transition:background .1s}
   thead th:hover{background:#334155}
   thead th.sorted{background:#312e81}
   thead th .si{margin-left:3px;font-size:9px;opacity:.8}
@@ -3175,6 +3175,21 @@ const App = () => {
   .day-chip.worked{background:#1e293b;color:#fff}
   .day-chip.off{background:#f1f5f9;color:#94a3b8}
   .empty-row td{text-align:center;color:#94a3b8;font-style:italic;padding:20px}
+  
+  /* ConfiguraÃ§Ã£o de Larguras e Quebras de TÃ­tulo para Colunas de ImpressÃ£o */
+  .cn, .cb, .cp, .cd, .cpr, .cst {
+    width: 1%;
+  }
+  tbody td.cn, tbody td.cb, tbody td.cp, tbody td.cd, tbody td.cpr, tbody td.cst {
+    white-space: nowrap;
+  }
+  .cdr, .co {
+    white-space: normal;
+    word-break: break-word;
+  }
+  .days-cell {
+    flex-wrap: nowrap !important;
+  }
 </style>
 </head>
 <body>
