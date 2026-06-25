@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
@@ -4585,7 +4585,18 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       if(isCompleted) colorClass = 'bg-emerald-100 text-emerald-800';
                       else if(isHalf) colorClass = 'bg-indigo-50 text-indigo-700';
                       else if(isStarted) colorClass = 'bg-orange-50 text-orange-700';
-                      return <td key={mId} className={`p-3 text-center font-black transition-colors border-r border-slate-100 ${colorClass}`}>{avg.toFixed(1)}%</td>;
+                      const tooltip = sec?.items 
+                        ? sec.items.map(it => `${it.name}: ${(it.actualPercent || 0).toFixed(1)}%`).join('\n')
+                        : '';
+                      return (
+                        <td 
+                          key={mId} 
+                          className={`p-3 text-center font-black transition-colors border-r border-slate-100 ${colorClass}`}
+                          title={tooltip}
+                        >
+                          {avg.toFixed(1)}%
+                        </td>
+                      );
                     })}
                     <td className="bg-slate-50/30"></td>
                   </tr>
