@@ -699,14 +699,14 @@ const App = () => {
   const [dbLastUpdatedBy, setDbLastUpdatedBy] = useState<string>('');
 
   // Estados Core
-  const [floors, setFloors] = useState<any[]>(INITIAL_PAVIMENTOS);
+  const [floors, setFloors] = useState<any[]>([]);
   const [allFloorsData, setAllFloorsData] = useState<any>({});
   const [history, setHistory] = useState<any[]>([]);
   const [weights, setWeights] = useState<any>({});
   const [planning, setPlanning] = useState<any[]>([]);
   const [cronogramaInicial, setCronogramaInicial] = useState<any[]>([]);
-  const [teams, setTeams] = useState<any[]>(INITIAL_TEAMS);
-  const [delayReasons, setDelayReasons] = useState<any[]>(INITIAL_DELAYS);
+  const [teams, setTeams] = useState<any[]>([]);
+  const [delayReasons, setDelayReasons] = useState<any[]>([]);
   const [ppcHistory, setPpcHistory] = useState<any[]>([]);
   const [matrices, setMatrices] = useState<any[]>([]); 
   const [teamPhones, setTeamPhones] = useState<Record<string, string>>({});
@@ -979,10 +979,15 @@ const App = () => {
     const unsubscribe = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
-        const loadedFloors = Array.isArray(d.floors) && d.floors.length > 0 ? d.floors : INITIAL_PAVIMENTOS;
+        const loadedFloors = Array.isArray(d.floors) ? d.floors : [];
         setFloors(loadedFloors);
-        if (!activeFloor || !loadedFloors.includes(activeFloor)) setActiveFloor(loadedFloors[0]);
-        if (!selectedDashboardFloor || !loadedFloors.includes(selectedDashboardFloor)) setSelectedDashboardFloor(loadedFloors[0]);
+        if (loadedFloors.length > 0) {
+          if (!activeFloor || !loadedFloors.includes(activeFloor)) setActiveFloor(loadedFloors[0]);
+          if (!selectedDashboardFloor || !loadedFloors.includes(selectedDashboardFloor)) setSelectedDashboardFloor(loadedFloors[0]);
+        } else {
+          setActiveFloor('');
+          setSelectedDashboardFloor('');
+        }
         setLastUpdatedTime(formatTimestamp(d.lastUpdated));
         setDbLastUpdatedBy(d.lastUpdatedBy || '');
 
@@ -995,7 +1000,7 @@ const App = () => {
             loadedData = {};
           }
         }
-        const finalData = loadedData && Object.keys(loadedData).length > 0 ? loadedData : INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: cloneDeep(INITIAL_STRUCTURE) }), {});
+        const finalData = loadedData && Object.keys(loadedData).length > 0 ? loadedData : {};
         setAllFloorsData(finalData);
 
         let loadedHistory = d.history || [];
@@ -1031,9 +1036,9 @@ const App = () => {
           }
         }
         setCronogramaInicial(deserializeCrono(loadedCrono));
-        setTeams(d.teams || INITIAL_TEAMS);
+        setTeams(d.teams || []);
         setTeamPhones(d.teamPhones || {});
-        setDelayReasons(d.delayReasons || INITIAL_DELAYS);
+        setDelayReasons(d.delayReasons || []);
         setProjectCity(d.projectCity || "Curitiba, PR");
         setWeatherApiKey(d.weatherApiKey || "");
         setWeatherCache(d.weatherCache || {});
@@ -1049,7 +1054,7 @@ const App = () => {
           try { loadedMatrices = JSON.parse(decompressIfNeeded(loadedMatrices as any)); } catch { loadedMatrices = []; }
         }
         if (!Array.isArray(loadedMatrices) || loadedMatrices.length === 0) {
-          loadedMatrices = [{ id: 'default_matrix', name: 'Matriz Principal', floors: loadedFloors, macros: Object.keys(finalData?.[loadedFloors[0]] || {}) }];
+          loadedMatrices = loadedFloors.length > 0 ? [{ id: 'default_matrix', name: 'Matriz Principal', floors: loadedFloors, macros: Object.keys(finalData?.[loadedFloors[0]] || {}) }] : [];
         }
         setMatrices(loadedMatrices);
 
@@ -1067,12 +1072,9 @@ const App = () => {
         }
         setAiAnalysesHistory(loadedAiAnalyses);
       } else {
-        const initialData = INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: cloneDeep(INITIAL_STRUCTURE) }), {});
-        const initialWeights = INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: { estrutura: 50, instalacoes: 50 } }), {});
-        const initialMatrices = [{ id: 'default_matrix', name: 'Matriz Principal', floors: INITIAL_PAVIMENTOS, macros: Object.keys(INITIAL_STRUCTURE) }];
-        saveToDB(INITIAL_PAVIMENTOS, initialData, [], initialWeights, [], INITIAL_CRONOGRAMA, INITIAL_TEAMS, INITIAL_DELAYS, [], initialMatrices, {}, targetId);
-        setActiveFloor(INITIAL_PAVIMENTOS[0]);
-        setSelectedDashboardFloor(INITIAL_PAVIMENTOS[0]);
+        saveToDB([], {}, [], {}, [], [], [], [], [], [], {}, targetId);
+        setActiveFloor('');
+        setSelectedDashboardFloor('');
       }
       setLoading(false);
     }, (err) => {
@@ -3290,10 +3292,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               'Limpar Banco de Dados', 
               'Deseja realmente limpar toda a base de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
               async () => {
-                const initialData = INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: cloneDeep(INITIAL_STRUCTURE) }), {});
-                const initialWeights = INITIAL_PAVIMENTOS.reduce((acc, f) => ({ ...acc, [f]: { estrutura: 50, instalacoes: 50 } }), {});
-                const initialMatrices = [{ id: 'default_matrix', name: 'Matriz Principal', floors: INITIAL_PAVIMENTOS, macros: Object.keys(INITIAL_STRUCTURE) }];
-                await saveToDB(INITIAL_PAVIMENTOS, initialData, [], initialWeights, [], [], INITIAL_TEAMS, INITIAL_DELAYS, [], initialMatrices);
+                await saveToDB([], {}, [], {}, [], [], [], [], [], []);
                 setNotification({ message: 'Base de dados limpa com sucesso!', type: 'success' });
               }
             )}
