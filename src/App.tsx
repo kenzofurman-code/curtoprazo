@@ -900,6 +900,27 @@ const App = () => {
   const [confirmModal, setConfirmModal] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: null });
   const [finalizeModal, setFinalizeModal] = useState<any>({ isOpen: false, carryOverUnfinished: true });
   const [matrixSelection, setMatrixSelection] = useState({ isOpen: false, matrixId: '', type: 'macro' });
+  const [matrixTooltip, setMatrixTooltip] = useState<{
+    text: string;
+    x: number;
+    y: number;
+    visible: boolean;
+  }>({ text: '', x: 0, y: 0, visible: false });
+
+  const showMatrixTooltip = (e: React.MouseEvent, text: string) => {
+    if (!text) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMatrixTooltip({
+      text,
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+      visible: true
+    });
+  };
+
+  const hideMatrixTooltip = () => {
+    setMatrixTooltip(prev => ({ ...prev, visible: false }));
+  };
 
   // Inicializa inputs de apontamento de campo (WhatsApp/Mobile)
   useEffect(() => {
@@ -4591,14 +4612,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       return (
                         <td 
                           key={mId} 
-                          className={`p-3 text-center font-black transition-colors border-r border-slate-100 matrix-cell cursor-help ${colorClass}`}
+                          className={`p-3 text-center font-black transition-colors border-r border-slate-100 cursor-help ${colorClass}`}
+                          onMouseEnter={(e) => showMatrixTooltip(e, tooltip)}
+                          onMouseLeave={hideMatrixTooltip}
                         >
                           {avg.toFixed(1)}%
-                          {tooltip && (
-                            <div className="matrix-cell-tooltip">
-                              {tooltip}
-                            </div>
-                          )}
                         </td>
                       );
                     })}
@@ -6565,6 +6583,20 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               <button onClick={() => handleFinalizeWeek(finalizeModal.carryOverUnfinished)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition">Confirmar e Encerrar</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {matrixTooltip.visible && matrixTooltip.text && (
+        <div 
+          className="fixed bg-slate-900 text-white text-[10px] font-bold p-2.5 rounded-xl shadow-xl z-[9999] text-left whitespace-pre border border-slate-700 pointer-events-none leading-relaxed w-max max-w-none"
+          style={{
+            left: `${matrixTooltip.x}px`,
+            top: `${matrixTooltip.y}px`,
+            transform: 'translate(-50%, -100%) translateY(-8px)',
+          }}
+        >
+          {matrixTooltip.text}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 border-[6px] border-transparent border-t-slate-900"></div>
         </div>
       )}
 

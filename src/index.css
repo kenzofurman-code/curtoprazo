@@ -16,43 +16,4 @@
   background: #94a3b8;
 }
 
-/* Tooltip customizado para celulas da matriz */
-.matrix-cell {
-  position: relative !important;
-}
-.matrix-cell-tooltip {
-  display: none;
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 8px;
-  background-color: #0f172a; /* Slate 900 */
-  color: #ffffff;
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 10px;
-  font-weight: 700;
-  text-align: left;
-  white-space: pre; /* Mantem cada servico em uma linha e impede quebras indesejadas */
-  width: max-content; /* Largura definida pelo maior tamanho da informacao */
-  max-width: 450px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-  z-index: 50;
-  border: 1px solid #334155; /* Slate 700 */
-  pointer-events: none;
-  line-height: 1.6;
-}
-.matrix-cell-tooltip::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border-width: 6px;
-  border-style: solid;
-  border-color: #0f172a transparent transparent transparent;
-}
-.matrix-cell:hover .matrix-cell-tooltip {
-  display: block;
-}
+
