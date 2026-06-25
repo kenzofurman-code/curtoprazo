@@ -872,6 +872,10 @@ const App = () => {
   const [micConnectingTaskId, setMicConnectingTaskId] = useState<string | null>(null);
   const [micConnectingComplementTaskId, setMicConnectingComplementTaskId] = useState<string | null>(null);
 
+  const [dbSavingStatus, setDbSavingStatus] = useState<'saved' | 'saving' | 'pending'>('saved');
+  const saveTimeoutRef = useRef<any>(null);
+  const pendingSaveArgsRef = useRef<any>(null);
+
   // Dialogs/Modals
   const [confirmModal, setConfirmModal] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: null });
   const [finalizeModal, setFinalizeModal] = useState<any>({ isOpen: false, carryOverUnfinished: true });
@@ -929,6 +933,19 @@ const App = () => {
     }
     return () => unsubscribe();
   }, []);
+
+  // Aviso de alterações pendentes ao fechar o navegador
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (dbSavingStatus !== 'saved') {
+        e.preventDefault();
+        e.returnValue = 'Existem alterações pendentes que estão sendo salvas no banco de dados. Tem certeza de que deseja sair?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [dbSavingStatus]);
 
   // Carrega a lista de projetos do Firestore
   useEffect(() => {
@@ -1297,6 +1314,85 @@ const App = () => {
 
 
 
+  const performActualSave = async (args: any) => {
+    const {
+      fls,
+      data,
+      hist,
+      wts,
+      plans,
+      crono,
+      tms,
+      delays,
+      ppcHist,
+      mats,
+      tPhones,
+      targetUserId,
+      pCity,
+      wApiKey,
+      wCache
+    } = args;
+
+    const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
+    if (!db || !resolvedTargetId) return;
+
+    setDbSavingStatus('saving');
+
+    const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, resolvedTargetId);
+    const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_crono`);
+    const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_floors`);
+    const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_planning`);
+
+    const trimmedHistory = (hist || []).slice(-100);
+    const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
+    const serializedCrono = serializeCrono(syncedCrono);
+
+    try {
+      const dataStr = typeof data === 'string' ? data : JSON.stringify(data || {});
+      const planningStr = typeof plans === 'string' ? plans : JSON.stringify(plans || []);
+      const cronoStr = JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, 6000) : []);
+      const weightsStr = typeof wts === 'string' ? wts : JSON.stringify(wts || {});
+      const historyStr = JSON.stringify(trimmedHistory);
+      const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
+
+      await Promise.all([
+        setDoc(docRef, {
+          floors: Array.isArray(fls) ? fls : [],
+          history: compressStringUnicode(historyStr),
+          weights: compressStringUnicode(weightsStr),
+          teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
+          teamPhones: tPhones || {},
+          delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
+          ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
+          matrices: compressStringUnicode(matricesStr),
+          projectCity: pCity || "Curitiba, PR",
+          weatherApiKey: wApiKey || "",
+          weatherCache: wCache || {},
+          lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
+          lastUpdated: new Date()
+        }),
+        setDoc(cronoRef, {
+          cronogramaInicial: compressStringUnicode(cronoStr)
+        }),
+        setDoc(floorsRef, {
+          data: compressStringUnicode(dataStr)
+        }),
+        setDoc(planningRef, {
+          planning: compressStringUnicode(planningStr)
+        })
+      ]);
+
+      setDbSavingStatus('saved');
+    } catch (e: any) {
+      console.error("Save error:", e);
+      setDbSavingStatus('saved');
+      if (e?.message && e.message.includes('exceeds the maximum allowed size')) {
+        setNotification({ message: 'Limite de armazenamento excedido. Tente Limpar o BD e reimportar.', type: 'error' });
+      }
+      throw e;
+    }
+  };
+
   const saveToDB = async (
     fls = floors,
     data = allFloorsData,
@@ -1312,57 +1408,51 @@ const App = () => {
     targetUserId = (urlUserId ? urlUserId : (selectedProjectId ? selectedProjectId : 'projeto_principal')),
     pCity = projectCity,
     wApiKey = weatherApiKey,
-    wCache = weatherCache
+    wCache = weatherCache,
+    forceImmediate = false
   ) => {
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
     if (!db || !resolvedTargetId) return;
-    const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, resolvedTargetId);
-    const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_crono`);
-    const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_floors`);
-    const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_planning`);
 
-    const trimmedHistory = (hist || []).slice(-100);
-    const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
-    const serializedCrono = serializeCrono(syncedCrono);
-    try {
-      const dataStr = typeof data === 'string' ? data : JSON.stringify(data || {});
-      const planningStr = typeof plans === 'string' ? plans : JSON.stringify(plans || []);
-      const cronoStr = JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, 6000) : []);
-      const weightsStr = typeof wts === 'string' ? wts : JSON.stringify(wts || {});
-      const historyStr = JSON.stringify(trimmedHistory);
-      const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
+    const args = {
+      fls,
+      data,
+      hist,
+      wts,
+      plans,
+      crono,
+      tms,
+      delays,
+      ppcHist,
+      mats,
+      tPhones,
+      targetUserId: resolvedTargetId,
+      pCity,
+      wApiKey,
+      wCache
+    };
 
-      await setDoc(docRef, { 
-        floors: Array.isArray(fls) ? fls : [],
-        history: compressStringUnicode(historyStr),
-        weights: compressStringUnicode(weightsStr),
-        teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
-        teamPhones: tPhones || {},
-        delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
-        ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
-        matrices: compressStringUnicode(matricesStr),
-        projectCity: pCity || "Curitiba, PR",
-        weatherApiKey: wApiKey || "",
-        weatherCache: wCache || {},
-        lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
-        lastUpdated: new Date() 
-      });
-
-      await setDoc(cronoRef, {
-        cronogramaInicial: compressStringUnicode(cronoStr)
-      });
-      await setDoc(floorsRef, {
-        data: compressStringUnicode(dataStr)
-      });
-      await setDoc(planningRef, {
-        planning: compressStringUnicode(planningStr)
-      });
-    } catch (e) {
-      console.error("Save error:", e);
-      if (e?.message && e.message.includes('exceeds the maximum allowed size')) {
-        setNotification({ message: 'Limite de armazenamento excedido. Tente Limpar o BD e reimportar.', type: 'error' });
+    if (forceImmediate) {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
       }
-      throw e;
+      pendingSaveArgsRef.current = null;
+      await performActualSave(args);
+    } else {
+      pendingSaveArgsRef.current = args;
+      setDbSavingStatus('pending');
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(async () => {
+        const pendingArgs = pendingSaveArgsRef.current;
+        if (pendingArgs) {
+          pendingSaveArgsRef.current = null;
+          saveTimeoutRef.current = null;
+          await performActualSave(pendingArgs);
+        }
+      }, 1500); // 1.5s debounce
     }
   };
 
@@ -2791,7 +2881,13 @@ const App = () => {
             updatedTeams,
             delayReasonsRef.current,
             ppcHistory,
-            updatedMatrices
+            updatedMatrices,
+            teamPhones,
+            undefined,
+            projectCity,
+            weatherApiKey,
+            weatherCache,
+            true
           )
             .then(() => {
               setNotification({ message: `${parsedItems.length} atividades importadas e organizadas!`, type: "success" });
@@ -3507,7 +3603,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               'Limpar Banco de Dados', 
               'Deseja realmente limpar todo o banco de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
               async () => {
-                await saveToDB([], {}, [], {}, [], [], teams, delayReasons, [], []);
+                await saveToDB([], {}, [], {}, [], [], teams, delayReasons, [], [], undefined, undefined, undefined, undefined, undefined, true);
                 setNotification({ message: 'Base de dados limpa com sucesso!', type: 'success' });
               }
             )}
@@ -5935,6 +6031,21 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   &times;
                 </button>
               </div>
+            )}
+            {dbSavingStatus === 'saving' && (
+              <span className="px-3 py-1 bg-blue-900/80 border border-blue-700/50 rounded-full text-[9px] font-bold text-blue-200 animate-pulse flex items-center gap-1">
+                💾 Gravando...
+              </span>
+            )}
+            {dbSavingStatus === 'pending' && (
+              <span className="px-3 py-1 bg-amber-950 border border-amber-800/40 rounded-full text-[9px] font-bold text-amber-300 animate-pulse flex items-center gap-1">
+                ⏳ Alterações pendentes...
+              </span>
+            )}
+            {dbSavingStatus === 'saved' && (
+              <span className="px-3 py-1 bg-emerald-950/50 border border-emerald-800/40 rounded-full text-[9px] font-bold text-emerald-300 flex items-center gap-1">
+                ✅ Sincronizado
+              </span>
             )}
             {dbLastUpdatedBy && (
               <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] border border-slate-700 text-slate-400 italic">
