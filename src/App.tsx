@@ -3779,12 +3779,20 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                             placeholder="Complemento..."
                             className="p-1 bg-slate-50 border border-slate-200 rounded text-[9px] font-bold text-slate-700 w-32 focus:bg-white focus:border-indigo-500"
                             value={t.serviceComplement || ''}
-                            onChange={(e) => handleUpdateTaskField(t.id, 'serviceComplement', e.target.value)}
-                            onBlur={() => { if (!t.serviceComplement) setEditingComplementTaskId(null); }}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setPlanning(planning.map(p => p.id === t.id ? { ...p, serviceComplement: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
+                            }}
+                            onBlur={() => {
+                              saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+                              if (!t.serviceComplement) setEditingComplementTaskId(null);
+                            }}
                             autoFocus={editingComplementTaskId === t.id}
                           />
                           {!t.finalized && (
                             <button
+                              disabled={t.finalized}
+                              onMouseDown={(e) => e.preventDefault()}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleServiceComplementVoiceInput(t.id);
@@ -3906,52 +3914,40 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       )}
                     </td>
                     <td className="p-3 border-r">
-                      {!t.finalized && !t.observations && editingObservationsTaskId !== t.id && !t.preFilledObservations ? (
-                        <button
-                          onClick={() => setEditingObservationsTaskId(t.id)}
-                          className="w-6 h-6 rounded-full border border-slate-350 hover:border-indigo-650 hover:bg-indigo-50 text-slate-500 hover:text-indigo-650 flex items-center justify-center font-bold text-xs cursor-pointer mx-auto"
-                          title="Adicionar observação"
-                        >
-                          +
-                        </button>
-                      ) : (
-                        <div className="space-y-1">
-                          <div className="flex items-center space-x-1.5">
-                            <input
-                              type="text"
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-1.5">
+                          <input
+                            type="text"
+                            disabled={t.finalized}
+                            className="flex-1 bg-slate-50 border border-slate-200 p-2 rounded-lg text-[10px] font-medium disabled:opacity-80 focus:bg-white focus:border-indigo-500"
+                            placeholder="Notas..."
+                            value={t.observations || ''}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setPlanning(planning.map(p => p.id === t.id ? { ...p, observations: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
+                            }}
+                            onBlur={() => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices)}
+                          />
+                          {!t.finalized && (
+                            <button
                               disabled={t.finalized}
-                              className="flex-1 bg-slate-50 border border-slate-200 p-2 rounded-lg text-[10px] font-medium disabled:opacity-80 focus:bg-white focus:border-indigo-500"
-                              placeholder="Notas..."
-                              value={t.observations || ''}
-                              onChange={e => {
-                                const val = e.target.value;
-                                setPlanning(planning.map(p => p.id === t.id ? { ...p, observations: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
-                              }}
-                              onBlur={() => {
-                                saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-                                if (!t.observations) setEditingObservationsTaskId(null);
-                              }}
-                              autoFocus={editingObservationsTaskId === t.id}
-                            />
-                            {!t.finalized && (
-                              <button
-                                onClick={() => handleVoiceInput(t.id)}
-                                className={`p-2 rounded-full transition active:scale-95 text-sm shrink-0 cursor-pointer ${
-                                  listeningTaskId === t.id ? 'bg-red-650 text-white animate-pulse p-1' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                                } disabled:opacity-40`}
-                                title="Ditar Observação"
-                              >
-                                🎙️
-                              </button>
-                            )}
-                          </div>
-                          {t.preFilledObservations && (
-                            <div className="text-[8px] text-purple-600 font-bold italic leading-tight pl-2 text-left">
-                              📲 Sugerido: "{t.preFilledObservations}"
-                            </div>
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => handleVoiceInput(t.id)}
+                              className={`p-2 rounded-full transition active:scale-95 text-sm shrink-0 cursor-pointer ${
+                                listeningTaskId === t.id ? 'bg-red-650 text-white animate-pulse p-1' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                              } disabled:opacity-40`}
+                              title="Ditar Observação"
+                            >
+                              🎙️
+                            </button>
                           )}
                         </div>
-                      )}
+                        {t.preFilledObservations && (
+                          <div className="text-[8px] text-purple-600 font-bold italic leading-tight pl-2 text-left">
+                            📲 Sugerido: "{t.preFilledObservations}"
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="p-3 text-center">
                       <div className="flex items-center justify-center gap-2">
