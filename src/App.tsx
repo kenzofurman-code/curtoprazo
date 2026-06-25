@@ -717,7 +717,19 @@ const App = () => {
   const [weatherCache, setWeatherCache] = useState<Record<string, { tempMax: number, tempMin: number, precip: number, conditions: string, icon: string }>>({});
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
 
+  const teamsRef = useRef(teams);
+  const delayReasonsRef = useRef(delayReasons);
+
+  useEffect(() => {
+    teamsRef.current = teams;
+  }, [teams]);
+
+  useEffect(() => {
+    delayReasonsRef.current = delayReasons;
+  }, [delayReasons]);
+
   // Estados UI Globais
+
   const [activeFloor, setActiveFloor] = useState<any>('');
   const [activeSection, setActiveSection] = useState<any>('estrutura');
   const initialWeekStart = useMemo(() => {
@@ -2445,7 +2457,7 @@ const App = () => {
           // Deduplication is handled by the unique item ID key.
           const seenItemKeys = new Set<string>();
           let parsedItems = [];
-          const importedTeams = new Set<any>([...teams]);
+          const importedTeams = new Set<any>([...teamsRef.current]);
           const importedFloors = new Set<any>([...floors]);
 
           const processRow = (row: any, useServiceFallback: boolean) => {
@@ -2598,7 +2610,7 @@ const App = () => {
             recalculatedPlanning,
             parsedItems,
             updatedTeams,
-            delayReasons,
+            delayReasonsRef.current,
             ppcHistory,
             updatedMatrices
           )
@@ -3316,7 +3328,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               'Limpar Banco de Dados', 
               'Deseja realmente limpar todo o banco de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
               async () => {
-                await saveToDB([], {}, [], {}, [], [], [], [], [], []);
+                await saveToDB([], {}, [], {}, [], [], teams, delayReasons, [], []);
                 setNotification({ message: 'Base de dados limpa com sucesso!', type: 'success' });
               }
             )}
