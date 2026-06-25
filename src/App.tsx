@@ -2525,6 +2525,7 @@ const App = () => {
           const headerRow = data[headerIndex].map(h => String(h || '').trim().toLowerCase());
           
           const colIdx = {
+            id: headerRow.findIndex(h => h === 'id' || h === 'identificador'),
             macro: 2,         // Coluna 3 - Pacote de serviço
             service: 3,       // Coluna 4 - Serviço
             floor: 5,         // Coluna 6 - Lote ou local do serviço
@@ -2564,8 +2565,9 @@ const App = () => {
 
             if (!rawService) return;
 
+            const rawId = colIdx.id !== -1 && row[colIdx.id] !== undefined ? String(row[colIdx.id]).trim() : '';
             const floorName = String(rawFloor || 'Térreo').trim();
-            const itemKey = `xls_${slugify(floorName)}_${slugify(rawMacro)}_${slugify(rawService)}`;
+            const itemKey = `xls_${slugify(floorName)}_${slugify(rawMacro)}_${slugify(rawService)}${rawId ? '_' + rawId : ''}`;
 
             if (seenItemKeys.has(itemKey)) return; // skip duplicates
             seenItemKeys.add(itemKey);
@@ -2645,7 +2647,7 @@ const App = () => {
             if (!updatedFloorsData[item.floor][macroKey]) updatedFloorsData[item.floor][macroKey] = { title: item.macro, items: [] };
             if (!updatedWeights[item.floor]) updatedWeights[item.floor] = {};
             if (updatedWeights[item.floor][macroKey] === undefined) updatedWeights[item.floor][macroKey] = 1;
-            const existingItemIndex = updatedFloorsData[item.floor][macroKey].items.findIndex(it => it && String(it.name || '').toUpperCase() === String(item.service || '').toUpperCase());
+            const existingItemIndex = updatedFloorsData[item.floor][macroKey].items.findIndex(it => it && it.id === item.id);
 
             if (existingItemIndex !== -1) {
               updatedFloorsData[item.floor][macroKey].items[existingItemIndex].id = item.id;
