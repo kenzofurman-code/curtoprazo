@@ -4591,10 +4591,15 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       return (
                         <td 
                           key={mId} 
-                          className={`p-3 text-center font-black transition-colors border-r border-slate-100 ${colorClass}`}
-                          title={tooltip}
+                          className={`p-3 text-center font-black transition-colors border-r border-slate-100 relative group cursor-help ${colorClass}`}
                         >
                           {avg.toFixed(1)}%
+                          {tooltip && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-slate-900 text-white text-[10px] font-bold p-2.5 rounded-xl shadow-xl z-30 w-56 text-left whitespace-pre-line border border-slate-700 pointer-events-none leading-relaxed transition-all">
+                              {tooltip}
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-900"></div>
+                            </div>
+                          )}
                         </td>
                       );
                     })}
