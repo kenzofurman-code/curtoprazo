@@ -3540,7 +3540,33 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <td className="p-3 font-bold text-slate-800">{item.service}</td>
                   <td className="p-3 text-center text-slate-500">{item.duration}</td>
                   <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
-                  <td className="p-3 text-center font-bold text-slate-700">{item.progress ?? 0}%</td>
+                  <td className="p-3 text-center">
+                    <select
+                      className="p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs cursor-pointer focus:border-indigo-500"
+                      value={item.progress ?? 0}
+                      onChange={async (e) => {
+                        const newProgress = parseInt(e.target.value, 10);
+                        const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
+                        const updatedFloorsData = cloneDeep(allFloorsData);
+                        const macroKey = slugify(item.macro);
+                        if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
+                          const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
+                          const existingItem = itemsList.find(it => it && it.id === item.id);
+                          if (existingItem) {
+                            existingItem.actualPercent = newProgress;
+                          }
+                        }
+                        setCronogramaInicial(updatedCrono);
+                        setAllFloorsData(updatedFloorsData);
+                        await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
+                        setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
+                      }}
+                    >
+                      {[0, 25, 50, 75, 100].map(val => (
+                        <option key={val} value={val}>{val}%</option>
+                      ))}
+                    </select>
+                  </td>
                   <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
                   <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                 </tr>
@@ -3766,6 +3792,28 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         </div>
                       )}
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
+                      {!t.finalized && (
+                        <div className="flex items-center gap-1 mt-1 text-[9px] text-slate-500 font-bold uppercase">
+                          <span>Exec. Anterior:</span>
+                          <select
+                            className="bg-slate-50 border border-slate-200 rounded text-[9px] font-bold text-slate-700 cursor-pointer p-0.5"
+                            value={t.executedBefore ?? 0}
+                            onChange={async (e) => {
+                              const newExecBefore = parseInt(e.target.value, 10);
+                              const updatedPlanning = planning.map(p => p.id === t.id ? { ...p, executedBefore: newExecBefore } : p);
+                              const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+                              setPlanning(recalculatedPlanning);
+                              setAllFloorsData(updatedFloorsData);
+                              await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+                              setNotification({ message: 'Executado anterior atualizado!', type: 'success' });
+                            }}
+                          >
+                            {[0, 25, 50, 75, 100].map(val => (
+                              <option key={val} value={val}>{val}%</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                       {t.lastUpdatedBy && (
                         <div className="text-[8px] text-slate-400 font-bold uppercase mt-1 flex items-center gap-1">
                           <span>👤</span> {t.lastUpdatedBy}
