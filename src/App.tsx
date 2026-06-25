@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
@@ -828,6 +828,7 @@ const App = () => {
   const [newTeamName, setNewTeamName] = useState<string>('');
   const [newDelayReason, setNewDelayReason] = useState<string>('');
   const [listeningTaskId, setListeningTaskId] = useState<any>(null);
+  const [listeningComplementTaskId, setListeningComplementTaskId] = useState<any>(null);
 
   // Dialogs/Modals
   const [confirmModal, setConfirmModal] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: null });
@@ -2328,6 +2329,30 @@ const App = () => {
     recognition.onspeechend = () => { recognition.stop(); setListeningTaskId(null); };
   };
 
+  const handleServiceComplementVoiceInput = (taskId) => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setNotification({ message: "Reconhecimento de voz não suportado pelo seu navegador.", type: "error" });
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'pt-BR';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    setListeningComplementTaskId(taskId);
+    recognition.start();
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      const existingText = planning.find(t => t.id === taskId)?.serviceComplement || '';
+      const combinedText = existingText ? `${existingText} ${transcript}` : transcript;
+      handleUpdateTaskField(taskId, 'serviceComplement', combinedText);
+      setListeningComplementTaskId(null);
+      setNotification({ message: 'Complemento de serviço ditado com sucesso!', type: 'success' });
+    };
+    recognition.onerror = () => { setListeningComplementTaskId(null); setNotification({ message: 'Falha ao gravar.', type: 'error' }); };
+    recognition.onspeechend = () => { recognition.stop(); setListeningComplementTaskId(null); };
+  };
+
   const handleTeamVoiceInput = (taskId) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -2743,7 +2768,10 @@ const App = () => {
     
     const taskLines = teamTasks.length === 0
       ? 'Nenhuma atividade ativa planejada para esta semana.'
-      : teamTasks.map(t => `- *${t.floor}*: ${t.activityName} (Meta: ${t.plannedThisWeek ?? 100}%)`).join('\n');
+      : teamTasks.map(t => {
+          const comp = t.serviceComplement ? ` (${t.serviceComplement})` : '';
+          return `- *${t.floor}*: ${t.activityName}${comp} (Meta: ${t.plannedThisWeek ?? 100}%)`;
+        }).join('\n');
 
     const appUrl = `${window.location.origin}/?mode=team&u=${urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
 
@@ -3603,7 +3631,42 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                           </span>
                         )}
                         <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight truncate">{t.activityName}</div>
+                        <button 
+                          disabled={t.finalized}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleServiceComplementVoiceInput(t.id);
+                          }}
+                          className={`p-0.5 rounded-full transition active:scale-95 text-[10px] leading-none shrink-0 cursor-pointer ${
+                            listeningComplementTaskId === t.id 
+                              ? 'bg-red-650 text-white animate-pulse p-1' 
+                              : 'text-slate-400 hover:text-indigo-600 hover:bg-slate-100'
+                          }`}
+                          title="Ditar complemento do serviço"
+                        >
+                          🎙️
+                        </button>
                       </div>
+                      {t.serviceComplement && (
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mt-0.5 flex items-center gap-1">
+                          <span className="text-indigo-550 font-black">↳</span>
+                          <span className="bg-slate-100 px-1 py-0.5 rounded border border-slate-200/60 max-w-[200px] truncate" title={t.serviceComplement}>
+                            {t.serviceComplement}
+                          </span>
+                          {!t.finalized && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUpdateTaskField(t.id, 'serviceComplement', '');
+                              }}
+                              className="text-slate-400 hover:text-red-500 font-bold text-xs cursor-pointer ml-0.5"
+                              title="Limpar complemento"
+                            >
+                              &times;
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
                       {t.lastUpdatedBy && (
                         <div className="text-[8px] text-slate-400 font-bold uppercase mt-1 flex items-center gap-1">
@@ -5295,6 +5358,14 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                             )}
                             <span>{t.activityName}</span>
                           </h4>
+                          {t.serviceComplement && (
+                            <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mt-1 flex items-center gap-1">
+                              <span className="text-indigo-500 font-black">↳</span>
+                              <span className="bg-slate-100 px-1 py-0.5 rounded border border-slate-200/60 max-w-[250px] truncate" title={t.serviceComplement}>
+                                {t.serviceComplement}
+                              </span>
+                            </div>
+                          )}
                           <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">📍 {t.floor}</p>
                         </div>
                         <span className="px-2 py-0.5 bg-slate-100 border text-[9px] font-black text-slate-500 rounded-md uppercase">
