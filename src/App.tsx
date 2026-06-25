@@ -988,7 +988,15 @@ const App = () => {
     }
     setLoading(true);
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
-    const unsubscribe = onSnapshot(docRef, (snap) => {
+    const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_crono`);
+    const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_floors`);
+    const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_planning`);
+
+    let hasLoadedCrono = false;
+    let hasLoadedFloors = false;
+    let hasLoadedPlanning = false;
+
+    const unsubMeta = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
         const loadedFloors = Array.isArray(d.floors) ? d.floors : [];
@@ -1003,18 +1011,6 @@ const App = () => {
         setLastUpdatedTime(formatTimestamp(d.lastUpdated));
         setDbLastUpdatedBy(d.lastUpdatedBy || '');
 
-        let loadedData = d.data;
-        if (typeof loadedData === 'string') {
-          try {
-            loadedData = JSON.parse(decompressIfNeeded(loadedData));
-          } catch (jsonErr) {
-            console.error("Error parsing floors data JSON:", jsonErr);
-            loadedData = {};
-          }
-        }
-        const finalData = loadedData && Object.keys(loadedData).length > 0 ? loadedData : {};
-        setAllFloorsData(finalData);
-
         let loadedHistory = d.history || [];
         if (typeof loadedHistory === 'string') {
           try { loadedHistory = JSON.parse(decompressIfNeeded(loadedHistory)); } catch { loadedHistory = []; }
@@ -1027,27 +1023,6 @@ const App = () => {
         }
         setWeights(loadedWeights);
 
-        let loadedPlanning = d.planning || [];
-        if (typeof loadedPlanning === 'string') {
-          try {
-            loadedPlanning = JSON.parse(decompressIfNeeded(loadedPlanning));
-          } catch (jsonErr) {
-            console.error("Error parsing planning JSON:", jsonErr);
-            loadedPlanning = [];
-          }
-        }
-        setPlanning(loadedPlanning);
-
-        let loadedCrono = d.cronogramaInicial || INITIAL_CRONOGRAMA;
-        if (typeof loadedCrono === 'string') {
-          try {
-            loadedCrono = JSON.parse(decompressIfNeeded(loadedCrono));
-          } catch (jsonErr) {
-            console.error("Error parsing cronogramaInicial JSON:", jsonErr);
-            loadedCrono = [];
-          }
-        }
-        setCronogramaInicial(deserializeCrono(loadedCrono));
         setTeams(d.teams || []);
         setTeamPhones(d.teamPhones || {});
         setDelayReasons(d.delayReasons || []);
@@ -1065,9 +1040,6 @@ const App = () => {
         if (typeof loadedMatrices === 'string') {
           try { loadedMatrices = JSON.parse(decompressIfNeeded(loadedMatrices as any)); } catch { loadedMatrices = []; }
         }
-        if (!Array.isArray(loadedMatrices) || loadedMatrices.length === 0) {
-          loadedMatrices = loadedFloors.length > 0 ? [{ id: 'default_matrix', name: 'Matriz Principal', floors: loadedFloors, macros: Object.keys(finalData?.[loadedFloors[0]] || {}) }] : [];
-        }
         setMatrices(loadedMatrices);
 
         let loadedAiAnalyses = d.aiAnalyses || {};
@@ -1083,6 +1055,50 @@ const App = () => {
           }
         }
         setAiAnalysesHistory(loadedAiAnalyses);
+
+        // Fallbacks for backward compatibility
+        if (!hasLoadedCrono && d.cronogramaInicial) {
+          let loadedCrono = d.cronogramaInicial;
+          if (typeof loadedCrono === 'string') {
+            try {
+              loadedCrono = JSON.parse(decompressIfNeeded(loadedCrono));
+            } catch (jsonErr) {
+              console.error("Error parsing fallback cronogramaInicial JSON:", jsonErr);
+              loadedCrono = [];
+            }
+          }
+          setCronogramaInicial(deserializeCrono(loadedCrono));
+        }
+
+        if (!hasLoadedFloors && d.data) {
+          let loadedData = d.data;
+          if (typeof loadedData === 'string') {
+            try {
+              loadedData = JSON.parse(decompressIfNeeded(loadedData));
+            } catch (jsonErr) {
+              console.error("Error parsing fallback floors data JSON:", jsonErr);
+              loadedData = {};
+            }
+          }
+          const finalData = loadedData && Object.keys(loadedData).length > 0 ? loadedData : {};
+          setAllFloorsData(finalData);
+          if (loadedFloors.length > 0 && (!loadedMatrices || loadedMatrices.length === 0)) {
+            setMatrices([{ id: 'default_matrix', name: 'Matriz Principal', floors: loadedFloors, macros: Object.keys(finalData?.[loadedFloors[0]] || {}) }]);
+          }
+        }
+
+        if (!hasLoadedPlanning && d.planning) {
+          let loadedPlanning = d.planning;
+          if (typeof loadedPlanning === 'string') {
+            try {
+              loadedPlanning = JSON.parse(decompressIfNeeded(loadedPlanning));
+            } catch (jsonErr) {
+              console.error("Error parsing fallback planning JSON:", jsonErr);
+              loadedPlanning = [];
+            }
+          }
+          setPlanning(loadedPlanning);
+        }
       } else {
         saveToDB([], {}, [], {}, [], [], [], [], [], [], {}, targetId);
         setActiveFloor('');
@@ -1093,7 +1109,64 @@ const App = () => {
       console.error("Firestore error:", err);
       setLoading(false);
     });
-    return () => unsubscribe();
+
+    const unsubCrono = onSnapshot(cronoRef, (snap) => {
+      if (snap.exists()) {
+        hasLoadedCrono = true;
+        const d = snap.data();
+        let loadedCrono = d.cronogramaInicial || [];
+        if (typeof loadedCrono === 'string') {
+          try {
+            loadedCrono = JSON.parse(decompressIfNeeded(loadedCrono));
+          } catch (jsonErr) {
+            console.error("Error parsing cronogramaInicial JSON:", jsonErr);
+            loadedCrono = [];
+          }
+        }
+        setCronogramaInicial(deserializeCrono(loadedCrono));
+      }
+    });
+
+    const unsubFloors = onSnapshot(floorsRef, (snap) => {
+      if (snap.exists()) {
+        hasLoadedFloors = true;
+        const d = snap.data();
+        let loadedData = d.data || {};
+        if (typeof loadedData === 'string') {
+          try {
+            loadedData = JSON.parse(decompressIfNeeded(loadedData));
+          } catch (jsonErr) {
+            console.error("Error parsing floors data JSON:", jsonErr);
+            loadedData = {};
+          }
+        }
+        setAllFloorsData(loadedData && Object.keys(loadedData).length > 0 ? loadedData : {});
+      }
+    });
+
+    const unsubPlanning = onSnapshot(planningRef, (snap) => {
+      if (snap.exists()) {
+        hasLoadedPlanning = true;
+        const d = snap.data();
+        let loadedPlanning = d.planning || [];
+        if (typeof loadedPlanning === 'string') {
+          try {
+            loadedPlanning = JSON.parse(decompressIfNeeded(loadedPlanning));
+          } catch (jsonErr) {
+            console.error("Error parsing planning JSON:", jsonErr);
+            loadedPlanning = [];
+          }
+        }
+        setPlanning(loadedPlanning);
+      }
+    });
+
+    return () => {
+      unsubMeta();
+      unsubCrono();
+      unsubFloors();
+      unsubPlanning();
+    };
   }, [db, userId, isTeamMode, urlUserId, selectedProjectId]);
 
   useEffect(() => {
@@ -1214,6 +1287,10 @@ const App = () => {
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
     if (!db || !resolvedTargetId) return;
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, resolvedTargetId);
+    const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_crono`);
+    const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_floors`);
+    const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_planning`);
+
     const trimmedHistory = (hist || []).slice(-100);
     const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
     const serializedCrono = serializeCrono(syncedCrono);
@@ -1227,11 +1304,8 @@ const App = () => {
 
       await setDoc(docRef, { 
         floors: Array.isArray(fls) ? fls : [],
-        data: compressStringUnicode(dataStr),
         history: compressStringUnicode(historyStr),
         weights: compressStringUnicode(weightsStr),
-        planning: compressStringUnicode(planningStr),
-        cronogramaInicial: compressStringUnicode(cronoStr),
         teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
         teamPhones: tPhones || {},
         delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
@@ -1242,6 +1316,16 @@ const App = () => {
         weatherCache: wCache || {},
         lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
         lastUpdated: new Date() 
+      });
+
+      await setDoc(cronoRef, {
+        cronogramaInicial: compressStringUnicode(cronoStr)
+      });
+      await setDoc(floorsRef, {
+        data: compressStringUnicode(dataStr)
+      });
+      await setDoc(planningRef, {
+        planning: compressStringUnicode(planningStr)
       });
     } catch (e) {
       console.error("Save error:", e);
