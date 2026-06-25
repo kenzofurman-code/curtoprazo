@@ -640,12 +640,38 @@ const StatCard = ({ title, value, color }) => (
 
 const Notification = ({ message, type, onClose }) => {
   if (!message) return null;
+  let bgClass = 'bg-red-600';
+  if (type === 'success') {
+    bgClass = 'bg-emerald-600';
+  } else if (type === 'warning') {
+    bgClass = 'bg-amber-500';
+  } else if (type === 'info') {
+    bgClass = 'bg-blue-600';
+  }
   return (
-    <div className={`fixed bottom-4 right-4 p-4 rounded-xl shadow-2xl text-white z-50 flex items-center gap-3 ${type === 'success' ? 'bg-emerald-600' : 'bg-red-600'} animate-in slide-in-from-bottom-5 fade-in duration-300`}>
+    <div className={`fixed bottom-4 right-4 p-4 rounded-xl shadow-2xl text-white z-50 flex items-center gap-3 ${bgClass} animate-in slide-in-from-bottom-5 fade-in duration-300`}>
       <span className="font-bold text-xs">{message}</span>
       <button onClick={onClose} className="font-bold text-lg leading-none">&times;</button>
     </div>
   );
+};
+
+const playBeep = (freq = 600, duration = 0.15) => {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.type = 'sine';
+    oscillator.frequency.value = freq;
+    gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime); // low volume
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+    oscillator.start(audioCtx.currentTime);
+    oscillator.stop(audioCtx.currentTime + duration);
+  } catch (e) {
+    console.warn("Web Audio API not supported or blocked by user gesture:", e);
+  }
 };
 
 // --- Configuração Firebase & Constantes ---
@@ -843,6 +869,8 @@ const App = () => {
   const [listeningComplementTaskId, setListeningComplementTaskId] = useState<any>(null);
   const [editingComplementTaskId, setEditingComplementTaskId] = useState<string | null>(null);
   const [editingObservationsTaskId, setEditingObservationsTaskId] = useState<string | null>(null);
+  const [micConnectingTaskId, setMicConnectingTaskId] = useState<string | null>(null);
+  const [micConnectingComplementTaskId, setMicConnectingComplementTaskId] = useState<string | null>(null);
 
   // Dialogs/Modals
   const [confirmModal, setConfirmModal] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: null });
@@ -2413,18 +2441,38 @@ const App = () => {
     recognition.lang = 'pt-BR';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    setListeningTaskId(taskId);
+    setMicConnectingTaskId(taskId);
+    setNotification({ message: '🎙️ Aguardando microfone... Fale APÓS o sinal e o aviso de ativo.', type: 'warning' });
     recognition.start();
+    
+    recognition.onstart = () => {
+      setMicConnectingTaskId(null);
+      setListeningTaskId(taskId);
+      playBeep(600, 0.15);
+      setNotification({ message: '🟢 Microfone ATIVO! Pode falar agora.', type: 'success' });
+    };
+
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       const existingText = planning.find(t => t.id === taskId)?.observations || '';
       const combinedText = existingText ? `${existingText} | ${transcript}` : transcript;
       handleUpdateTaskField(taskId, 'observations', combinedText);
       setListeningTaskId(null);
+      setMicConnectingTaskId(null);
+      playBeep(520, 0.12);
       setNotification({ message: 'Observação ditada com sucesso!', type: 'success' });
     };
-    recognition.onerror = () => { setListeningTaskId(null); setNotification({ message: 'Falha ao gravar.', type: 'error' }); };
-    recognition.onspeechend = () => { recognition.stop(); setListeningTaskId(null); };
+    recognition.onerror = () => {
+      setListeningTaskId(null);
+      setMicConnectingTaskId(null);
+      playBeep(320, 0.22);
+      setNotification({ message: 'Falha ao gravar.', type: 'error' });
+    };
+    recognition.onspeechend = () => {
+      recognition.stop();
+      setListeningTaskId(null);
+      setMicConnectingTaskId(null);
+    };
   };
 
   const handleServiceComplementVoiceInput = (taskId) => {
@@ -2437,18 +2485,42 @@ const App = () => {
     recognition.lang = 'pt-BR';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    setListeningComplementTaskId(taskId);
+    setMicConnectingComplementTaskId(taskId);
+    setNotification({ message: '🎙️ Aguardando microfone... Fale APÓS o sinal e o aviso de ativo.', type: 'warning' });
     recognition.start();
+    
+    recognition.onstart = () => {
+      setMicConnectingComplementTaskId(null);
+      setListeningComplementTaskId(taskId);
+      playBeep(600, 0.15);
+      setNotification({ message: '🟢 Microfone ATIVO! Pode falar agora.', type: 'success' });
+    };
+
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       const existingText = planning.find(t => t.id === taskId)?.serviceComplement || '';
       const combinedText = existingText ? `${existingText} ${transcript}` : transcript;
-      handleUpdateTaskField(taskId, 'serviceComplement', combinedText);
+      
+      const updatedPlanning = planning.map(p => p.id === taskId ? { ...p, serviceComplement: combinedText, lastUpdatedBy: plannerUsername || 'Sistema' } : p);
+      setPlanning(updatedPlanning);
+      saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      
       setListeningComplementTaskId(null);
+      setMicConnectingComplementTaskId(null);
+      playBeep(520, 0.12);
       setNotification({ message: 'Complemento de serviço ditado com sucesso!', type: 'success' });
     };
-    recognition.onerror = () => { setListeningComplementTaskId(null); setNotification({ message: 'Falha ao gravar.', type: 'error' }); };
-    recognition.onspeechend = () => { recognition.stop(); setListeningComplementTaskId(null); };
+    recognition.onerror = () => {
+      setListeningComplementTaskId(null);
+      setMicConnectingComplementTaskId(null);
+      playBeep(320, 0.22);
+      setNotification({ message: 'Falha ao gravar.', type: 'error' });
+    };
+    recognition.onspeechend = () => {
+      recognition.stop();
+      setListeningComplementTaskId(null);
+      setMicConnectingComplementTaskId(null);
+    };
   };
 
   const handleTeamVoiceInput = (taskId) => {
@@ -2461,8 +2533,17 @@ const App = () => {
     recognition.lang = 'pt-BR';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    setListeningTaskId(taskId);
+    setMicConnectingTaskId(taskId);
+    setNotification({ message: '🎙️ Aguardando microfone... Fale APÓS o sinal e o aviso de ativo.', type: 'warning' });
     recognition.start();
+    
+    recognition.onstart = () => {
+      setMicConnectingTaskId(null);
+      setListeningTaskId(taskId);
+      playBeep(600, 0.15);
+      setNotification({ message: '🟢 Microfone ATIVO! Pode falar agora.', type: 'success' });
+    };
+
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setTeamInputs(prev => {
@@ -2475,12 +2556,22 @@ const App = () => {
         };
       });
       setListeningTaskId(null);
+      setMicConnectingTaskId(null);
+      playBeep(520, 0.12);
       setNotification({ message: 'Observação ditada com sucesso!', type: 'success' });
     };
-    recognition.onerror = () => { setListeningTaskId(null); setNotification({ message: 'Falha ao gravar.', type: 'error' }); };
-    recognition.onspeechend = () => { recognition.stop(); setListeningTaskId(null); };
+    recognition.onerror = () => {
+      setListeningTaskId(null);
+      setMicConnectingTaskId(null);
+      playBeep(320, 0.22);
+      setNotification({ message: 'Falha ao gravar.', type: 'error' });
+    };
+    recognition.onspeechend = () => {
+      recognition.stop();
+      setListeningTaskId(null);
+      setMicConnectingTaskId(null);
+    };
   };
-
 
   const handleFileUpload = (e: any) => {
     const file = e.target.files[0];
@@ -3798,9 +3889,19 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                                 handleServiceComplementVoiceInput(t.id);
                               }}
                               className={`p-1 rounded-full transition active:scale-95 text-[10px] shrink-0 cursor-pointer ${
-                                listeningComplementTaskId === t.id ? 'bg-red-650 text-white animate-pulse p-1' : 'bg-indigo-550/10 text-indigo-700 hover:bg-indigo-200'
+                                listeningComplementTaskId === t.id 
+                                  ? 'bg-red-600 text-white animate-pulse p-1' 
+                                  : micConnectingComplementTaskId === t.id
+                                  ? 'bg-amber-500 text-white animate-pulse p-1'
+                                  : 'bg-indigo-550/10 text-indigo-700 hover:bg-indigo-200'
                               }`}
-                              title="Ditar complemento"
+                              title={
+                                listeningComplementTaskId === t.id 
+                                  ? "Microfone ativo (Pode falar)" 
+                                  : micConnectingComplementTaskId === t.id
+                                  ? "Inicializando microfone..."
+                                  : "Ditar complemento"
+                              }
                             >
                               🎙️
                             </button>
@@ -3934,9 +4035,19 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => handleVoiceInput(t.id)}
                               className={`p-2 rounded-full transition active:scale-95 text-sm shrink-0 cursor-pointer ${
-                                listeningTaskId === t.id ? 'bg-red-650 text-white animate-pulse p-1' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                                listeningTaskId === t.id 
+                                  ? 'bg-red-600 text-white animate-pulse' 
+                                  : micConnectingTaskId === t.id
+                                  ? 'bg-amber-500 text-white animate-pulse'
+                                  : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
                               } disabled:opacity-40`}
-                              title="Ditar Observação"
+                              title={
+                                listeningTaskId === t.id 
+                                  ? "Microfone ativo (Pode falar)" 
+                                  : micConnectingTaskId === t.id
+                                  ? "Inicializando microfone..."
+                                  : "Ditar Observação"
+                              }
                             >
                               🎙️
                             </button>
@@ -5654,9 +5765,17 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                             className={`p-2.5 rounded-xl transition-all active:scale-95 text-sm flex items-center justify-center w-10 h-10 shrink-0 ${
                               listeningTaskId === t.id 
                                 ? 'bg-red-600 text-white animate-pulse ring-4 ring-red-200' 
+                                : micConnectingTaskId === t.id
+                                ? 'bg-amber-500 text-white animate-pulse ring-4 ring-amber-200'
                                 : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100'
                             }`}
-                            title="Ditar Observação"
+                            title={
+                              listeningTaskId === t.id 
+                                ? "Microfone ativo (Pode falar)" 
+                                : micConnectingTaskId === t.id
+                                ? "Inicializando microfone..."
+                                : "Ditar Observação"
+                            }
                           >
                             🎙️
                           </button>
