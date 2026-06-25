@@ -2415,26 +2415,34 @@ const App = () => {
     setNotification({ message: 'Atividade extra adicionada com sucesso!', type: 'success' });
   };
 
-  const handleDailyWorkChange = async (taskId, newDW) => {
+  const handleDailyWorkChange = (taskId, newDW) => {
     const updatedPlanning = planning.map(p => p.id === taskId ? { ...p, dailyWork: newDW } : p);
-    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    setPlanning(updatedPlanning);
+    saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
   };
 
-  const handlePlannedChange = async (taskId, value) => {
+  const handlePlannedChange = (taskId, value) => {
     const currentTask = planning.find(t => t.id === taskId);
     if (!currentTask || currentTask.finalized) return;
     const isCurrentActive = (currentTask.plannedThisWeek ?? 100) === value;
     const numericVal = isCurrentActive ? 0 : value;
     const updatedPlanning = planning.map(t => t.id === taskId ? { ...t, plannedThisWeek: numericVal } : t);
-    if (currentTask.isManual) {
-      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-      return;
-    }
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    // Optimistic: update UI immediately
+    setPlanning(updatedPlanning);
+    // Defer expensive sync to after React paints
+    setTimeout(() => {
+      if (currentTask.isManual) {
+        saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+        return;
+      }
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    }, 0);
   };
 
-  const handleWeeklyProgressChange = async (taskId, value) => {
+  const handleWeeklyProgressChange = (taskId, value) => {
     const task = planning.find(t => t.id === taskId);
     if (!task || task.finalized) return;
     
@@ -2446,38 +2454,44 @@ const App = () => {
       lastUpdatedBy: plannerUsername || 'Sistema'
     } : t);
     
-    if (task.isManual) {
-      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-      return;
-    }
+    // Optimistic: update planning state immediately so the button changes color now
+    setPlanning(updatedPlanning);
     
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-    const sectionKey = task.sectionId || 'estrutura';
-    const itemBefore = allFloorsData[task.floor]?.[sectionKey]?.items.find(i => i.id === task.itemId);
-    const itemAfter = updatedFloorsData[task.floor]?.[sectionKey]?.items.find(i => i.id === task.itemId);
-    
-    const updatedHistory = [...history];
-    if (itemBefore && itemAfter) {
-      const oldVal = itemBefore.actualPercent || 0;
-      const newVal = itemAfter.actualPercent || 0;
-      if (newVal !== oldVal) {
-        const now = new Date();
-        const weekDate = new Date(task.weekId);
-        let timestampVal = now.toISOString();
-        if (!isNaN(weekDate.getTime())) {
-          // Set the date to task.weekId Monday date, but keep the current time (so it sorts correctly)
-          weekDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
-          timestampVal = weekDate.toISOString();
-        }
-
-        updatedHistory.push({
-          timestamp: timestampVal, floor: task.floor, sectionId: sectionKey, sectionTitle: getMacroTitle(sectionKey),
-          itemId: task.itemId, itemName: itemAfter.name, progressAchieved: newVal - oldVal, 
-          oldPercent: oldVal, newPercent: newVal, userId
-        });
+    // Defer heavy cloneDeep + syncPlanningAndPhysical until AFTER React has painted
+    setTimeout(() => {
+      if (task.isManual) {
+        saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+        return;
       }
-    }
-    await saveToDB(floors, updatedFloorsData, updatedHistory, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+      const sectionKey = task.sectionId || 'estrutura';
+      const itemBefore = allFloorsData[task.floor]?.[sectionKey]?.items.find(i => i.id === task.itemId);
+      const itemAfter = updatedFloorsData[task.floor]?.[sectionKey]?.items.find(i => i.id === task.itemId);
+      
+      const updatedHistory = [...history];
+      if (itemBefore && itemAfter) {
+        const oldVal = itemBefore.actualPercent || 0;
+        const newVal = itemAfter.actualPercent || 0;
+        if (newVal !== oldVal) {
+          const now = new Date();
+          const weekDate = new Date(task.weekId);
+          let timestampVal = now.toISOString();
+          if (!isNaN(weekDate.getTime())) {
+            weekDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+            timestampVal = weekDate.toISOString();
+          }
+          updatedHistory.push({
+            timestamp: timestampVal, floor: task.floor, sectionId: sectionKey, sectionTitle: getMacroTitle(sectionKey),
+            itemId: task.itemId, itemName: itemAfter.name, progressAchieved: newVal - oldVal, 
+            oldPercent: oldVal, newPercent: newVal, userId
+          });
+        }
+      }
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      saveToDB(floors, updatedFloorsData, updatedHistory, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    }, 0);
   };
 
   const handleFinalizeWeek = async (carryOver) => {
@@ -2523,22 +2537,28 @@ const App = () => {
     setNotification({ message: `Semana finalizada! PPC de ${finalPpcVal.toFixed(1)}% gravado.`, type: 'success' });
   };
 
-  const handleUpdateTaskField = async (taskId, field, value) => {
+  const handleUpdateTaskField = (taskId, field, value) => {
     const updatedPlanning = planning.map(t => t.id === taskId ? { ...t, [field]: value, lastUpdatedBy: plannerUsername || 'Sistema' } : t);
-    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    setPlanning(updatedPlanning);
+    saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
   };
 
-  const handleRemoveTask = async (taskId) => {
+  const handleRemoveTask = (taskId) => {
     const targetTask = planning.find(t => t.id === taskId);
     const updatedPlanning = planning.filter(t => t.id !== taskId);
+    setPlanning(updatedPlanning);
     if (targetTask && targetTask.isManual) {
-      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
       setNotification({ message: 'Atividade extra removida.', type: 'success' });
       return;
     }
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-    setNotification({ message: 'Atividade removida do planejamento.', type: 'success' });
+    setTimeout(() => {
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      setNotification({ message: 'Atividade removida do planejamento.', type: 'success' });
+    }, 0);
   };
 
   const handleVoiceInput = (taskId) => {
