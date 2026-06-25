@@ -3404,7 +3404,7 @@ rt();
     });
     setMatrices(updated);
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updated);
-    setMatrixSelection({ isOpen: false, matrixId: '', type: 'macro' });
+    // Mantém a janela de seleção aberta para permitir adições contínuas
   };
 
   const handleDragColStart = (e, matrixId, idx) => {
