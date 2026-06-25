@@ -3100,7 +3100,7 @@ const App = () => {
           return `- *${t.floor}*: ${t.activityName}${comp} (Meta: ${t.plannedThisWeek ?? 100}%)`;
         }).join('\n');
 
-    const appUrl = `${window.location.origin}/?mode=team&u=${urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
+    const appUrl = `${window.location.origin}/?mode=team&u=${selectedProjectId || urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
 
     return `*PLANEJAMENTO SEMANAL (${dateRange})*\n*EQUIPE:* ${teamName}\n\n*Serviços a executar nesta semana:*\n${taskLines}\n\n*Atualize o progresso da sua equipe pelo link:* \n${appUrl}`;
   };
