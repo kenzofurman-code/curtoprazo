@@ -3164,6 +3164,21 @@ const App = () => {
       return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
     });
 
+    const dayWeathers = [0,1,2,3,4].map(i => {
+      const dayDate = new Date(currentWeekStart.getTime() + i * 86400000);
+      const dayStr = toISODate(dayDate);
+      
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const diffTime = dayDate.getTime() - todayStart.getTime();
+      const diffDays = Math.round(diffTime / 86400000);
+      const isWithinRange = diffDays >= -15 && diffDays <= 15;
+
+      const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+      const weather = isWithinRange ? weatherCache[cacheKey] : null;
+      return isWithinRange && weather ? getWeatherEmoji(weather.icon) : '';
+    });
+
     const rowsJson = JSON.stringify(rows);
     const dayLabelsJson = JSON.stringify(dayLabels);
     const dayDatesJson = JSON.stringify(dayDates);
@@ -3229,9 +3244,9 @@ const App = () => {
   .badge-gray{background:#f1f5f9;color:#475569}
   .badge-amber{background:#fef3c7;color:#b45309}
   .days-cell{display:flex;gap:3px;justify-content:center;flex-wrap:nowrap}
-  .day-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:8px;font-weight:900;padding:3px 4px;border-radius:4px;min-width:32px;height:32px}
-  .day-chip span:first-child{font-size:8px;font-weight:900}
-  .day-chip span:last-child{font-size:6.5px;font-weight:700;margin-top:1px}
+  .day-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:9px;font-weight:900;padding:3px 4px;border-radius:4px;min-width:36px;height:36px}
+  .day-chip span:first-child{font-size:9px;font-weight:900}
+  .day-chip span:last-child{font-size:7px;font-weight:700;margin-top:1px}
   .day-chip.worked{background:#1e293b;color:#fff}
   .day-chip.off{background:#f1f5f9;color:#94a3b8}
   .empty-row td{text-align:center;color:#94a3b8;font-style:italic;padding:20px}
@@ -3254,7 +3269,7 @@ const App = () => {
     word-break: break-word !important;
   }
   .cd {
-    width: 190px;
+    width: 220px;
   }
   .cdr, .co {
     white-space: normal;
@@ -3304,7 +3319,20 @@ const App = () => {
         <th class="ce" onclick="st('efetivo')" style="text-align:center">Efetivo<span class="si" id="si-efetivo"></span></th>
         <th class="cb" onclick="st('executedBefore')" style="text-align:center">% Anterior<span class="si" id="si-executedBefore"></span></th>
         <th class="cp" onclick="st('plannedThisWeek')" style="text-align:center">Meta Planejada<span class="si" id="si-plannedThisWeek"></span></th>
-        <th class="cd" style="text-align:center">Dias Trab.</th>
+        <th class="cd" style="padding: 4px 6px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+            <span style="font-size:7px;font-weight:900;text-transform:uppercase;color:#94a3b8;letter-spacing:0.05em">Dias Trab.</span>
+            <div style="display:flex;gap:3px;justify-content:center">
+              ${[0,1,2,3,4].map(i => `
+                <div class="day-hdr" style="display:flex;flex-direction:column;align-items:center;min-width:36px;font-size:8px;font-weight:900;line-height:1">
+                  <span style="font-size:10px;margin-bottom:1px;height:10px;display:flex;align-items:center;justify-content:center">${dayWeathers[i] || '&nbsp;'}</span>
+                  <span style="color:#fff">${dayLabels[i].charAt(0)}</span>
+                  <span style="color:#94a3b8;font-size:6.5px;font-weight:700;margin-top:1.5px">${dayDates[i]}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </th>
         <th class="cpr" onclick="st('progressThisWeek')" style="text-align:center">Progresso<span class="si" id="si-progressThisWeek"></span></th>
         <th class="cdr" onclick="st('delayReason')">Motivo de Atraso<span class="si" id="si-delayReason"></span></th>
         <th class="co">Observacoes</th>
