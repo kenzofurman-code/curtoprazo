@@ -4372,17 +4372,23 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         </div>
                       )}
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
-                      {t.lastUpdatedBy && (
-                        <div className="text-[8px] text-slate-400 font-bold uppercase mt-1 flex items-center gap-1">
-                          <span>👤</span> {t.lastUpdatedBy}
-                        </div>
-                      )}
                     </td>
-                    <td className="p-3 border-r text-center">
-                      <select disabled={t.finalized} className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold uppercase cursor-pointer focus:bg-white disabled:opacity-80 disabled:cursor-not-allowed" value={t.responsible || ''} onChange={e => handleUpdateTaskField(t.id, 'responsible', e.target.value)}>
-                        <option value="">-- Escolha --</option>
-                        {teams.map(team => <option key={team} value={team}>{team}</option>)}
-                      </select>
+                    <td className="p-3 border-r text-center align-middle">
+                      <div className="relative w-full min-h-[32px] flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg py-1 px-1.5 hover:bg-slate-200 transition-colors">
+                        <div className="text-[10px] font-black uppercase text-slate-800 leading-tight whitespace-normal break-words text-center pr-3">
+                          {t.responsible || '-- ESCOLHA --'}
+                        </div>
+                        <div className="absolute right-1 text-[8px] text-slate-500 pointer-events-none">▼</div>
+                        <select
+                          disabled={t.finalized}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                          value={t.responsible || ''}
+                          onChange={e => handleUpdateTaskField(t.id, 'responsible', e.target.value)}
+                        >
+                          <option value="">-- Escolha --</option>
+                          {teams.map(team => <option key={team} value={team}>{team}</option>)}
+                        </select>
+                      </div>
                     </td>
                     <td className="p-3 border-r text-center">
                       <input
@@ -4460,19 +4466,30 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         )}
                       </div>
                     </td>
-                    <td className="p-3 border-r text-center space-y-1">
+                    <td className="p-3 border-r text-center align-middle">
                       {showDelayAlert ? (
-                        <>
-                          <select disabled={t.finalized} className="w-full p-2 bg-red-100/80 border border-red-200 rounded-lg text-[10px] font-bold text-red-800 cursor-pointer disabled:opacity-80" value={t.delayReason || ''} onChange={e => handleUpdateTaskField(t.id, 'delayReason', e.target.value)}>
-                            <option value="">⚠️ Motivo...</option>
-                            {delayReasons.map(r => <option key={r} value={r}>{r}</option>)}
-                          </select>
+                        <div className="space-y-1">
+                          <div className="relative w-full min-h-[32px] flex items-center justify-center bg-red-100/80 border border-red-200 rounded-lg py-1 px-1.5 hover:bg-red-200/80 transition-colors">
+                            <div className="text-[9px] font-black uppercase text-red-800 leading-tight whitespace-normal break-words text-center pr-3">
+                              {t.delayReason || '⚠️ MOTIVO...'}
+                            </div>
+                            <div className="absolute right-1 text-[7px] text-red-600 pointer-events-none">▼</div>
+                            <select
+                              disabled={t.finalized}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                              value={t.delayReason || ''}
+                              onChange={e => handleUpdateTaskField(t.id, 'delayReason', e.target.value)}
+                            >
+                              <option value="">⚠️ Motivo...</option>
+                              {delayReasons.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                          </div>
                           {t.preFilledDelayReason && (
                             <div className="text-[8px] text-purple-600 font-bold italic leading-tight text-left pl-1">
                               📲 Sugerido: "{t.preFilledDelayReason}"
                             </div>
                           )}
-                        </>
+                        </div>
                       ) : (
                         <span className="text-[10px] font-bold text-emerald-600">✓ Conforme</span>
                       )}
