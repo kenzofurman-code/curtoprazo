@@ -445,7 +445,7 @@ const DaysSelector = ({ dailyWork, disabled, onChange }) => {
           data-day-index={i}
           onPointerDown={(e) => { e.preventDefault(); startDrag(i); }}
           onPointerEnter={() => enterDrag(i)}
-          className={`w-8 h-8 rounded-full text-[9px] font-black flex items-center justify-center transition-all cursor-pointer ${
+          className={`w-7 h-7 rounded-full text-[8px] font-black flex items-center justify-center transition-all cursor-pointer ${
             dw === 1 ? 'bg-slate-300 text-slate-800 scale-110 shadow-inner' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
           } ${disabled ? 'opacity-60 cursor-not-allowed pointer-events-none' : ''}`}
         >
@@ -4186,15 +4186,15 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <thead className="sticky top-[118px] z-20 bg-slate-800">
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
                 {[
-                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-36' },
-                  { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-32 text-center' },
-                  { label: 'Efetivo', key: 'efetivo', cls: 'w-12 text-center' },
-                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-36 bg-slate-900' },
-                  { label: 'Dias de Trabalho', key: null, cls: 'text-center w-44', isWeather: true },
-                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-36' },
-                  { label: 'Motivo de Atraso', key: null, cls: 'text-center w-28' },
-                  { label: 'Observações', key: null, cls: 'w-32' },
-                  { label: 'Ação', key: null, cls: 'text-center w-12' },
+                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-72' },
+                  { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-28 text-center' },
+                  { label: 'Efetivo', key: 'efetivo', cls: 'w-10 text-center' },
+                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-32 bg-slate-900' },
+                  { label: 'Dias de Trabalho', key: null, cls: 'text-center w-36', isWeather: true },
+                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-32' },
+                  { label: 'Motivo de Atraso', key: null, cls: 'text-center w-24' },
+                  { label: 'Observações', key: null, cls: 'w-24' },
+                  { label: 'Ação', key: null, cls: 'text-center w-10' },
                 ].map((col) => {
                   if (col.label === 'Ação') {
                     return (
@@ -4419,7 +4419,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               disabled={t.finalized}
                               onClick={() => handlePlannedChange(t.id, val)}
                               title={isExecuted && !isPlanned ? `${val}% já medido` : `Planejar ${val}%`}
-                              className={`w-8 h-8 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
+                              className={`w-7 h-7 rounded-full text-[8px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
                             >{val}%</button>
                           );
                         })}
@@ -4446,7 +4446,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                                 key={val}
                                 disabled={t.finalized}
                                 onClick={() => handleWeeklyProgressChange(t.id, val)}
-                                className={`w-8 h-8 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
+                                className={`w-7 h-7 rounded-full text-[8px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
                               >
                                 {val}%
                               </button>
