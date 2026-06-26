@@ -4186,7 +4186,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <thead className="sticky top-[118px] z-20 bg-slate-800">
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
                 {[
-                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
+                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-36' },
                   { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-40 text-center' },
                   { label: 'Efetivo', key: 'efetivo', cls: 'w-14 text-center' },
                   { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
@@ -4290,21 +4290,21 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 return (
                   <tr key={t.id} className={`hover:bg-slate-50 transition ${t.finalized ? 'bg-slate-100/70 opacity-75' : showDelayAlert && (progVal > 0 || currentPlan > 0) ? 'bg-red-50/40' : ''}`}>
                     <td className="p-3 border-r">
-                      <div className="flex items-center space-x-1.5">
-                        {t.finalized && <span className="text-[10px] text-slate-500" title="Semana Finalizada">🔒</span>}
+                      <div className="flex items-start space-x-1.5">
+                        {t.finalized && <span className="text-[10px] text-slate-500 mt-0.5" title="Semana Finalizada">🔒</span>}
                         {t.isManual && (
-                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0">
+                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
                             Extra
                           </span>
                         )}
-                        <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight truncate">{t.activityName}</div>
+                        <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight line-clamp-2 break-words whitespace-normal flex-1" title={t.activityName}>{t.activityName}</div>
                         {!t.finalized && !t.serviceComplement && editingComplementTaskId !== t.id && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               setEditingComplementTaskId(t.id);
                             }}
-                            className="w-4 h-4 rounded-full border border-slate-350 hover:border-indigo-650 hover:bg-indigo-50 text-slate-500 hover:text-indigo-650 flex items-center justify-center font-bold text-[10px] cursor-pointer"
+                            className="w-4 h-4 rounded-full border border-slate-350 hover:border-indigo-650 hover:bg-indigo-50 text-slate-500 hover:text-indigo-650 flex items-center justify-center font-bold text-[10px] cursor-pointer shrink-0 mt-0.5"
                             title="Adicionar complemento"
                           >
                             +
