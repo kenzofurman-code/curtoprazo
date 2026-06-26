@@ -3264,7 +3264,7 @@ const App = () => {
     word-break: break-word !important;
   }
   .cf {
-    width: 70px;
+    width: 140px;
     white-space: normal !important;
     word-break: break-word !important;
   }
