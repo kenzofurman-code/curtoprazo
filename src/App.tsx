@@ -3259,7 +3259,7 @@ const App = () => {
     white-space: nowrap;
   }
   .cs {
-    width: 250px;
+    min-width: 200px;
     white-space: normal !important;
     word-break: break-word !important;
   }
@@ -3268,12 +3268,23 @@ const App = () => {
     white-space: normal !important;
     word-break: break-word !important;
   }
+  .ct {
+    width: 100px;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
   .cd {
     width: 220px;
   }
-  .cdr, .co {
-    white-space: normal;
-    word-break: break-word;
+  .cdr {
+    width: 150px;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
+  .co {
+    width: 150px;
+    white-space: normal !important;
+    word-break: break-word !important;
   }
   .days-cell {
     flex-wrap: nowrap !important;
