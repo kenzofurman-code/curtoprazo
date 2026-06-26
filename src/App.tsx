@@ -891,6 +891,11 @@ const App = () => {
   const [editingObservationsTaskId, setEditingObservationsTaskId] = useState<string | null>(null);
   const [micConnectingTaskId, setMicConnectingTaskId] = useState<string | null>(null);
   const [micConnectingComplementTaskId, setMicConnectingComplementTaskId] = useState<string | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelectedTaskIds([]);
+  }, [currentWeekStart]);
 
   const [dbSavingStatus, setDbSavingStatus] = useState<'saved' | 'saving' | 'pending'>('saved');
   const saveTimeoutRef = useRef<any>(null);
@@ -2341,6 +2346,7 @@ const App = () => {
         if (planningSortKey === 'activityName') { aVal = a.activityName || ''; bVal = b.activityName || ''; }
         else if (planningSortKey === 'floor') { aVal = a.floor || ''; bVal = b.floor || ''; }
         else if (planningSortKey === 'responsible') { aVal = a.responsible || ''; bVal = b.responsible || ''; }
+        else if (planningSortKey === 'efetivo') { aVal = a.efetivo ?? 0; bVal = b.efetivo ?? 0; }
         else if (planningSortKey === 'plannedThisWeek') { aVal = a.plannedThisWeek ?? 0; bVal = b.plannedThisWeek ?? 0; }
         else if (planningSortKey === 'progressThisWeek') { aVal = a.progressThisWeek ?? 0; bVal = b.progressThisWeek ?? 0; }
         if (typeof aVal === 'number') return (aVal - bVal) * dir;
@@ -2580,6 +2586,26 @@ const App = () => {
       saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
       setNotification({ message: 'Atividade removida do planejamento.', type: 'success' });
     }, 0);
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedTaskIds.length === 0) return;
+    triggerConfirm(
+      'Excluir Atividades', 
+      `Deseja remover as ${selectedTaskIds.length} atividades selecionadas desta semana?`, 
+      async () => {
+        const updatedPlanning = planning.filter(t => !selectedTaskIds.includes(t.id));
+        setPlanning(updatedPlanning);
+        setSelectedTaskIds([]);
+        
+        // Recalcula o progresso físico e sincroniza os dados
+        const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+        setPlanning(recalculatedPlanning);
+        setAllFloorsData(updatedFloorsData);
+        await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+        setNotification({ message: `${updatedPlanning.length === planning.length ? 0 : planning.length - updatedPlanning.length} atividades removidas do planejamento.`, type: 'success' });
+      }
+    );
   };
 
   const handleVoiceInput = (taskId) => {
@@ -3111,6 +3137,7 @@ const App = () => {
       serviceComplement: t.serviceComplement || '',
       floor: t.floor || '',
       responsible: t.responsible || '',
+      efetivo: t.efetivo ?? '',
       executedBefore: t.executedBefore ?? 0,
       plannedThisWeek: t.plannedThisWeek ?? 100,
       progressThisWeek: t.progressThisWeek ?? 0,
@@ -3198,10 +3225,10 @@ const App = () => {
   .empty-row td{text-align:center;color:#94a3b8;font-style:italic;padding:20px}
   
   /* ConfiguraÃ§Ã£o de Larguras e Quebras de TÃ­tulo para Colunas de ImpressÃ£o */
-  .cn, .cb, .cp, .cd, .cpr, .cst {
+  .cn, .cb, .cp, .cd, .cpr, .cst, .ce {
     width: 1%;
   }
-  tbody td.cn, tbody td.cb, tbody td.cp, tbody td.cd, tbody td.cpr, tbody td.cst {
+  tbody td.cn, tbody td.cb, tbody td.cp, tbody td.cd, tbody td.cpr, tbody td.cst, tbody td.ce {
     white-space: nowrap;
   }
   .cdr, .co {
@@ -3222,6 +3249,7 @@ const App = () => {
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cs',this.checked)"> Servico</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cf',this.checked)"> Pavimento</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('ct',this.checked)"> Equipe</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('ce',this.checked)"> Efetivo</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cb',this.checked)"> % Anterior</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cp',this.checked)"> Meta Planejada</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cd',this.checked)"> Dias Trabalhados</label>
@@ -3248,6 +3276,7 @@ const App = () => {
         <th class="cs" onclick="st('activityName')">Servico<span class="si" id="si-activityName"></span></th>
         <th class="cf" onclick="st('floor')">Pavimento<span class="si" id="si-floor"></span></th>
         <th class="ct" onclick="st('responsible')">Equipe<span class="si" id="si-responsible"></span></th>
+        <th class="ce" onclick="st('efetivo')" style="text-align:center">Efetivo<span class="si" id="si-efetivo"></span></th>
         <th class="cb" onclick="st('executedBefore')" style="text-align:center">% Anterior<span class="si" id="si-executedBefore"></span></th>
         <th class="cp" onclick="st('plannedThisWeek')" style="text-align:center">Meta Planejada<span class="si" id="si-plannedThisWeek"></span></th>
         <th class="cd" style="text-align:center">Dias Trab.</th>
@@ -3278,7 +3307,7 @@ function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
 function rt(){var sorted=allRows.slice();
   if(sk){sorted.sort(function(a,b){var va=sv(a,sk),vb=sv(b,sk);if(va<vb)return sd==='asc'?-1:1;if(va>vb)return sd==='asc'?1:-1;return 0;});}
   var tb=document.getElementById('pb');
-  if(!sorted.length){tb.innerHTML='<tr class="empty-row"><td colspan="11">Nenhuma atividade.</td></tr>';return;}
+  if(!sorted.length){tb.innerHTML='<tr class="empty-row"><td colspan="12">Nenhuma atividade.</td></tr>';return;}
   tb.innerHTML=sorted.map(function(t,i){
     var prog=t.progressThisWeek,planned=t.plannedThisWeek;
     var isOk=prog>=planned&&planned>0,isDel=prog<planned&&planned>0;
@@ -3295,6 +3324,7 @@ function rt(){var sorted=allRows.slice();
       '<td class="cs"><div class="act-name">'+t.activityName+mb+'</div>'+comp+'</td>'+
       '<td class="cf"><span class="floor-cell">'+(t.floor||'-')+'</span></td>'+
       '<td class="ct" style="font-weight:700;white-space:nowrap">'+(t.responsible||'-')+'</td>'+
+      '<td class="ce" style="text-align:center;font-weight:700">'+(t.efetivo !== undefined && t.efetivo !== null && t.efetivo !== '' ? t.efetivo : '-')+'</td>'+
       '<td class="cb" style="text-align:center">'+bb+'</td>'+
       '<td class="cp" style="text-align:center">'+plb+'</td>'+
       '<td class="cd">'+dh+'</td>'+
@@ -4158,13 +4188,43 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 {[
                   { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
                   { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-40 text-center' },
+                  { label: 'Efetivo', key: 'efetivo', cls: 'w-24 text-center' },
                   { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
                   { label: 'Dias de Trabalho', key: null, cls: 'text-center w-56', isWeather: true },
                   { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-48' },
                   { label: 'Motivo de Atraso', key: null, cls: 'text-center w-40' },
                   { label: 'Observações', key: null, cls: 'w-56' },
-                  { label: 'Ação', key: null, cls: 'text-center w-12' },
+                  { label: 'Ação', key: null, cls: 'text-center w-16' },
                 ].map((col) => {
+                  if (col.label === 'Ação') {
+                    return (
+                      <th key={col.label} className={`p-2 border-r border-slate-700 text-center sticky top-[118px] z-20 bg-slate-800 ${col.cls}`}>
+                        <div className="flex items-center justify-center gap-2">
+                          <input 
+                            type="checkbox" 
+                            checked={filteredWeeklyTasks.length > 0 && filteredWeeklyTasks.every(t => selectedTaskIds.includes(t.id))}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedTaskIds(prev => Array.from(new Set([...prev, ...filteredWeeklyTasks.map(t => t.id)])));
+                              } else {
+                                setSelectedTaskIds(prev => prev.filter(id => !filteredWeeklyTasks.map(t => t.id).includes(id)));
+                              }
+                            }}
+                            className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-350 focus:ring-indigo-500 cursor-pointer"
+                            title="Selecionar todos"
+                          />
+                          <button 
+                            onClick={handleBulkDelete}
+                            disabled={selectedTaskIds.length === 0}
+                            className="text-red-400 hover:text-red-500 font-bold text-sm disabled:opacity-30 cursor-pointer transition-opacity"
+                            title="Excluir selecionados"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </th>
+                    );
+                  }
                   if (col.isWeather) {
                     return (
                       <th key={col.label} className={`p-2 border-r border-slate-700 text-center sticky top-[118px] z-20 bg-slate-800 ${col.cls}`}>
@@ -4324,6 +4384,19 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         {teams.map(team => <option key={team} value={team}>{team}</option>)}
                       </select>
                     </td>
+                    <td className="p-3 border-r text-center">
+                      <input
+                        type="number"
+                        min="0"
+                        disabled={t.finalized}
+                        className="w-16 p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-center focus:bg-white focus:border-indigo-500 outline-none"
+                        value={t.efetivo === undefined || t.efetivo === null ? '' : t.efetivo}
+                        onChange={e => {
+                          const val = e.target.value === '' ? null : parseInt(e.target.value, 10);
+                          handleUpdateTaskField(t.id, 'efetivo', val);
+                        }}
+                      />
+                    </td>
                     <td className="p-3 border-r bg-emerald-50/30">
                       <div className="flex gap-1 justify-center">
                         {[25, 50, 75, 100].map(val => {
@@ -4462,7 +4535,20 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                             ✅
                           </button>
                         )}
-                        <button disabled={t.finalized} onClick={() => triggerConfirm('Excluir Atividade', `Deseja remover "${t.activityName}" desta semana?`, () => handleRemoveTask(t.id))} className="text-red-500 hover:text-red-700 font-bold text-sm disabled:opacity-30">🗑️</button>
+                        <input
+                          type="checkbox"
+                          disabled={t.finalized}
+                          checked={selectedTaskIds.includes(t.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedTaskIds(prev => [...prev, t.id]);
+                            } else {
+                              setSelectedTaskIds(prev => prev.filter(id => id !== t.id));
+                            }
+                          }}
+                          className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                          title="Selecionar para exclusão"
+                        />
                       </div>
                     </td>
                   </tr>
