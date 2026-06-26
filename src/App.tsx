@@ -4188,12 +4188,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 {[
                   { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-44' },
                   { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-40 text-center' },
-                  { label: 'Efetivo', key: 'efetivo', cls: 'w-24 text-center' },
+                  { label: 'Efetivo', key: 'efetivo', cls: 'w-14 text-center' },
                   { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
                   { label: 'Dias de Trabalho', key: null, cls: 'text-center w-56', isWeather: true },
                   { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-48' },
                   { label: 'Motivo de Atraso', key: null, cls: 'text-center w-40' },
-                  { label: 'Observações', key: null, cls: 'w-56' },
+                  { label: 'Observações', key: null, cls: 'w-40' },
                   { label: 'Ação', key: null, cls: 'text-center w-16' },
                 ].map((col) => {
                   if (col.label === 'Ação') {
@@ -4389,7 +4389,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         type="number"
                         min="0"
                         disabled={t.finalized}
-                        className="w-16 p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-center focus:bg-white focus:border-indigo-500 outline-none"
+                        className="w-12 p-1.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold text-center focus:bg-white focus:border-indigo-500 outline-none"
                         value={t.efetivo === undefined || t.efetivo === null ? '' : t.efetivo}
                         onChange={e => {
                           const val = e.target.value === '' ? null : parseInt(e.target.value, 10);
@@ -4479,11 +4479,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </td>
                     <td className="p-3 border-r">
                       <div className="space-y-1">
-                        <div className="flex items-center space-x-1.5">
-                          <input
-                            type="text"
+                        <div className="flex items-start space-x-1.5">
+                          <textarea
                             disabled={t.finalized}
-                            className="flex-1 bg-slate-50 border border-slate-200 p-2 rounded-lg text-[10px] font-medium disabled:opacity-80 focus:bg-white focus:border-indigo-500"
+                            className="flex-1 bg-slate-50 border border-slate-200 py-1 px-1.5 rounded-lg text-[10px] font-medium disabled:opacity-80 focus:bg-white focus:border-indigo-500 resize-y min-h-[32px] h-[32px] leading-tight overflow-y-auto"
                             placeholder="Notas..."
                             value={t.observations || ''}
                             onChange={e => {
