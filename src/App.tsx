@@ -874,6 +874,8 @@ const App = () => {
   // Drawer Menu
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [drawerMacro, setDrawerMacro] = useState<any>('');
+  const [drawerMacroSearch, setDrawerMacroSearch] = useState<string>('');
+  const [isDrawerMacroDropdownOpen, setIsDrawerMacroDropdownOpen] = useState<boolean>(false);
   const [drawerFloors, setDrawerFloors] = useState<any[]>([]); 
   const [drawerSelectedServices, setDrawerSelectedServices] = useState<any[]>([]);
   const [drawerResponsible, setDrawerResponsible] = useState<any>('');
@@ -1522,6 +1524,14 @@ const App = () => {
     });
     return Array.from(macros);
   }, [allFloorsData, cronogramaInicial]);
+
+  const filteredMacros = useMemo(() => {
+    if (!drawerMacroSearch.trim()) return allPossibleMacros;
+    const query = drawerMacroSearch.toLowerCase();
+    return allPossibleMacros.filter(macro => 
+      getMacroTitle(macro).toLowerCase().includes(query) || macro.toLowerCase().includes(query)
+    );
+  }, [allPossibleMacros, drawerMacroSearch]);
 
   useEffect(() => {
     if (allPossibleMacros.length > 0 && visibleSections.length === 0) setVisibleSections(allPossibleMacros);
@@ -6496,12 +6506,47 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </div>
               <div className="flex-1 p-5 space-y-5 overflow-y-auto">
                 {drawerWarning && <div className="bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold p-3 rounded-lg">{drawerWarning}</div>}
-                <div className="space-y-2">
+                <div className="space-y-2 relative">
                   <label className="block text-[10px] font-black uppercase text-indigo-600">1. Selecione a Macroatividade</label>
-                  <select className="w-full p-2.5 bg-slate-100 border rounded-lg font-bold text-xs cursor-pointer focus:bg-white" value={drawerMacro} onChange={(e) => { setDrawerMacro(e.target.value); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); }}>
-                    <option value="">-- Escolha --</option>
-                    {allPossibleMacros.map(macro => <option key={macro} value={macro}>{getMacroTitle(macro)}</option>)}
-                  </select>
+                  {isDrawerMacroDropdownOpen && (
+                    <div className="fixed inset-0 z-40" onClick={() => setIsDrawerMacroDropdownOpen(false)} />
+                  )}
+                  <div className="relative z-50">
+                    <input
+                      type="text"
+                      placeholder="🔎 Buscar macroatividade..."
+                      className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-xs focus:bg-white outline-none cursor-pointer"
+                      value={isDrawerMacroDropdownOpen ? drawerMacroSearch : (drawerMacro ? getMacroTitle(drawerMacro) : '')}
+                      onFocus={() => {
+                        setDrawerMacroSearch('');
+                        setIsDrawerMacroDropdownOpen(true);
+                      }}
+                      onChange={(e) => setDrawerMacroSearch(e.target.value)}
+                    />
+                    {isDrawerMacroDropdownOpen && (
+                      <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-y-auto custom-scrollbar z-50">
+                        {filteredMacros.map(macro => (
+                          <button
+                            key={macro}
+                            type="button"
+                            onClick={() => {
+                              setDrawerMacro(macro);
+                              setDrawerFloors([]);
+                              setDrawerSelectedServices([]);
+                              setDrawerWarning('');
+                              setIsDrawerMacroDropdownOpen(false);
+                            }}
+                            className="w-full text-left p-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition uppercase tracking-wider border-b border-slate-100 last:border-b-0"
+                          >
+                            {getMacroTitle(macro)}
+                          </button>
+                        ))}
+                        {filteredMacros.length === 0 && (
+                          <p className="p-3 text-xs text-slate-400 italic text-center font-bold">Nenhuma macroatividade encontrada.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
