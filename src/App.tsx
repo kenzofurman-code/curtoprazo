@@ -3221,25 +3221,40 @@ const App = () => {
   td:last-child{border-right:none}
   .act-name{font-weight:800;text-transform:uppercase;font-size:10px;line-height:1.3}
   .act-comp{font-size:8px;color:#64748b;margin-top:1px}
-  .floor-cell{font-size:9px;font-weight:800;color:#4f46e5;text-transform:uppercase;white-space:nowrap}
+  .floor-cell{font-size:9px;font-weight:800;color:#4f46e5;text-transform:uppercase;white-space:normal;word-break:break-word}
   .badge{display:inline-block;padding:2px 6px;border-radius:999px;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
   .badge-green{background:#dcfce7;color:#15803d}
   .badge-red{background:#fee2e2;color:#b91c1c}
   .badge-blue{background:#dbeafe;color:#1d4ed8}
   .badge-gray{background:#f1f5f9;color:#475569}
   .badge-amber{background:#fef3c7;color:#b45309}
-  .days-cell{display:flex;gap:2px;justify-content:center;flex-wrap:wrap}
-  .day-chip{display:flex;flex-direction:column;align-items:center;font-size:7px;font-weight:900;padding:2px 3px;border-radius:3px;min-width:18px}
+  .days-cell{display:flex;gap:3px;justify-content:center;flex-wrap:nowrap}
+  .day-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:8px;font-weight:900;padding:3px 4px;border-radius:4px;min-width:32px;height:32px}
+  .day-chip span:first-child{font-size:8px;font-weight:900}
+  .day-chip span:last-child{font-size:6.5px;font-weight:700;margin-top:1px}
   .day-chip.worked{background:#1e293b;color:#fff}
   .day-chip.off{background:#f1f5f9;color:#94a3b8}
   .empty-row td{text-align:center;color:#94a3b8;font-style:italic;padding:20px}
   
-  /* ConfiguraÃ§Ã£o de Larguras e Quebras de TÃ­tulo para Colunas de ImpressÃ£o */
-  .cn, .cb, .cp, .cd, .cpr, .cst, .ce {
+  /* Configuração de Larguras e Quebras de Título para Colunas de Impressão */
+  .cn, .cb, .cp, .cpr, .cst, .ce {
     width: 1%;
   }
-  tbody td.cn, tbody td.cb, tbody td.cp, tbody td.cd, tbody td.cpr, tbody td.cst, tbody td.ce {
+  tbody td.cn, tbody td.cb, tbody td.cp, tbody td.cpr, tbody td.cst, tbody td.ce {
     white-space: nowrap;
+  }
+  .cs {
+    width: 250px;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
+  .cf {
+    width: 70px;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
+  .cd {
+    width: 190px;
   }
   .cdr, .co {
     white-space: normal;
