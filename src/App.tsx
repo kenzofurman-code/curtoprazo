@@ -4186,13 +4186,13 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <thead className="sticky top-[118px] z-20 bg-slate-800">
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
                 {[
-                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-36' },
-                  { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-40 text-center' },
+                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-30' },
+                  { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-32 text-center' },
                   { label: 'Efetivo', key: 'efetivo', cls: 'w-14 text-center' },
-                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-48 bg-slate-900' },
-                  { label: 'Dias de Trabalho', key: null, cls: 'text-center w-56', isWeather: true },
-                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-48' },
-                  { label: 'Motivo de Atraso', key: null, cls: 'text-center w-40' },
+                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-36 bg-slate-900' },
+                  { label: 'Dias de Trabalho', key: null, cls: 'text-center w-44', isWeather: true },
+                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-36' },
+                  { label: 'Motivo de Atraso', key: null, cls: 'text-center w-32' },
                   { label: 'Observações', key: null, cls: 'w-40' },
                   { label: 'Ação', key: null, cls: 'text-center w-16' },
                 ].map((col) => {
