@@ -4188,12 +4188,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 {[
                   { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-108' },
                   { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-24 text-center' },
-                  { label: 'Efetivo', key: 'efetivo', cls: 'w-8 text-center' },
-                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-26 bg-slate-900' },
+                  { label: 'Efetivo', key: 'efetivo', cls: 'w-9 text-center' },
+                  { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-32 bg-slate-900' },
                   { label: 'Dias de Trabalho', key: null, cls: 'text-center w-32', isWeather: true },
-                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-26' },
+                  { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-32' },
                   { label: 'Motivo de Atraso', key: null, cls: 'text-center w-18' },
-                  { label: 'Observações', key: null, cls: 'w-16' },
+                  { label: 'Observações', key: null, cls: 'w-20' },
                   { label: 'Ação', key: null, cls: 'text-center w-10' },
                 ].map((col) => {
                   if (col.label === 'Ação') {
@@ -4230,7 +4230,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <th key={col.label} className={`p-2 border-r border-slate-700 text-center sticky top-[118px] z-20 bg-slate-800 ${col.cls}`}>
                         <div className="flex flex-col items-center justify-center">
                           <span className="text-[8px] text-slate-300 font-bold uppercase mb-1">Dias de Trabalho</span>
-                          <div className="flex gap-1 justify-center">
+                          <div className="flex gap-[3px] justify-center">
                             {['S', 'T', 'Q', 'Q', 'S'].map((dayChar, idx) => {
                               const dayDate = addDays(currentWeekStart, idx);
                               const dayStr = toISODate(dayDate);
@@ -4248,9 +4248,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                               
                               return (
-                                <div key={idx} className="flex flex-col items-center w-8 group relative cursor-help" title={`${dayChar} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
+                                <div key={idx} className="flex flex-col items-center w-6 group relative cursor-help" title={`${dayChar} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
                                   <span className="text-[13px] leading-none mb-0.5 select-none">{weatherEmoji || '\u00a0'}</span>
-                                  <span className="text-[8px] font-black text-slate-400">{dayChar}</span>
+                                  <span className="text-[8px] font-black text-slate-400 leading-none">{dayChar}</span>
                                 </div>
                               );
                             })}
@@ -4389,7 +4389,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         type="number"
                         min="0"
                         disabled={t.finalized}
-                        className="w-8 p-1 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-center focus:bg-white focus:border-indigo-500 outline-none"
+                        className="w-9 p-1 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-center focus:bg-white focus:border-indigo-500 outline-none"
                         value={t.efetivo === undefined || t.efetivo === null ? '' : t.efetivo}
                         onChange={e => {
                           const val = e.target.value === '' ? null : parseInt(e.target.value, 10);
@@ -4419,7 +4419,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               disabled={t.finalized}
                               onClick={() => handlePlannedChange(t.id, val)}
                               title={isExecuted && !isPlanned ? `${val}% já medido` : `Planejar ${val}%`}
-                              className={`w-6 h-6 rounded-full text-[7.5px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
+                              className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
                             >{val}%</button>
                           );
                         })}
@@ -4446,7 +4446,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                                 key={val}
                                 disabled={t.finalized}
                                 onClick={() => handleWeeklyProgressChange(t.id, val)}
-                                className={`w-6 h-6 rounded-full text-[7.5px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
+                                className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
                               >
                                 {val}%
                               </button>
