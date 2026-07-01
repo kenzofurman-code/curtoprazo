@@ -2333,11 +2333,13 @@ const App = () => {
   const filteredWeeklyTasks = useMemo(() => {
     let tasks = (weeklyTasks || []).filter(t => {
       if (!t) return false;
+      const macroTitle = t.sectionId ? getMacroTitle(t.sectionId) : '';
       const matchesSearch = !planningSearch ||
         (t.activityName || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
         (t.responsible || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
         (t.observations || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
-        (t.floor || '').toLowerCase().includes(planningSearch.toLowerCase());
+        (t.floor || '').toLowerCase().includes(planningSearch.toLowerCase()) ||
+        macroTitle.toLowerCase().includes(planningSearch.toLowerCase());
       const matchesTeam = !planningTeamFilter || t.responsible === planningTeamFilter;
       let matchesStatus = true;
       const progVal = t.progressThisWeek ?? 0;
