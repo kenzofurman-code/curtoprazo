@@ -847,7 +847,11 @@ const App = () => {
   const [editProjImageUrl, setEditProjImageUrl] = useState<string>('');
 
   // Controle de Acesso
-  const [accessControl, setAccessControl] = useState<{ users: string[]; projectAccess: { [projectId: string]: string[] } }>({ users: [], projectAccess: {} });
+  const [accessControl, setAccessControl] = useState<{ 
+    users: string[]; 
+    projectAccess: { [projectId: string]: string[] };
+    logs: { username: string; timestamp: string }[];
+  }>({ users: [], projectAccess: {}, logs: [] });
   const [showAccessModal, setShowAccessModal] = useState<boolean>(false);
   const [accessUser, setAccessUser] = useState<string>('');
   const [accessPassword, setAccessPassword] = useState<string>('');
@@ -1091,10 +1095,11 @@ const App = () => {
         const data = snap.data();
         setAccessControl({
           users: data.users || [],
-          projectAccess: data.projectAccess || {}
+          projectAccess: data.projectAccess || {},
+          logs: data.logs || []
         });
       } else {
-        setAccessControl({ users: [], projectAccess: {} });
+        setAccessControl({ users: [], projectAccess: {}, logs: [] });
       }
     }, (err) => {
       console.error("Error loading access control:", err);
@@ -1102,7 +1107,11 @@ const App = () => {
     return () => unsubscribe();
   }, [db, userId]);
 
-  const handleSaveAccessControl = async (updatedData: { users: string[]; projectAccess: { [projectId: string]: string[] } }) => {
+  const handleSaveAccessControl = async (updatedData: { 
+    users: string[]; 
+    projectAccess: { [projectId: string]: string[] };
+    logs: { username: string; timestamp: string }[];
+  }) => {
     try {
       const accessDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'access_control');
       await setDoc(accessDocRef, updatedData);
@@ -1132,7 +1141,8 @@ const App = () => {
 
     const updated = {
       users: [...accessControl.users, user],
-      projectAccess: updatedProjectAccess
+      projectAccess: updatedProjectAccess,
+      logs: accessControl.logs || []
     };
     setAccessControl(updated);
     handleSaveAccessControl(updated);
@@ -1148,7 +1158,8 @@ const App = () => {
 
     const updated = {
       users: updatedUsers,
-      projectAccess: updatedProjectAccess
+      projectAccess: updatedProjectAccess,
+      logs: accessControl.logs || []
     };
     setAccessControl(updated);
     handleSaveAccessControl(updated);
@@ -1172,6 +1183,56 @@ const App = () => {
     };
     setAccessControl(updated);
     handleSaveAccessControl(updated);
+  };
+
+  const handleOperatorLogin = async (username: string) => {
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    
+    localStorage.setItem('planner_username', trimmed);
+    setPlannerUsername(trimmed);
+
+    // Se o usuário for admin, não cadastramos ele, mas registramos o log
+    const isUserAdmin = trimmed.toLowerCase() === 'admin';
+    const isAlreadyRegistered = accessControl.users.map(u => u.toLowerCase()).includes(trimmed.toLowerCase());
+
+    let updatedUsers = [...accessControl.users];
+    let updatedProjectAccess = { ...accessControl.projectAccess };
+
+    // Se for operador comum e não registrado, cadastra e associa a todas as obras
+    if (!isUserAdmin && !isAlreadyRegistered) {
+      updatedUsers.push(trimmed);
+      projects.forEach(p => {
+        const allowed = updatedProjectAccess[p.id] || [];
+        if (!allowed.map(u => u.toLowerCase()).includes(trimmed.toLowerCase())) {
+          updatedProjectAccess[p.id] = [...allowed, trimmed];
+        }
+      });
+    }
+
+    // Adiciona log de acesso
+    const newLog = {
+      username: trimmed,
+      timestamp: new Date().toISOString()
+    };
+    const updatedLogs = [newLog, ...(accessControl.logs || [])].slice(0, 100);
+
+    const updated = {
+      users: updatedUsers,
+      projectAccess: updatedProjectAccess,
+      logs: updatedLogs
+    };
+
+    setAccessControl(updated);
+    
+    if (db && userId) {
+      try {
+        const accessDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'access_control');
+        await setDoc(accessDocRef, updated);
+      } catch (err) {
+        console.error('Error saving access control on login:', err);
+      }
+    }
   };
 
   useEffect(() => {
@@ -6067,6 +6128,36 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </div>
                   </div>
 
+                  {/* Histórico de Acessos Recentes */}
+                  <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-2xl space-y-2.5">
+                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350 flex justify-between items-center">
+                      <span>3. Histórico de Acessos Recentes</span>
+                      <button 
+                        onClick={async () => {
+                          if (confirm('Deseja limpar todos os logs de acesso?')) {
+                            const updated = { ...accessControl, logs: [] };
+                            setAccessControl(updated);
+                            await handleSaveAccessControl(updated);
+                          }
+                        }}
+                        className="text-[8px] font-black uppercase text-rose-400 hover:text-rose-350 cursor-pointer"
+                      >
+                        Limpar Histórico
+                      </button>
+                    </h4>
+                    <div className="max-h-[140px] overflow-y-auto pr-1 space-y-1.5 font-mono text-[9px] text-slate-400">
+                      {(accessControl.logs || []).map((log, i) => (
+                        <div key={i} className="flex justify-between items-center bg-slate-900/60 border border-slate-850 px-2.5 py-1.5 rounded-lg hover:border-slate-800 transition">
+                          <span className="font-bold text-slate-300">👤 {log.username}</span>
+                          <span className="text-slate-500 font-medium">{new Date(log.timestamp).toLocaleString('pt-BR')}</span>
+                        </div>
+                      ))}
+                      {(accessControl.logs || []).length === 0 && (
+                        <span className="text-[9px] text-slate-550 italic uppercase font-bold block py-2 text-center">Nenhum acesso registrado.</span>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="pt-2 border-t border-slate-850 flex justify-end">
                     <button 
                       onClick={() => setShowAccessModal(false)} 
@@ -6776,8 +6867,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   if (e.key === 'Enter') {
                     const val = (e.target as HTMLInputElement).value.trim();
                     if (val) {
-                      localStorage.setItem('planner_username', val);
-                      setPlannerUsername(val);
+                      handleOperatorLogin(val);
                     }
                   }
                 }}
@@ -6789,8 +6879,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 const input = document.getElementById('username-input') as HTMLInputElement;
                 const val = input?.value.trim();
                 if (val) {
-                  localStorage.setItem('planner_username', val);
-                  setPlannerUsername(val);
+                  handleOperatorLogin(val);
                 }
               }}
               className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-wider rounded-xl shadow-lg transition active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
