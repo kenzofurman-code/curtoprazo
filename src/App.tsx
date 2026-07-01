@@ -3309,6 +3309,10 @@ const App = () => {
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> Observacoes</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cst',this.checked)"> Status</label>
     </div>
+    <div style="display:flex;align-items:center;gap:6px;background:#f8fafc;padding:3px 9px;border-radius:6px;border:1.5px solid #e2e8f0;margin-top:4px;">
+      <span style="font-size:10px;font-weight:900;color:#475569;text-transform:uppercase;letter-spacing:0.05em">Filtrar Equipe:</span>
+      <input type="text" id="teamFilter" placeholder="Buscar equipe..." oninput="onFilterChange()" style="padding:2px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:10.5px;color:#1e293b;width:180px;font-family:inherit;outline:none;" />
+    </div>
     <div class="toolbar-actions">
       <button class="btn-print" onclick="window.print()">Imprimir / Salvar PDF</button>
     </div>
@@ -3316,7 +3320,7 @@ const App = () => {
   <div class="page-header">
     <div class="title">
       <h1>${projectName}</h1>
-      <p>Planejamento Semanal &middot; ${dateRange} &middot; ${totalCount} atividade(s)</p>
+      <p>Planejamento Semanal &middot; ${dateRange} &middot; <span id="activity-count">${totalCount}</span> atividade(s)</p>
     </div>
     <div class="meta"><div>Gerado em: ${genTime}</div></div>
   </div>
@@ -3360,6 +3364,7 @@ var DL=${dayLabelsJson};
 var DD=${dayDatesJson};
 var sk=null,sd='asc';
 var hiddenCols={};
+var filterText='';
 function gso(t){if(t.finalized)return 3;var p=t.progressThisWeek,pl=t.plannedThisWeek;if(p>=pl&&pl>0)return 0;if(p<pl&&pl>0&&p>0)return 1;return 2;}
 function sv(t,k){if(k==='status')return gso(t);var v=t[k];return typeof v==='number'?v:(v||'').toString().toLowerCase();}
 function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
@@ -3368,10 +3373,21 @@ function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
   var el=document.getElementById('si-'+k);
   if(el){el.textContent=sd==='asc'?' \u25b2':' \u25bc';el.closest('th').classList.add('sorted');}
   rt();}
+function onFilterChange(){
+  filterText=document.getElementById('teamFilter').value.toLowerCase().trim();
+  rt();
+}
 function rt(){var sorted=allRows.slice();
+  if(filterText){
+    sorted=sorted.filter(function(t){
+      return (t.responsible||'').toLowerCase().indexOf(filterText)!==-1;
+    });
+  }
   if(sk){sorted.sort(function(a,b){var va=sv(a,sk),vb=sv(b,sk);if(va<vb)return sd==='asc'?-1:1;if(va>vb)return sd==='asc'?1:-1;return 0;});}
+  var cntEl=document.getElementById('activity-count');
+  if(cntEl){cntEl.textContent=sorted.length;}
   var tb=document.getElementById('pb');
-  if(!sorted.length){tb.innerHTML='<tr class="empty-row"><td colspan="12">Nenhuma atividade.</td></tr>';return;}
+  if(!sorted.length){tb.innerHTML='<tr class="empty-row"><td colspan="12">Nenhuma atividade encontrada com o filtro aplicado.</td></tr>';return;}
   tb.innerHTML=sorted.map(function(t,i){
     var prog=t.progressThisWeek,planned=t.plannedThisWeek;
     var isOk=prog>=planned&&planned>0,isDel=prog<planned&&planned>0;
