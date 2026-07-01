@@ -1120,9 +1120,19 @@ const App = () => {
       setNotification({ message: 'Usuário já cadastrado.', type: 'error' });
       return;
     }
+    
+    // Associa o novo usuário a todas as obras existentes por padrão
+    const updatedProjectAccess = { ...accessControl.projectAccess };
+    projects.forEach(p => {
+      const allowed = updatedProjectAccess[p.id] || [];
+      if (!allowed.map(u => u.toLowerCase()).includes(user.toLowerCase())) {
+        updatedProjectAccess[p.id] = [...allowed, user];
+      }
+    });
+
     const updated = {
-      ...accessControl,
-      users: [...accessControl.users, user]
+      users: [...accessControl.users, user],
+      projectAccess: updatedProjectAccess
     };
     setAccessControl(updated);
     handleSaveAccessControl(updated);
@@ -5456,9 +5466,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
     // 2. Filtragem por controle de acesso
     const isSystemAdmin = (plannerUsername || '').toLowerCase() === 'admin' || isAccessAdmin;
-    const hasAnyAccessConfigured = accessControl.users.length > 0;
+    const isUserRegistered = accessControl.users.map(u => u.toLowerCase()).includes((plannerUsername || '').toLowerCase());
     
-    if (!isSystemAdmin && hasAnyAccessConfigured) {
+    if (!isSystemAdmin && isUserRegistered) {
       filtered = filtered.filter(p => {
         const allowedUsers = accessControl.projectAccess[p.id] || [];
         return allowedUsers.map(u => u.toLowerCase()).includes((plannerUsername || '').toLowerCase());
