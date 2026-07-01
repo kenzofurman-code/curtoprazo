@@ -846,6 +846,14 @@ const App = () => {
   const [editProjBadges, setEditProjBadges] = useState<string>('');
   const [editProjImageUrl, setEditProjImageUrl] = useState<string>('');
 
+  // Controle de Acesso
+  const [accessControl, setAccessControl] = useState<{ users: string[]; projectAccess: { [projectId: string]: string[] } }>({ users: [], projectAccess: {} });
+  const [showAccessModal, setShowAccessModal] = useState<boolean>(false);
+  const [accessUser, setAccessUser] = useState<string>('');
+  const [accessPassword, setAccessPassword] = useState<string>('');
+  const [isAccessAdmin, setIsAccessAdmin] = useState<boolean>(false);
+  const [newAccessUser, setNewAccessUser] = useState<string>('');
+
   // Dashboard Interatividade
   const [dashboardTargetMonth, setDashboardTargetMonth] = useState<string>(getTodayDateString().slice(0, 7));
   const [selectedDashboardFloor, setSelectedDashboardFloor] = useState<any>('');
@@ -1073,6 +1081,88 @@ const App = () => {
     });
     return () => unsubscribe();
   }, [db, userId]);
+
+  // Carrega as configurações de acesso do Firestore
+  useEffect(() => {
+    if (!db || !userId) return;
+    const accessDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'access_control');
+    const unsubscribe = onSnapshot(accessDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setAccessControl({
+          users: data.users || [],
+          projectAccess: data.projectAccess || {}
+        });
+      } else {
+        setAccessControl({ users: [], projectAccess: {} });
+      }
+    }, (err) => {
+      console.error("Error loading access control:", err);
+    });
+    return () => unsubscribe();
+  }, [db, userId]);
+
+  const handleSaveAccessControl = async (updatedData: { users: string[]; projectAccess: { [projectId: string]: string[] } }) => {
+    try {
+      const accessDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'access_control');
+      await setDoc(accessDocRef, updatedData);
+      setNotification({ message: 'Controle de acesso atualizado!', type: 'success' });
+    } catch (err) {
+      console.error('Error saving access control:', err);
+      setNotification({ message: 'Erro ao salvar controle de acesso.', type: 'error' });
+    }
+  };
+
+  const handleAddUser = () => {
+    const user = newAccessUser.trim();
+    if (!user) return;
+    if (accessControl.users.map(u => u.toLowerCase()).includes(user.toLowerCase())) {
+      setNotification({ message: 'Usuário já cadastrado.', type: 'error' });
+      return;
+    }
+    const updated = {
+      ...accessControl,
+      users: [...accessControl.users, user]
+    };
+    setAccessControl(updated);
+    handleSaveAccessControl(updated);
+    setNewAccessUser('');
+  };
+
+  const handleRemoveUser = (user: string) => {
+    const updatedUsers = accessControl.users.filter(u => u !== user);
+    const updatedProjectAccess = { ...accessControl.projectAccess };
+    Object.keys(updatedProjectAccess).forEach(projId => {
+      updatedProjectAccess[projId] = (updatedProjectAccess[projId] || []).filter(u => u !== user);
+    });
+
+    const updated = {
+      users: updatedUsers,
+      projectAccess: updatedProjectAccess
+    };
+    setAccessControl(updated);
+    handleSaveAccessControl(updated);
+  };
+
+  const handleToggleProjectAccess = (projId: string, user: string) => {
+    const currentAllowed = accessControl.projectAccess[projId] || [];
+    let updatedAllowed: string[];
+    if (currentAllowed.includes(user)) {
+      updatedAllowed = currentAllowed.filter(u => u !== user);
+    } else {
+      updatedAllowed = [...currentAllowed, user];
+    }
+
+    const updated = {
+      ...accessControl,
+      projectAccess: {
+        ...accessControl.projectAccess,
+        [projId]: updatedAllowed
+      }
+    };
+    setAccessControl(updated);
+    handleSaveAccessControl(updated);
+  };
 
   useEffect(() => {
     if (!db || !userId) return;
@@ -5358,10 +5448,24 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
   };
 
   const renderProjectsDashboard = () => {
-    const filteredProjects = projects.filter(p => 
+    // 1. Filtragem por busca
+    let filtered = projects.filter(p => 
       p.name.toLowerCase().includes(projectSearchQuery.toLowerCase()) ||
       p.address.toLowerCase().includes(projectSearchQuery.toLowerCase())
     );
+
+    // 2. Filtragem por controle de acesso
+    const isSystemAdmin = (plannerUsername || '').toLowerCase() === 'admin' || isAccessAdmin;
+    const hasAnyAccessConfigured = accessControl.users.length > 0;
+    
+    if (!isSystemAdmin && hasAnyAccessConfigured) {
+      filtered = filtered.filter(p => {
+        const allowedUsers = accessControl.projectAccess[p.id] || [];
+        return allowedUsers.map(u => u.toLowerCase()).includes((plannerUsername || '').toLowerCase());
+      });
+    }
+
+    const filteredProjects = filtered;
 
     return (
       <div className="min-h-screen bg-slate-950 font-sans text-slate-100 p-6 md:p-12 relative overflow-hidden flex flex-col justify-between">
@@ -5378,8 +5482,20 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               <p className="text-xs text-indigo-400 font-bold uppercase tracking-widest mt-1">Gestão e controle de obras</p>
             </div>
             
-            {/* Operator and Search */}
+            {/* Operator, Search and Access Control */}
             <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+              <button 
+                onClick={() => {
+                  setAccessUser('');
+                  setAccessPassword('');
+                  setShowAccessModal(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-900/60 border border-slate-800 hover:border-indigo-500/50 hover:bg-slate-900 text-xs font-bold text-slate-300 hover:text-white rounded-xl transition cursor-pointer"
+                title="Configurações de Controle de Acesso"
+              >
+                🔐 {isAccessAdmin ? 'Acesso Admin' : 'Controle de Acesso'}
+              </button>
+
               <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/60 border border-slate-800 rounded-xl text-xs font-bold text-slate-300">
                 <span>👤 Operador: <b>{plannerUsername}</b></span>
                 <button 
@@ -5427,31 +5543,33 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         <h3 className="text-sm font-black uppercase text-white tracking-tight">{p.name}</h3>
                         <p className="text-[10px] text-slate-500 italic font-medium">{p.type || 'Obra'}</p>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button 
-                          onClick={(e) => handleOpenEditProject(p, e)}
-                          className="text-slate-600 hover:text-indigo-400 p-1 rounded transition cursor-pointer"
-                          title="Editar informações do projeto"
-                        >
-                          <span className="text-xs">✏️</span>
-                        </button>
-                        <button 
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            if (confirm(`Deseja excluir o projeto "${p.name}"? Isso não apagará seus dados históricos do banco.`)) {
-                              const newList = projects.filter(x => x.id !== p.id);
-                              const projectsDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'all_projects_metadata');
-                              await setDoc(projectsDocRef, { list: newList });
-                              setProjects(newList);
-                              setNotification({ message: 'Projeto removido da lista!', type: 'success' });
-                            }
-                          }}
-                          className="text-slate-600 hover:text-rose-400 p-1 rounded transition cursor-pointer"
-                          title="Remover projeto da lista"
-                        >
-                          <span className="text-xs">🗑️</span>
-                        </button>
-                      </div>
+                      {isSystemAdmin && (
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={(e) => handleOpenEditProject(p, e)}
+                            className="text-slate-600 hover:text-indigo-400 p-1 rounded transition cursor-pointer"
+                            title="Editar informações do projeto"
+                          >
+                            <span className="text-xs">✏️</span>
+                          </button>
+                          <button 
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (confirm(`Deseja excluir o projeto "${p.name}"? Isso não apagará seus dados históricos do banco.`)) {
+                                const newList = projects.filter(x => x.id !== p.id);
+                                const projectsDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'all_projects_metadata');
+                                await setDoc(projectsDocRef, { list: newList });
+                                setProjects(newList);
+                                setNotification({ message: 'Projeto removido da lista!', type: 'success' });
+                              }
+                            }}
+                            className="text-slate-600 hover:text-rose-400 p-1 rounded transition cursor-pointer"
+                            title="Remover projeto da lista"
+                          >
+                            <span className="text-xs">🗑️</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                     
                     {/* Site Render image */}
@@ -5520,18 +5638,31 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             })}
 
             {/* Add New Project Card */}
-            <div 
-              onClick={() => setShowAddProjectModal(true)}
-              className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 bg-slate-900/20 hover:bg-slate-900/40 rounded-2xl min-h-[360px] flex flex-col items-center justify-center p-6 text-center cursor-pointer transition-all duration-300 group"
-            >
-              <div className="w-12 h-12 rounded-full border border-slate-800 group-hover:border-indigo-500/40 flex items-center justify-center bg-slate-900/60 group-hover:bg-indigo-500/10 text-slate-500 group-hover:text-indigo-400 text-xl font-bold transition mb-3">
-                +
+            {isSystemAdmin && (
+              <div 
+                onClick={() => setShowAddProjectModal(true)}
+                className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 bg-slate-900/20 hover:bg-slate-900/40 rounded-2xl min-h-[360px] flex flex-col items-center justify-center p-6 text-center cursor-pointer transition-all duration-300 group"
+              >
+                <div className="w-12 h-12 rounded-full border border-slate-800 group-hover:border-indigo-500/40 flex items-center justify-center bg-slate-900/60 group-hover:bg-indigo-500/10 text-slate-500 group-hover:text-indigo-400 text-xl font-bold transition mb-3">
+                  +
+                </div>
+                <h3 className="text-xs font-black uppercase text-slate-400 group-hover:text-indigo-300 tracking-wider">Adicionar Novo Projeto</h3>
+                <p className="text-[9px] text-slate-650 group-hover:text-slate-500 uppercase tracking-tight mt-1 max-w-[200px] font-bold">Cadastrar nova obra no banco de dados.</p>
               </div>
-              <h3 className="text-xs font-black uppercase text-slate-400 group-hover:text-indigo-300 tracking-wider">Adicionar Novo Projeto</h3>
-              <p className="text-[9px] text-slate-650 group-hover:text-slate-500 uppercase tracking-tight mt-1 max-w-[200px] font-bold">Cadastrar nova obra no banco de dados.</p>
-            </div>
+            )}
 
           </div>
+
+          {filteredProjects.length === 0 && !isSystemAdmin && (
+            <div className="bg-slate-900/40 border border-slate-800/80 p-12 rounded-3xl text-center max-w-md mx-auto space-y-4 my-8">
+              <span className="text-4xl block">📭</span>
+              <h3 className="text-sm font-black uppercase text-slate-300 tracking-wider">Nenhuma Obra Associada</h3>
+              <p className="text-[10px] text-slate-550 uppercase tracking-tight font-bold leading-relaxed">
+                Você não possui permissão de acesso a nenhum projeto no momento. <br />
+                Por favor, solicite a liberação ao administrador do sistema.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -5746,6 +5877,197 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Access Control Modal */}
+        {showAccessModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-2xl w-full space-y-6 animate-in zoom-in-95 duration-200 text-left text-slate-200 max-h-[90vh] overflow-y-auto relative">
+              <button 
+                onClick={() => setShowAccessModal(false)}
+                className="absolute top-4 right-4 text-slate-500 hover:text-white font-black text-lg leading-none cursor-pointer p-1"
+                title="Fechar modal"
+              >
+                &times;
+              </button>
+              
+              {!isAccessAdmin ? (
+                // 1. Tela de Login de Administrador
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (accessUser === 'admin' && accessPassword === 'admin') {
+                      setIsAccessAdmin(true);
+                      setNotification({ message: 'Autenticado como Administrador!', type: 'success' });
+                    } else {
+                      setNotification({ message: 'Usuário ou senha incorretos.', type: 'error' });
+                    }
+                  }} 
+                  className="space-y-4 max-w-xs mx-auto text-center"
+                >
+                  <span className="text-3xl block">🔐</span>
+                  <div className="space-y-1 text-left">
+                    <h3 className="text-sm font-black uppercase text-white text-center">Acesso Administrativo</h3>
+                    <p className="text-[9px] text-slate-500 text-center uppercase tracking-wider font-bold">Autentique-se para gerenciar permissões</p>
+                  </div>
+
+                  <div className="space-y-3 pt-2 text-left">
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black mb-1">Usuário</label>
+                      <input 
+                        type="text" 
+                        required 
+                        value={accessUser} 
+                        onChange={e => setAccessUser(e.target.value)} 
+                        className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black mb-1">Senha</label>
+                      <input 
+                        type="password" 
+                        required 
+                        value={accessPassword} 
+                        onChange={e => setAccessPassword(e.target.value)} 
+                        className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button 
+                      type="button" 
+                      onClick={() => setShowAccessModal(false)} 
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 font-black uppercase text-[10px] tracking-wider rounded-xl border border-slate-700 cursor-pointer"
+                    >
+                      Voltar
+                    </button>
+                    <button 
+                      type="submit" 
+                      className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl shadow-lg cursor-pointer"
+                    >
+                      Autenticar
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                // 2. Tela de Configurações Administrativas
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                    <div>
+                      <h3 className="text-sm font-black uppercase tracking-tight text-white">Painel de Controle de Acesso</h3>
+                      <p className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">Gerencie permissões de acesso por obra</p>
+                    </div>
+                    <button 
+                      onClick={() => setIsAccessAdmin(false)} 
+                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-450 font-black uppercase text-[8px] tracking-wider rounded-lg border border-slate-700 cursor-pointer"
+                    >
+                      Sair Admin
+                    </button>
+                  </div>
+
+                  {/* Gerenciamento de Usuários */}
+                  <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-2xl space-y-3">
+                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">1. Cadastrar Usuários</h4>
+                    <div className="flex gap-2 max-w-md">
+                      <input 
+                        type="text" 
+                        placeholder="Nome do usuário/função (ex: Felipe, Engenharia)..." 
+                        value={newAccessUser} 
+                        onChange={e => setNewAccessUser(e.target.value)} 
+                        className="flex-1 p-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-650 focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <button 
+                        onClick={handleAddUser} 
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl cursor-pointer"
+                      >
+                        + Cadastrar
+                      </button>
+                    </div>
+
+                    <div className="space-y-1.5 pt-1">
+                      <span className="block text-[8px] text-slate-500 uppercase tracking-widest font-black">Usuários Cadastrados:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {accessControl.users.map(u => (
+                          <span key={u} className="bg-slate-900 border border-slate-800 text-slate-300 font-bold text-[10px] px-2.5 py-1 rounded-xl flex items-center gap-1.5 hover:border-slate-700 transition">
+                            <span>👤 {u}</span>
+                            <button 
+                              onClick={() => handleRemoveUser(u)} 
+                              className="text-slate-550 hover:text-red-400 font-black text-xs cursor-pointer"
+                              title={`Excluir ${u}`}
+                            >
+                              &times;
+                            </button>
+                          </span>
+                        ))}
+                        {accessControl.users.length === 0 && (
+                          <span className="text-[10px] text-slate-550 italic uppercase font-bold">Nenhum usuário cadastrado.</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Associação com Obras */}
+                  <div className="space-y-3">
+                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">2. Permissões de Acesso por Obra</h4>
+                    <p className="text-[9px] text-slate-500 uppercase tracking-tight font-bold">Clique no usuário sob o projeto correspondente para alternar a permissão de acesso.</p>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[350px] overflow-y-auto pr-1">
+                      {projects.map(p => {
+                        const allowed = accessControl.projectAccess[p.id] || [];
+                        return (
+                          <div key={p.id} className="bg-slate-950/30 border border-slate-850 p-3 rounded-2xl space-y-2.5">
+                            <div className="flex justify-between items-start border-b border-slate-850/80 pb-1.5">
+                              <div>
+                                <span className="block text-[11px] font-black uppercase text-white leading-tight">{p.name}</span>
+                                <span className="block text-[8px] text-slate-500 italic mt-0.5">{p.address}</span>
+                              </div>
+                              <span className="bg-indigo-950 border border-indigo-900 text-indigo-400 font-black text-[8px] px-1.5 py-0.5 rounded-md uppercase">
+                                {allowed.length} Permissão(ões)
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap gap-1.5">
+                              {accessControl.users.map(u => {
+                                const isAllowed = allowed.includes(u);
+                                return (
+                                  <button
+                                    key={u}
+                                    onClick={() => handleToggleProjectAccess(p.id, u)}
+                                    className={`px-2 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider transition cursor-pointer flex items-center gap-1 active:scale-95 ${
+                                      isAllowed 
+                                        ? 'bg-emerald-600 border border-emerald-500 text-white shadow-sm' 
+                                        : 'bg-slate-900 border border-slate-800 text-slate-400 hover:border-slate-700'
+                                    }`}
+                                  >
+                                    <span>{isAllowed ? '✓' : '+'}</span>
+                                    <span>{u}</span>
+                                  </button>
+                                );
+                              })}
+                              {accessControl.users.length === 0 && (
+                                <span className="text-[9px] text-slate-550 italic uppercase font-bold">Cadastre usuários no painel acima primeiro.</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-850 flex justify-end">
+                    <button 
+                      onClick={() => setShowAccessModal(false)} 
+                      className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl shadow-lg transition active:scale-98 cursor-pointer"
+                    >
+                      Fechar Configurações
+                    </button>
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
         )}
