@@ -857,6 +857,7 @@ const App = () => {
   const [accessPassword, setAccessPassword] = useState<string>('');
   const [isAccessAdmin, setIsAccessAdmin] = useState<boolean>(false);
   const [newAccessUser, setNewAccessUser] = useState<string>('');
+  const hasLoggedSession = useRef<boolean>(false);
 
   // Dashboard Interatividade
   const [dashboardTargetMonth, setDashboardTargetMonth] = useState<string>(getTodayDateString().slice(0, 7));
@@ -1191,6 +1192,7 @@ const App = () => {
     
     localStorage.setItem('planner_username', trimmed);
     setPlannerUsername(trimmed);
+    hasLoggedSession.current = true; // Evita registrar login duplo no useEffect
 
     // Se o usuário for admin, não cadastramos ele, mas registramos o log
     const isUserAdmin = trimmed.toLowerCase() === 'admin';
@@ -1234,6 +1236,53 @@ const App = () => {
       }
     }
   };
+
+  // Efeito para registrar o acesso de login automático persistido no localStorage
+  useEffect(() => {
+    if (!db || !userId || !plannerUsername || projects.length === 0 || accessControl.users.length === 0) return;
+    if (hasLoggedSession.current) return;
+    
+    hasLoggedSession.current = true;
+    const trimmed = plannerUsername.trim();
+    
+    // Se o usuário for admin, não cadastramos ele na lista, mas registramos o log
+    const isUserAdmin = trimmed.toLowerCase() === 'admin';
+    const isAlreadyRegistered = accessControl.users.map(u => u.toLowerCase()).includes(trimmed.toLowerCase());
+
+    let updatedUsers = [...accessControl.users];
+    let updatedProjectAccess = { ...accessControl.projectAccess };
+
+    // Se for operador comum e não registrado, cadastra e associa a todas as obras
+    if (!isUserAdmin && !isAlreadyRegistered) {
+      updatedUsers.push(trimmed);
+      projects.forEach(p => {
+        const allowed = updatedProjectAccess[p.id] || [];
+        if (!allowed.map(u => u.toLowerCase()).includes(trimmed.toLowerCase())) {
+          updatedProjectAccess[p.id] = [...allowed, trimmed];
+        }
+      });
+    }
+
+    // Adiciona log de acesso
+    const newLog = {
+      username: trimmed,
+      timestamp: new Date().toISOString()
+    };
+    const updatedLogs = [newLog, ...(accessControl.logs || [])].slice(0, 100);
+
+    const updated = {
+      users: updatedUsers,
+      projectAccess: updatedProjectAccess,
+      logs: updatedLogs
+    };
+
+    setAccessControl(updated);
+    
+    const accessDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'access_control');
+    setDoc(accessDocRef, updated).catch(err => {
+      console.error('Error saving automatic access log:', err);
+    });
+  }, [db, userId, plannerUsername, projects, accessControl.users]);
 
   useEffect(() => {
     if (!db || !userId) return;
