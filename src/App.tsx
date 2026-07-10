@@ -259,6 +259,42 @@ const parsePercent = (value) => {
   return clampPercent(n <= 1 ? n * 100 : n);
 };
 
+const normalizeHeaderText = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim();
+
+const findColumnIndex = (headerRow, candidates, fallback = -1) => {
+  const normalizedHeaders = headerRow.map(normalizeHeaderText);
+  const normalizedCandidates = candidates.map(normalizeHeaderText);
+  const exactIndex = normalizedHeaders.findIndex(header => normalizedCandidates.includes(header));
+  if (exactIndex !== -1) return exactIndex;
+  const partialIndex = normalizedHeaders.findIndex(header =>
+    normalizedCandidates.some(candidate => candidate && header.includes(candidate))
+  );
+  return partialIndex !== -1 ? partialIndex : fallback;
+};
+
+const findGroupedColumnIndex = (headerRow, groupRow, groupCandidates, headerCandidates, fallback = -1) => {
+  let currentGroup = '';
+  const normalizedGroups = groupCandidates.map(normalizeHeaderText);
+  const normalizedHeaders = headerCandidates.map(normalizeHeaderText);
+
+  for (let i = 0; i < headerRow.length; i++) {
+    const groupText = normalizeHeaderText(groupRow[i]);
+    if (groupText) currentGroup = groupText;
+
+    const headerText = normalizeHeaderText(headerRow[i]);
+    const groupMatches = normalizedGroups.some(group => group && currentGroup.includes(group));
+    const headerMatches = normalizedHeaders.some(header => header && headerText === header);
+
+    if (groupMatches && headerMatches) return i;
+  }
+
+  return fallback;
+};
+
 const getWeekStartDate = (date) => {
   const d = new Date(date);
   const day = d.getDay();
@@ -3014,19 +3050,28 @@ const App = () => {
             return;
           }
 
-          const headerRow = data[headerIndex].map(h => String(h || '').trim().toLowerCase());
+          const headerRow = data[headerIndex].map(h => String(h || '').trim());
+          const groupRow = headerIndex > 0 ? data[headerIndex - 1].map(h => String(h || '').trim()) : [];
+          const progressColumn = findGroupedColumnIndex(
+            headerRow,
+            groupRow,
+            ['Avanço físico (%)', 'Avanco fisico (%)'],
+            ['Realizado']
+          );
           
           const colIdx = {
-            id: headerRow.findIndex(h => h === 'id' || h === 'identificador'),
-            macro: 2,         // Coluna 3 - Pacote de serviço
-            service: 3,       // Coluna 4 - Serviço
-            floor: 5,         // Coluna 6 - Lote ou local do serviço
-            duration: headerRow.findIndex(h => h === 'duração' || h === 'duracao' || h.includes('prazo') || h.includes('dias')),
-            start: 10,        // Coluna 11 - Data de início
-            end: 11,          // Coluna 12 - Data de término
-            cost: 15,         // Coluna 16 - Custo vinculado atual
-            responsible: 14,  // Coluna 15 - Responsável
-            progress: 24      // Coluna 25 - Último Realizado
+            id: findColumnIndex(headerRow, ['ID', 'Identificador']),
+            macro: findColumnIndex(headerRow, ['Pacote de trabalho/tarefas', 'Pacote de trabalho', 'Macroatividade'], 2),
+            service: findColumnIndex(headerRow, ['Serviço', 'Servico'], 3),
+            floor: findColumnIndex(headerRow, ['Lote', 'Local do serviço', 'Local do servico'], 5),
+            duration: findColumnIndex(headerRow, ['Duração', 'Duracao', 'Prazo', 'Dias'], 12),
+            start: findColumnIndex(headerRow, ['Data de Início', 'Data de Inicio'], 10),
+            end: findColumnIndex(headerRow, ['Data de Término', 'Data de Termino'], 11),
+            cost: findColumnIndex(headerRow, ['Custo Vinculado Atual'], 15),
+            responsible: findColumnIndex(headerRow, ['Responsáveis', 'Responsaveis', 'Responsável', 'Responsavel'], 14),
+            progress: progressColumn !== -1
+              ? progressColumn
+              : findGroupedColumnIndex(headerRow, groupRow, ['Última Medição do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
           };
 
           // Two-pass import: 1st pass collects all detail rows (with explicit service names).
