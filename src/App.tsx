@@ -601,7 +601,8 @@ const serializeCrono = (cronoArray) => {
       Array.isArray(item.successors) ? item.successors : [],
       item.inheritedDependenciesFrom || '',
       item.originalId || '',
-      item.replicationGroup || ''
+      item.replicationGroup || '',
+      !!item.isParent
     ];
   });
 };
@@ -625,7 +626,8 @@ const deserializeCrono = (tuplesArray) => {
       successors: Array.isArray(t[11]) ? t[11] : [],
       inheritedDependenciesFrom: t[12] || '',
       originalId: t[13] || '',
-      replicationGroup: t[14] || ''
+      replicationGroup: t[14] || '',
+      isParent: !!t[15]
     };
   });
 };
@@ -2104,7 +2106,22 @@ const App = () => {
 
   const previousWeekIdForDrawer = toLocalDateString(addDays(currentWeekStart, -7));
   const drawerCandidateActivities = useMemo(() => {
-    const openCronoItems = cronogramaInicial.filter(item => item && (item.progress ?? 0) < 100);
+    const isParentCronoItem = (item) => {
+      if (!item) return false;
+      if (item.isParent !== undefined) return !!item.isParent;
+      return slugify(item.service || '') === slugify(item.macro || '');
+    };
+    const familyKey = (item) => `${item?.floor || ''}||${slugify(item?.macro || '')}`;
+    const familiesWithChildren = new Set(
+      (cronogramaInicial || [])
+        .filter(item => item && !isParentCronoItem(item))
+        .map(item => familyKey(item))
+    );
+    const openCronoItems = cronogramaInicial.filter(item => (
+      item &&
+      (item.progress ?? 0) < 100 &&
+      (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item)))
+    ));
     if (drawerSourceMode !== 'previous-successors') return openCronoItems;
 
     const successorIds = new Set<string>();
@@ -3214,7 +3231,7 @@ const App = () => {
     const duplicates = [];
 
     drawerSelectedServices.forEach(serviceId => {
-      const match = cronogramaInicial.find(item => item.id === serviceId);
+      const match = drawerCandidateActivities.find(item => item.id === serviceId);
       if (match) {
         const exists = weeklyTasks.some(t => t.itemId === match.id && t.floor === match.floor && !t.finalized);
         if (exists) {
@@ -3224,6 +3241,7 @@ const App = () => {
             id: crypto.randomUUID(), weekId: currentWeekId, floor: match.floor,
             sectionId: slugify(match.macro), itemId: match.id,
             activityName: match.service, responsible: drawerResponsible || match.responsible || (teams[0] || 'Equipe Geral'),
+            isParent: !!match.isParent,
             weight: 100, executedBefore: roundDown25(match.progress || 0), plannedThisWeek: 100, progressThisWeek: 0,
             finishDate: match.end, dailyWork: [0, 0, 0, 0, 0], observations: '', delayReason: '', finalized: false
           });
@@ -3753,8 +3771,8 @@ const App = () => {
             });
           });
 
-          parsedItems = rawParsedRows.map(({ isParent, ...item }) => {
-            if (isParent) return item;
+          parsedItems = rawParsedRows.map((item) => {
+            if (item.isParent) return item;
             const parentDependencies = parentDependenciesByKey.get(`${item.floor}||${slugify(item.macro)}`);
             if (!parentDependencies) return item;
             const hasOwnPredecessors = (item.predecessors || []).length > 0;
