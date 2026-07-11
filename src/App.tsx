@@ -295,6 +295,95 @@ const findGroupedColumnIndex = (headerRow, groupRow, groupCandidates, headerCand
   return fallback;
 };
 
+const roundPercentValue = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(clampPercent(n) * 1000) / 1000;
+};
+
+const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
+  if (!Array.isArray(previousItems) || previousItems.length === 0 || !Array.isArray(nextItems)) return [];
+
+  const importId = `budget_${Date.now()}`;
+  const importedAt = new Date().toISOString();
+  const previousById = new Map();
+  const nextById = new Map();
+
+  previousItems.forEach(item => {
+    if (item?.id) previousById.set(item.id, item);
+  });
+  nextItems.forEach(item => {
+    if (item?.id) nextById.set(item.id, item);
+  });
+
+  const diffs = [];
+
+  nextItems.forEach(item => {
+    if (!item?.id) return;
+    const previous = previousById.get(item.id);
+    const previousProgress = previous ? roundPercentValue(previous.progress || 0) : 0;
+    const newProgress = roundPercentValue(item.progress || 0);
+    const delta = Math.round((newProgress - previousProgress) * 1000) / 1000;
+    const isNew = !previous;
+
+    if (!isNew && Math.abs(delta) < 0.001) return;
+    if (isNew && newProgress <= 0) return;
+
+    diffs.push({
+      id: `${importId}_${slugify(item.id)}`,
+      importId,
+      importedAt,
+      fileName,
+      kind: isNew ? 'new' : (delta > 0 ? 'progress_increase' : 'progress_decrease'),
+      itemId: item.id,
+      floor: item.floor,
+      macro: item.macro,
+      sectionId: slugify(item.macro),
+      service: item.service,
+      responsible: item.responsible,
+      start: item.start,
+      end: item.end,
+      duration: item.duration,
+      cost: item.cost,
+      predecessors: item.predecessors || [],
+      successors: item.successors || [],
+      inheritedDependenciesFrom: item.inheritedDependenciesFrom || '',
+      originalId: item.originalId || '',
+      replicationGroup: item.replicationGroup || '',
+      previousProgress,
+      newProgress,
+      delta
+    });
+  });
+
+  previousItems.forEach(item => {
+    if (!item?.id || nextById.has(item.id)) return;
+    diffs.push({
+      id: `${importId}_removed_${slugify(item.id)}`,
+      importId,
+      importedAt,
+      fileName,
+      kind: 'removed',
+      itemId: item.id,
+      floor: item.floor,
+      macro: item.macro,
+      sectionId: slugify(item.macro),
+      service: item.service,
+      responsible: item.responsible,
+      predecessors: item.predecessors || [],
+      successors: item.successors || [],
+      inheritedDependenciesFrom: item.inheritedDependenciesFrom || '',
+      originalId: item.originalId || '',
+      replicationGroup: item.replicationGroup || '',
+      previousProgress: roundPercentValue(item.progress || 0),
+      newProgress: 0,
+      delta: 0
+    });
+  });
+
+  return diffs;
+};
+
 const getWeekStartDate = (date) => {
   const d = new Date(date);
   const day = d.getDay();
@@ -507,7 +596,12 @@ const serializeCrono = (cronoArray) => {
       item.end || '',
       Number(item.cost) || 0,
       item.responsible || '',
-      Number(item.progress) || 0
+      Number(item.progress) || 0,
+      Array.isArray(item.predecessors) ? item.predecessors : [],
+      Array.isArray(item.successors) ? item.successors : [],
+      item.inheritedDependenciesFrom || '',
+      item.originalId || '',
+      item.replicationGroup || ''
     ];
   });
 };
@@ -526,10 +620,189 @@ const deserializeCrono = (tuplesArray) => {
       end: t[6] || '',
       cost: Number(t[7]) || 0,
       responsible: t[8] || '',
-      progress: Number(t[9]) || 0
+      progress: Number(t[9]) || 0,
+      predecessors: Array.isArray(t[10]) ? t[10] : [],
+      successors: Array.isArray(t[11]) ? t[11] : [],
+      inheritedDependenciesFrom: t[12] || '',
+      originalId: t[13] || '',
+      replicationGroup: t[14] || ''
     };
   });
 };
+
+const parseDependencyList = (value) => {
+  if (value === undefined || value === null || value === '' || value === '-') return [];
+  return String(value)
+    .split(/[,;\n\r]+/)
+    .map(part => part.trim())
+    .filter(part => part && part !== '-');
+};
+
+const stripServicePrefix = (value) => {
+  return String(value || 'serviço')
+    .replace(/^MO\s*[-–—:]?\s*/i, '')
+    .trim();
+};
+
+const getFirstWord = (value) => {
+  return String(value || '')
+    .trim()
+    .toLocaleLowerCase('pt-BR')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/\s+/)[0] || '';
+};
+
+const inferPortugueseGender = (value, exceptionMap = {}) => {
+  const text = String(value || '').trim().toLocaleLowerCase('pt-BR');
+  const firstWord = getFirstWord(text);
+  if (!firstWord) return null;
+  if (exceptionMap[firstWord]) return exceptionMap[firstWord];
+
+  if (/(cao|gem|dade|ura|aria|eira|icao|ao)$/.test(firstWord)) return 'f';
+  if (/(mento|ico|ico|oco|aco|iso|rro|rso|or|eiro|io|o)$/.test(firstWord)) return 'm';
+  if (firstWord.endsWith('a')) return 'f';
+
+  return null;
+};
+
+const SERVICE_GENDER_EXCEPTIONS = {
+  alvenaria: 'f',
+  armacao: 'f',
+  cobertura: 'f',
+  fachada: 'f',
+  fiada: 'f',
+  forma: 'f',
+  impermeabilizacao: 'f',
+  instalacao: 'f',
+  laje: 'f',
+  limpeza: 'f',
+  pintura: 'f',
+  parede: 'f',
+  regularizacao: 'f',
+  tubulacao: 'f',
+  contrapiso: 'm',
+  emboço: 'm',
+  emboco: 'm',
+  forro: 'm',
+  gesso: 'm',
+  piso: 'm',
+  reboco: 'm',
+  revestimento: 'm',
+  servico: 'm'
+};
+
+const LOCATION_GENDER_EXCEPTIONS = {
+  cobertura: 'f',
+  fachada: 'f',
+  garagem: 'f',
+  periferia: 'f',
+  torre: 'f',
+  area: 'f',
+  apto: 'm',
+  apartamento: 'm',
+  bloco: 'm',
+  pavimento: 'm',
+  subsolo: 'm',
+  terreo: 'm'
+};
+
+const getServicePhrase = (service, complement = '') => {
+  const cleanService = stripServicePrefix(service).toLocaleLowerCase('pt-BR');
+  const gender = inferPortugueseGender(cleanService, SERVICE_GENDER_EXCEPTIONS);
+  const suffix = complement ? ` ${complement}` : '';
+
+  if (gender === 'f') return { direct: `a ${cleanService}${suffix}`, partitive: `da ${cleanService}${suffix}` };
+  if (gender === 'm') return { direct: `o ${cleanService}${suffix}`, partitive: `do ${cleanService}${suffix}` };
+
+  return { direct: `serviço de ${cleanService}${suffix}`, partitive: `do serviço de ${cleanService}${suffix}` };
+};
+
+const getLocationPhrase = (floor) => {
+  const cleanFloor = String(floor || 'pavimento').trim();
+  const normalizedFloor = cleanFloor
+    .toLocaleLowerCase('pt-BR')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (/^\d/.test(normalizedFloor) || /\bpav(imento)?\b/.test(normalizedFloor)) return `no ${cleanFloor}`;
+
+  const gender = inferPortugueseGender(cleanFloor, LOCATION_GENDER_EXCEPTIONS);
+
+  if (gender === 'f') return `na ${cleanFloor}`;
+  if (gender === 'm') return `no ${cleanFloor}`;
+  return `em ${cleanFloor}`;
+};
+
+const getServiceTextSet = (task) => {
+  const planned = Number(task?.plannedThisWeek ?? 100);
+  const previous = Number(task?.executedBefore ?? 0);
+  const service = String(task?.activityName || 'serviço').trim();
+  const complement = task?.serviceComplement ? ` (${task.serviceComplement})` : '';
+  const floor = String(task?.floor || 'pavimento').trim();
+  const servicePhrase = getServicePhrase(service, complement);
+  const locationPhrase = getLocationPhrase(floor);
+  const directText = `${servicePhrase.direct} ${locationPhrase}`;
+  const partitiveText = `${servicePhrase.partitive} ${locationPhrase}`;
+
+  if (planned >= 100) {
+    return {
+      whatsapp: `Finalizar ${directText}`,
+      done: previous <= 0 ? 'Serviço iniciado e finalizado!' : 'Serviço finalizado!',
+      pending: previous <= 0 ? 'Serviço não iniciado' : 'Ainda faltou um pouco'
+    };
+  }
+
+  if (planned >= 75) {
+    if (previous <= 0) {
+      return {
+        whatsapp: `Iniciar e fazer mais da metade ${partitiveText}`,
+        done: 'Serviço iniciado e em andamento!',
+        pending: 'Serviço não iniciou'
+      };
+    }
+
+    return {
+      whatsapp: `Fazer mais da metade ${partitiveText}`,
+      done: 'Mais da metade concluída',
+      pending: 'Não avançou'
+    };
+  }
+
+  if (planned >= 50) {
+    return {
+      whatsapp: previous <= 0 ? `Iniciar e fazer metade ${partitiveText}` : `Fazer metade ${partitiveText}`,
+      done: 'Terminamos metade',
+      pending: previous <= 0 ? 'Serviço não iniciou' : 'Não avançou'
+    };
+  }
+
+  return {
+    whatsapp: `Iniciar ${directText}`,
+    done: 'Serviço iniciado!',
+    pending: 'Serviço não iniciou'
+  };
+};
+
+const getSimpleServiceInstruction = (task) => {
+  return getServiceTextSet(task).whatsapp;
+};
+
+const getFieldProgressStatusText = (planned, progress) => {
+  const target = Number(planned ?? 100);
+  const done = Number(progress || 0) >= target;
+
+  if (target >= 100) return done ? 'Serviço finalizado' : 'Serviço com pequenas pendências';
+  if (target >= 50) return done ? 'Serviço em andamento!' : 'Serviço não continuou.';
+  return done ? 'Serviço iniciado!' : 'Serviço não iniciado';
+};
+
+const getFieldProgressOptions = (task) => {
+  const { done, pending } = getServiceTextSet(task);
+  return { done, pending };
+};
+
+const TEAM_GENERAL_OBSERVATIONS_ID = '__team_general_observations__';
 
 const roundDown25 = (value) => {
   const n = Number(value);
@@ -673,7 +946,12 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
             end: fiveDaysLaterStr,
             cost: 0,
             responsible: 'EQUIPE GERAL',
-            progress: item.actualPercent || 0
+            progress: item.actualPercent || 0,
+            predecessors: item.predecessors || [],
+            successors: item.successors || [],
+            inheritedDependenciesFrom: item.inheritedDependenciesFrom || '',
+            originalId: item.originalId || '',
+            replicationGroup: item.replicationGroup || ''
           };
           finalCrono.push(newCronoItem);
           existingCronoKeys.add(key); // prevent future duplicates in the loop
@@ -790,9 +1068,13 @@ const App = () => {
   const [delayReasons, setDelayReasons] = useState<any[]>([]);
   const [ppcHistory, setPpcHistory] = useState<any[]>([]);
   const [matrices, setMatrices] = useState<any[]>([]); 
+  const [budgetDiffs, setBudgetDiffs] = useState<any[]>([]);
+  const [budgetImportVersions, setBudgetImportVersions] = useState<any[]>([]);
   const [teamPhones, setTeamPhones] = useState<Record<string, string>>({});
   const [whatsappModal, setWhatsappModal] = useState<{ isOpen: boolean, teamName: string, text: string }>({ isOpen: false, teamName: '', text: '' });
   const [teamInputs, setTeamInputs] = useState<Record<string, { progress: number, delayReason: string, observations: string }>>({});
+  const [teamGeneralDelayReason, setTeamGeneralDelayReason] = useState<string>('');
+  const [teamGeneralObservations, setTeamGeneralObservations] = useState<string>('');
   const [teamSubmitSuccess, setTeamSubmitSuccess] = useState<boolean>(false);
   const [projectCity, setProjectCity] = useState<string>("Curitiba, PR");
   const [weatherApiKey, setWeatherApiKey] = useState<string>("");
@@ -801,6 +1083,8 @@ const App = () => {
 
   const teamsRef = useRef(teams);
   const delayReasonsRef = useRef(delayReasons);
+  const budgetDiffsRef = useRef(budgetDiffs);
+  const budgetImportVersionsRef = useRef(budgetImportVersions);
 
   useEffect(() => {
     teamsRef.current = teams;
@@ -809,6 +1093,14 @@ const App = () => {
   useEffect(() => {
     delayReasonsRef.current = delayReasons;
   }, [delayReasons]);
+
+  useEffect(() => {
+    budgetDiffsRef.current = budgetDiffs;
+  }, [budgetDiffs]);
+
+  useEffect(() => {
+    budgetImportVersionsRef.current = budgetImportVersions;
+  }, [budgetImportVersions]);
 
   // Estados UI Globais
 
@@ -922,6 +1214,8 @@ const App = () => {
 
   // Drawer Menu
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+  const [drawerSourceMode, setDrawerSourceMode] = useState<'cronograma'|'previous-successors'>('cronograma');
+  const [drawerExpandedStep, setDrawerExpandedStep] = useState<number>(1);
   const [drawerMacro, setDrawerMacro] = useState<any>('');
   const [drawerMacroSearch, setDrawerMacroSearch] = useState<string>('');
   const [isDrawerMacroDropdownOpen, setIsDrawerMacroDropdownOpen] = useState<boolean>(false);
@@ -956,6 +1250,7 @@ const App = () => {
   const [confirmModal, setConfirmModal] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: null });
   const [finalizeModal, setFinalizeModal] = useState<any>({ isOpen: false, carryOverUnfinished: true });
   const [matrixSelection, setMatrixSelection] = useState({ isOpen: false, matrixId: '', type: 'macro' });
+  const [matrixGroupModalOpen, setMatrixGroupModalOpen] = useState<boolean>(false);
   const [matrixTooltip, setMatrixTooltip] = useState<{
     text: string;
     x: number;
@@ -983,6 +1278,8 @@ const App = () => {
     if (!isTeamMode) return;
     const weekId = toLocalDateString(currentWeekStart);
     const initialInputs: typeof teamInputs = {};
+    let initialGeneralDelayReason = '';
+    let initialGeneralObservations = '';
     planning.forEach(t => {
       if (t.weekId === weekId && t.responsible === urlTeamName) {
         initialInputs[t.id] = {
@@ -990,9 +1287,13 @@ const App = () => {
           delayReason: t.preFilledDelayReason || t.delayReason || '',
           observations: t.preFilledObservations || t.observations || ''
         };
+        if (!initialGeneralDelayReason) initialGeneralDelayReason = t.preFilledDelayReason || t.delayReason || '';
+        if (!initialGeneralObservations) initialGeneralObservations = t.preFilledObservations || t.observations || '';
       }
     });
     setTeamInputs(initialInputs);
+    setTeamGeneralDelayReason(initialGeneralDelayReason);
+    setTeamGeneralObservations(initialGeneralObservations);
   }, [currentWeekStart, planning, isTeamMode, urlTeamName]);
 
   // XLSX carregado via dependência do npm
@@ -1371,6 +1672,18 @@ const App = () => {
         setWeatherApiKey(d.weatherApiKey || "");
         setWeatherCache(d.weatherCache || {});
 
+        let loadedBudgetDiffs = d.budgetDiffs || [];
+        if (typeof loadedBudgetDiffs === 'string') {
+          try { loadedBudgetDiffs = JSON.parse(decompressIfNeeded(loadedBudgetDiffs)); } catch { loadedBudgetDiffs = []; }
+        }
+        setBudgetDiffs(Array.isArray(loadedBudgetDiffs) ? loadedBudgetDiffs : []);
+
+        let loadedBudgetImportVersions = d.budgetImportVersions || [];
+        if (typeof loadedBudgetImportVersions === 'string') {
+          try { loadedBudgetImportVersions = JSON.parse(decompressIfNeeded(loadedBudgetImportVersions)); } catch { loadedBudgetImportVersions = []; }
+        }
+        setBudgetImportVersions(Array.isArray(loadedBudgetImportVersions) ? loadedBudgetImportVersions : []);
+
         let loadedPpcHistory = d.ppcHistory || [];
         if (typeof loadedPpcHistory === 'string') {
           try { loadedPpcHistory = JSON.parse(decompressIfNeeded(loadedPpcHistory)); } catch { loadedPpcHistory = []; }
@@ -1624,7 +1937,9 @@ const App = () => {
       targetUserId,
       pCity,
       wApiKey,
-      wCache
+      wCache,
+      bDiffs,
+      bImportVersions
     } = args;
 
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
@@ -1648,6 +1963,8 @@ const App = () => {
       const weightsStr = typeof wts === 'string' ? wts : JSON.stringify(wts || {});
       const historyStr = JSON.stringify(trimmedHistory);
       const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
+      const budgetDiffsStr = typeof bDiffs === 'string' ? bDiffs : JSON.stringify(Array.isArray(bDiffs) ? bDiffs.slice(-1200) : []);
+      const budgetImportVersionsStr = typeof bImportVersions === 'string' ? bImportVersions : JSON.stringify(Array.isArray(bImportVersions) ? bImportVersions.slice(-2) : []);
 
       await Promise.all([
         setDoc(docRef, {
@@ -1662,6 +1979,8 @@ const App = () => {
           projectCity: pCity || "Curitiba, PR",
           weatherApiKey: wApiKey || "",
           weatherCache: wCache || {},
+          budgetDiffs: compressStringUnicode(budgetDiffsStr),
+          budgetImportVersions: compressStringUnicode(budgetImportVersionsStr),
           lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
           lastUpdated: new Date()
         }),
@@ -1703,7 +2022,9 @@ const App = () => {
     pCity = projectCity,
     wApiKey = weatherApiKey,
     wCache = weatherCache,
-    forceImmediate = false
+    forceImmediate = false,
+    bDiffs = budgetDiffsRef.current,
+    bImportVersions = budgetImportVersionsRef.current
   ) => {
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
     if (!db || !resolvedTargetId) return;
@@ -1723,7 +2044,9 @@ const App = () => {
       targetUserId: resolvedTargetId,
       pCity,
       wApiKey,
-      wCache
+      wCache,
+      bDiffs,
+      bImportVersions
     };
 
     if (forceImmediate) {
@@ -1771,13 +2094,54 @@ const App = () => {
     return Array.from(macros);
   }, [allFloorsData, cronogramaInicial]);
 
+  const replicationGroups = useMemo(() => (
+    Array.from(new Set(
+      (cronogramaInicial || [])
+        .map(item => String(item?.replicationGroup || '').trim())
+        .filter(Boolean)
+    )).sort()
+  ), [cronogramaInicial]);
+
+  const previousWeekIdForDrawer = toLocalDateString(addDays(currentWeekStart, -7));
+  const drawerCandidateActivities = useMemo(() => {
+    const openCronoItems = cronogramaInicial.filter(item => item && (item.progress ?? 0) < 100);
+    if (drawerSourceMode !== 'previous-successors') return openCronoItems;
+
+    const successorIds = new Set<string>();
+    planning
+      .filter(task => task && task.weekId === previousWeekIdForDrawer && task.finalized)
+      .forEach(task => {
+        const cronoItem = cronogramaInicial.find(item => item.id === task.itemId);
+        const successors = task.successors || cronoItem?.successors || [];
+        successors.forEach(id => {
+          const value = String(id || '').trim();
+          if (value) successorIds.add(value);
+        });
+      });
+
+    if (successorIds.size === 0) return [];
+    const directSuccessors = openCronoItems.filter(item => {
+      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
+      return candidates.some(id => successorIds.has(id));
+    });
+    const successorMacroKeys = new Set(directSuccessors.map(item => `${item.floor}||${slugify(item.macro)}`));
+    return openCronoItems.filter(item => {
+      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
+      return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
+    });
+  }, [cronogramaInicial, drawerSourceMode, planning, previousWeekIdForDrawer]);
+
+  const drawerMacroOptions = useMemo(() => (
+    Array.from(new Set(drawerCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
+  ), [drawerCandidateActivities]);
+
   const filteredMacros = useMemo(() => {
-    if (!drawerMacroSearch.trim()) return allPossibleMacros;
+    if (!drawerMacroSearch.trim()) return drawerMacroOptions;
     const query = drawerMacroSearch.toLowerCase();
-    return allPossibleMacros.filter(macro => 
+    return drawerMacroOptions.filter(macro =>
       getMacroTitle(macro).toLowerCase().includes(query) || macro.toLowerCase().includes(query)
     );
-  }, [allPossibleMacros, drawerMacroSearch]);
+  }, [drawerMacroOptions, drawerMacroSearch]);
 
   useEffect(() => {
     if (allPossibleMacros.length > 0 && visibleSections.length === 0) setVisibleSections(allPossibleMacros);
@@ -1996,24 +2360,49 @@ const App = () => {
   const availableFloorsForMacro = useMemo(() => {
     if (!drawerMacro) return [];
     return Array.from(new Set(
-      cronogramaInicial
+      drawerCandidateActivities
         .filter(item => slugify(item.macro) === drawerMacro && (item.progress ?? 0) < 100)
         .map(item => item.floor)
     )).filter(Boolean);
-  }, [cronogramaInicial, drawerMacro]);
+  }, [drawerCandidateActivities, drawerMacro]);
 
   const availableServicesForMacroAndFloors = useMemo(() => {
     if (!drawerMacro || drawerFloors.length === 0) return [];
-    return cronogramaInicial.filter(item => 
+    return drawerCandidateActivities.filter(item =>
       slugify(item.macro) === drawerMacro && 
       drawerFloors.includes(item.floor) &&
       (item.progress ?? 0) < 100
     );
-  }, [cronogramaInicial, drawerMacro, drawerFloors]);
+  }, [drawerCandidateActivities, drawerMacro, drawerFloors]);
+
+  useEffect(() => {
+    setDrawerFloors([]);
+    setDrawerSelectedServices([]);
+    setDrawerWarning('');
+    if (drawerMacro && !drawerMacroOptions.includes(drawerMacro)) setDrawerMacro('');
+  }, [drawerSourceMode, drawerMacroOptions]);
 
 
   const currentWeekId = toLocalDateString(currentWeekStart);
   const weeklyTasks = planning.filter(t => t.weekId === currentWeekId);
+  const pendingBudgetDiffs = useMemo(() => (
+    budgetDiffs.filter(diff => diff && !diff.appliedWeekId && Number(diff.delta) > 0)
+  ), [budgetDiffs]);
+  const pendingBudgetDiffProgress = useMemo(() => (
+    Math.round(pendingBudgetDiffs.reduce((sum, diff) => sum + (Number(diff.delta) || 0), 0) * 100) / 100
+  ), [pendingBudgetDiffs]);
+  const previousBudgetImport = budgetImportVersions.length > 1 ? budgetImportVersions[budgetImportVersions.length - 2] : null;
+  const currentBudgetImport = budgetImportVersions.length > 0 ? budgetImportVersions[budgetImportVersions.length - 1] : null;
+  const getBudgetImportTooltip = (version) => {
+    if (!version) return 'Nenhuma importacao registrada';
+    const lines = [
+      `Arquivo: ${version.fileName || 'Sem nome'}`,
+      `Importado em: ${formatTimestamp(version.importedAt) || '--'}`
+    ];
+    if (version.activityCount !== undefined) lines.push(`Atividades: ${version.activityCount}`);
+    if (version.diffCount !== undefined) lines.push(`Diferencas: ${version.diffCount}`);
+    return lines.join('\n');
+  };
 
   const currentWeekPpcStats = useMemo(() => {
     const plannedTasks = weeklyTasks.filter(t => (t.plannedThisWeek ?? 100) > 0);
@@ -2576,8 +2965,62 @@ const App = () => {
     return items;
   }, [cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
 
+  const cronogramaOrderMap = useMemo(() => {
+    const groupOrder = new Map<string, number>();
+    const macroOrder = new Map<string, number>();
+    const groupMacroOrder = new Map<string, number>();
+    const itemOrder = new Map<string, number>();
+    const byItemId = new Map<string, any>();
+    const byOriginalId = new Map<string, any>();
+    const byComposite = new Map<string, any>();
+    let nextGroupOrder = 0;
+    let nextMacroOrder = 0;
+    let nextGroupMacroOrder = 0;
+
+    (cronogramaInicial || []).forEach((item, index) => {
+      const group = String(item?.replicationGroup || 'Não agrupado').trim() || 'Não agrupado';
+      const macroKey = slugify(item?.macro || item?.sectionId || '');
+      const compositeKey = `${item?.floor || ''}||${macroKey}||${item?.service || item?.activityName || ''}`.toLowerCase();
+
+      if (!groupOrder.has(group)) groupOrder.set(group, nextGroupOrder++);
+      if (macroKey && !macroOrder.has(macroKey)) macroOrder.set(macroKey, nextMacroOrder++);
+      if (macroKey) {
+        const groupMacroKey = `${group}||${macroKey}`;
+        if (!groupMacroOrder.has(groupMacroKey)) groupMacroOrder.set(groupMacroKey, nextGroupMacroOrder++);
+      }
+
+      if (item?.id) {
+        itemOrder.set(String(item.id), index);
+        byItemId.set(String(item.id), item);
+      }
+      if (item?.originalId) byOriginalId.set(String(item.originalId), item);
+      if (compositeKey !== '||||') byComposite.set(compositeKey, item);
+    });
+
+    return { groupOrder, macroOrder, groupMacroOrder, itemOrder, byItemId, byOriginalId, byComposite };
+  }, [cronogramaInicial]);
+
+  const getCronogramaOrderInfoForTask = (task) => {
+    const macroKey = slugify(task?.sectionId || task?.macro || '');
+    const compositeKey = `${task?.floor || ''}||${macroKey}||${task?.activityName || task?.service || ''}`.toLowerCase();
+    const cronoItem =
+      cronogramaOrderMap.byItemId.get(String(task?.itemId || '')) ||
+      cronogramaOrderMap.byOriginalId.get(String(task?.originalId || '')) ||
+      cronogramaOrderMap.byComposite.get(compositeKey);
+    const group = String(task?.replicationGroup || cronoItem?.replicationGroup || 'Não agrupado').trim() || 'Não agrupado';
+    const resolvedMacroKey = slugify(cronoItem?.macro || task?.sectionId || task?.macro || '');
+    const groupMacroKey = `${group}||${resolvedMacroKey}`;
+
+    return {
+      groupOrder: cronogramaOrderMap.groupOrder.get(group) ?? Number.MAX_SAFE_INTEGER,
+      macroOrder: cronogramaOrderMap.groupMacroOrder.get(groupMacroKey) ?? cronogramaOrderMap.macroOrder.get(resolvedMacroKey) ?? Number.MAX_SAFE_INTEGER,
+      itemOrder: cronoItem?.id ? (cronogramaOrderMap.itemOrder.get(String(cronoItem.id)) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER
+    };
+  };
+
   const filteredWeeklyTasks = useMemo(() => {
-    let tasks = (weeklyTasks || []).filter(t => {
+    const hasActivePlanningFilters = !!planningSearch || !!planningTeamFilter || !!planningStatusFilter;
+    let tasks = (weeklyTasks || []).map((task, index) => ({ task, index })).filter(({ task: t }) => {
       if (!t) return false;
       const macroTitle = t.sectionId ? getMacroTitle(t.sectionId) : '';
       const matchesSearch = !planningSearch ||
@@ -2599,22 +3042,169 @@ const App = () => {
     if (planningSortKey) {
       const dir = planningSortDir === 'asc' ? 1 : -1;
       tasks = [...tasks].sort((a, b) => {
+        const taskA = a.task;
+        const taskB = b.task;
         let aVal: any = '';
         let bVal: any = '';
-        if (planningSortKey === 'activityName') { aVal = a.activityName || ''; bVal = b.activityName || ''; }
-        else if (planningSortKey === 'floor') { aVal = a.floor || ''; bVal = b.floor || ''; }
-        else if (planningSortKey === 'responsible') { aVal = a.responsible || ''; bVal = b.responsible || ''; }
-        else if (planningSortKey === 'efetivo') { aVal = a.efetivo ?? 0; bVal = b.efetivo ?? 0; }
-        else if (planningSortKey === 'plannedThisWeek') { aVal = a.plannedThisWeek ?? 0; bVal = b.plannedThisWeek ?? 0; }
-        else if (planningSortKey === 'progressThisWeek') { aVal = a.progressThisWeek ?? 0; bVal = b.progressThisWeek ?? 0; }
+        if (planningSortKey === 'activityName') { aVal = taskA.activityName || ''; bVal = taskB.activityName || ''; }
+        else if (planningSortKey === 'floor') { aVal = taskA.floor || ''; bVal = taskB.floor || ''; }
+        else if (planningSortKey === 'responsible') { aVal = taskA.responsible || ''; bVal = taskB.responsible || ''; }
+        else if (planningSortKey === 'efetivo') { aVal = taskA.efetivo ?? 0; bVal = taskB.efetivo ?? 0; }
+        else if (planningSortKey === 'plannedThisWeek') { aVal = taskA.plannedThisWeek ?? 0; bVal = taskB.plannedThisWeek ?? 0; }
+        else if (planningSortKey === 'progressThisWeek') { aVal = taskA.progressThisWeek ?? 0; bVal = taskB.progressThisWeek ?? 0; }
         if (typeof aVal === 'number') return (aVal - bVal) * dir;
         return String(aVal).localeCompare(String(bVal)) * dir;
       });
+    } else if (!hasActivePlanningFilters) {
+      tasks = [...tasks].sort((a, b) => {
+        const aOrder = getCronogramaOrderInfoForTask(a.task);
+        const bOrder = getCronogramaOrderInfoForTask(b.task);
+
+        return (
+          aOrder.groupOrder - bOrder.groupOrder ||
+          aOrder.macroOrder - bOrder.macroOrder ||
+          aOrder.itemOrder - bOrder.itemOrder ||
+          a.index - b.index
+        );
+      });
     }
-    return tasks;
-  }, [weeklyTasks, planningSearch, planningTeamFilter, planningStatusFilter, planningSortKey, planningSortDir]);
+    return tasks.map(({ task }) => task);
+  }, [weeklyTasks, planningSearch, planningTeamFilter, planningStatusFilter, planningSortKey, planningSortDir, cronogramaOrderMap]);
 
   // --- Handlers de Ações ---
+  const handleGeneratePlanningFromBudgetDiffs = async () => {
+    if (pendingBudgetDiffs.length === 0) {
+      setNotification({ message: 'Nao ha diferencas de orcamento pendentes para aplicar.', type: 'error' });
+      return;
+    }
+
+    const diffsByItem = new Map<string, any>();
+    pendingBudgetDiffs.forEach(diff => {
+      const existing = diffsByItem.get(diff.itemId);
+      if (!existing) {
+        diffsByItem.set(diff.itemId, { ...diff });
+        return;
+      }
+      existing.delta = Math.round(((Number(existing.delta) || 0) + (Number(diff.delta) || 0)) * 1000) / 1000;
+      existing.newProgress = Math.max(Number(existing.newProgress) || 0, Number(diff.newProgress) || 0);
+    });
+
+    let mergedCount = 0;
+    let createdCount = 0;
+    const appliedDiffIds = new Set(pendingBudgetDiffs.map(diff => diff.id));
+    let updatedPlanning = [...planning];
+
+    diffsByItem.forEach(diff => {
+      const itemDiffIds = pendingBudgetDiffs.filter(d => d.itemId === diff.itemId).map(d => d.id);
+      const delta = Math.round((Number(diff.delta) || 0) * 1000) / 1000;
+      if (delta <= 0) return;
+
+      const existingIndex = updatedPlanning.findIndex(t => t.weekId === currentWeekId && t.itemId === diff.itemId && !t.finalized);
+      if (existingIndex !== -1) {
+        const task = updatedPlanning[existingIndex];
+        updatedPlanning[existingIndex] = {
+          ...task,
+          progressThisWeek: Math.min(100, Math.round(((Number(task.progressThisWeek) || 0) + delta) * 1000) / 1000),
+          budgetDiffIds: Array.from(new Set([...(task.budgetDiffIds || []), ...itemDiffIds])),
+          observations: task.observations || 'Avanço preenchido por diferença entre versões de orçamento',
+          lastUpdatedBy: plannerUsername || 'Sistema'
+        };
+        mergedCount++;
+        return;
+      }
+
+      const cronoMatch = cronogramaInicial.find(item => item.id === diff.itemId);
+      const previousProgress = roundPercentValue(diff.previousProgress ?? Math.max(0, (Number(diff.newProgress) || 0) - delta));
+      updatedPlanning.push({
+        id: crypto.randomUUID(),
+        weekId: currentWeekId,
+        floor: diff.floor || cronoMatch?.floor || 'Geral',
+        sectionId: diff.sectionId || slugify(diff.macro || cronoMatch?.macro),
+        itemId: diff.itemId,
+        activityName: diff.service || cronoMatch?.service || 'Atividade importada',
+        responsible: diff.responsible || cronoMatch?.responsible || teams[0] || 'Equipe Geral',
+        weight: 100,
+        executedBefore: previousProgress,
+        plannedThisWeek: 0,
+        progressThisWeek: delta,
+        finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
+        dailyWork: [0, 0, 0, 0, 0],
+        observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
+        delayReason: '',
+        finalized: false,
+        isUnplannedDetected: true,
+        source: 'budget-diff',
+        budgetDiffIds: itemDiffIds,
+        predecessors: diff.predecessors || cronoMatch?.predecessors || [],
+        successors: diff.successors || cronoMatch?.successors || [],
+        inheritedDependenciesFrom: diff.inheritedDependenciesFrom || cronoMatch?.inheritedDependenciesFrom || '',
+        originalId: diff.originalId || cronoMatch?.originalId || ''
+      });
+      createdCount++;
+    });
+
+    const updatedBudgetDiffs = budgetDiffs.map(diff => (
+      appliedDiffIds.has(diff.id)
+        ? { ...diff, appliedWeekId: currentWeekId, appliedAt: new Date().toISOString() }
+        : diff
+    ));
+
+    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+    setPlanning(recalculatedPlanning);
+    setAllFloorsData(updatedFloorsData);
+    setBudgetDiffs(updatedBudgetDiffs);
+    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
+    setNotification({ message: `${createdCount} atividades fora do planejado criadas e ${mergedCount} atividades existentes atualizadas para a semana selecionada.`, type: 'success' });
+  };
+
+  const handleClearProjectData = async () => {
+    const emptyFloors = [];
+    const emptyFloorsData = {};
+    const emptyHistory = [];
+    const emptyWeights = {};
+    const emptyPlanning = [];
+    const emptyCrono = [];
+    const emptyPpcHistory = [];
+    const emptyMatrices = [];
+    const emptyBudgetDiffs = [];
+    const emptyBudgetImportVersions = [];
+
+    await saveToDB(
+      emptyFloors,
+      emptyFloorsData,
+      emptyHistory,
+      emptyWeights,
+      emptyPlanning,
+      emptyCrono,
+      teams,
+      delayReasons,
+      emptyPpcHistory,
+      emptyMatrices,
+      teamPhones,
+      undefined,
+      projectCity,
+      weatherApiKey,
+      weatherCache,
+      true,
+      emptyBudgetDiffs,
+      emptyBudgetImportVersions
+    );
+
+    setFloors(emptyFloors);
+    setAllFloorsData(emptyFloorsData);
+    setHistory(emptyHistory);
+    setWeights(emptyWeights);
+    setPlanning(emptyPlanning);
+    setCronogramaInicial(emptyCrono);
+    setPpcHistory(emptyPpcHistory);
+    setMatrices(emptyMatrices);
+    setBudgetDiffs(emptyBudgetDiffs);
+    setBudgetImportVersions(emptyBudgetImportVersions);
+    setActiveFloor('');
+    setSelectedDashboardFloor('');
+    setNotification({ message: 'Base de dados limpa e sincronizada com o Firebase!', type: 'success' });
+  };
+
   const handleIncludeDrawerActivities = async () => {
     if (!drawerMacro || drawerFloors.length === 0 || drawerSelectedServices.length === 0) {
       setNotification({ message: 'Selecione a Macroatividade, os Pavimentos e pelo menos um Serviço!', type: 'error' });
@@ -2981,6 +3571,14 @@ const App = () => {
 
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
+      if (taskId === TEAM_GENERAL_OBSERVATIONS_ID) {
+        setTeamGeneralObservations(prev => prev ? `${prev} | ${transcript}` : transcript);
+        setListeningTaskId(null);
+        setMicConnectingTaskId(null);
+        playBeep(520, 0.12);
+        setNotification({ message: 'Observação geral ditada com sucesso!', type: 'success' });
+        return;
+      }
       setTeamInputs(prev => {
         const input = prev[taskId] || { progress: 0, delayReason: '', observations: '' };
         const existingText = input.observations || '';
@@ -3063,12 +3661,15 @@ const App = () => {
             id: findColumnIndex(headerRow, ['ID', 'Identificador']),
             macro: findColumnIndex(headerRow, ['Pacote de trabalho/tarefas', 'Pacote de trabalho', 'Macroatividade'], 2),
             service: findColumnIndex(headerRow, ['Serviço', 'Servico'], 3),
+            replicationGroup: findColumnIndex(headerRow, ['Grupo de replicação', 'Grupo de replicacao', 'Grupo Replicacao']),
             floor: findColumnIndex(headerRow, ['Lote', 'Local do serviço', 'Local do servico'], 5),
             duration: findColumnIndex(headerRow, ['Duração', 'Duracao', 'Prazo', 'Dias'], 12),
             start: findColumnIndex(headerRow, ['Data de Início', 'Data de Inicio'], 10),
             end: findColumnIndex(headerRow, ['Data de Término', 'Data de Termino'], 11),
             cost: findColumnIndex(headerRow, ['Custo Vinculado Atual'], 15),
             responsible: findColumnIndex(headerRow, ['Responsáveis', 'Responsaveis', 'Responsável', 'Responsavel'], 14),
+            predecessors: findColumnIndex(headerRow, ['Predecessoras', 'Predecessores', 'Predecessora', 'Predecessor']),
+            successors: findColumnIndex(headerRow, ['Sucessoras', 'Sucessores', 'Sucessora', 'Sucessor']),
             progress: progressColumn !== -1
               ? progressColumn
               : findGroupedColumnIndex(headerRow, groupRow, ['Última Medição do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
@@ -3079,26 +3680,21 @@ const App = () => {
           // Deduplication is handled by the unique item ID key.
           const seenItemKeys = new Set<string>();
           let parsedItems = [];
+          const rawParsedRows = [];
           const importedTeams = new Set<any>([...teamsRef.current]);
           const importedFloors = new Set<any>([...floors]);
 
-          const processRow = (row: any, useServiceFallback: boolean) => {
+          const processRow = (row: any) => {
             if (!row || row.length === 0) return;
 
             const rawFloor = colIdx.floor !== -1 && row[colIdx.floor] !== undefined ? String(row[colIdx.floor]).trim() : 'Térreo';
             const rawMacro = colIdx.macro !== -1 && row[colIdx.macro] !== undefined ? String(row[colIdx.macro]).trim() : 'ESTRUTURA';
+            const rawReplicationGroup = colIdx.replicationGroup !== -1 && row[colIdx.replicationGroup] !== undefined ? String(row[colIdx.replicationGroup]).trim() : '';
             let rawService = colIdx.service !== -1 && row[colIdx.service] !== undefined ? String(row[colIdx.service]).trim() : '';
 
             const hasExplicitService = rawService && rawService !== '-';
-
-            if (useServiceFallback) {
-              // 2nd pass: only process package-only rows
-              if (hasExplicitService) return;
-              rawService = rawMacro; // Use macro name as service
-            } else {
-              // 1st pass: only process rows with explicit services
-              if (!hasExplicitService) return;
-            }
+            const isParent = !hasExplicitService;
+            if (isParent) rawService = rawMacro;
 
             if (!rawService) return;
 
@@ -3114,6 +3710,8 @@ const App = () => {
             const rawEnd = parseExcelDate(colIdx.end !== -1 && row[colIdx.end] !== undefined ? row[colIdx.end] : undefined, rawStart);
             const rawCost = colIdx.cost !== -1 && row[colIdx.cost] !== undefined ? parseFloat(String(row[colIdx.cost]).replace(/[^\d.-]/g, '')) : 0;
             const rawResp = colIdx.responsible !== -1 && row[colIdx.responsible] !== undefined && row[colIdx.responsible] !== null ? String(row[colIdx.responsible]).trim().toUpperCase() : 'EQUIPE GERAL';
+            const rawPredecessors = colIdx.predecessors !== -1 && row[colIdx.predecessors] !== undefined ? parseDependencyList(row[colIdx.predecessors]) : [];
+            const rawSuccessors = colIdx.successors !== -1 && row[colIdx.successors] !== undefined ? parseDependencyList(row[colIdx.successors]) : [];
             let rawProgress = 0;
             if (colIdx.progress !== -1 && row[colIdx.progress] !== undefined) {
               rawProgress = parsePercent(row[colIdx.progress]);
@@ -3122,24 +3720,53 @@ const App = () => {
             if (rawResp && rawResp !== 'UNDEFINED' && rawResp !== '' && rawResp !== '-') importedTeams.add(rawResp);
             importedFloors.add(floorName);
 
-            parsedItems.push({
+            rawParsedRows.push({
               id: itemKey,
+              originalId: rawId,
               macro: String(rawMacro || 'ESTRUTURA').trim().toUpperCase(),
+              replicationGroup: String(rawReplicationGroup || 'Não agrupado').trim().toUpperCase(),
               floor: floorName,
               service: rawService.toUpperCase(),
+              isParent,
               duration: isNaN(rawDuration) ? 5 : rawDuration,
               start: rawStart,
               end: rawEnd,
               cost: isNaN(rawCost) ? 0 : rawCost,
               responsible: rawResp || 'EQUIPE GERAL',
-              progress: clampPercent(rawProgress)
+              progress: clampPercent(rawProgress),
+              predecessors: rawPredecessors,
+              successors: rawSuccessors
             });
           };
 
-          // 1st pass: all rows WITH explicit services
-          for (let i = headerIndex + 1; i < data.length; i++) processRow(data[i], false);
-          // 2nd pass: all package-only rows (service = '-'), appended after detail rows
-          for (let i = headerIndex + 1; i < data.length; i++) processRow(data[i], true);
+          for (let i = headerIndex + 1; i < data.length; i++) processRow(data[i]);
+
+          const parentDependenciesByKey = new Map<string, any>();
+          rawParsedRows.forEach(item => {
+            if (!item.isParent) return;
+            const hasDependencies = (item.predecessors || []).length > 0 || (item.successors || []).length > 0;
+            if (!hasDependencies) return;
+            parentDependenciesByKey.set(`${item.floor}||${slugify(item.macro)}`, {
+              id: item.id,
+              predecessors: item.predecessors || [],
+              successors: item.successors || []
+            });
+          });
+
+          parsedItems = rawParsedRows.map(({ isParent, ...item }) => {
+            if (isParent) return item;
+            const parentDependencies = parentDependenciesByKey.get(`${item.floor}||${slugify(item.macro)}`);
+            if (!parentDependencies) return item;
+            const hasOwnPredecessors = (item.predecessors || []).length > 0;
+            const hasOwnSuccessors = (item.successors || []).length > 0;
+            if (hasOwnPredecessors && hasOwnSuccessors) return item;
+            return {
+              ...item,
+              predecessors: hasOwnPredecessors ? item.predecessors : parentDependencies.predecessors,
+              successors: hasOwnSuccessors ? item.successors : parentDependencies.successors,
+              inheritedDependenciesFrom: parentDependencies.id
+            };
+          });
 
           if (parsedItems.length === 0) {
             setNotification({ message: "Não foi possível extrair nenhum serviço.", type: "error" });
@@ -3152,6 +3779,20 @@ const App = () => {
             setNotification({ message: `Limite de segurança: Importados apenas os primeiros 6000 serviços.`, type: "error" });
             parsedItems = parsedItems.slice(0, 6000);
           }
+
+          const importedBudgetDiffs = buildBudgetDiffs(cronogramaInicial, parsedItems, file.name);
+          const updatedBudgetDiffs = [...budgetDiffsRef.current, ...importedBudgetDiffs].slice(-1200);
+          const importedAt = new Date().toISOString();
+          const updatedBudgetImportVersions = [
+            ...budgetImportVersionsRef.current,
+            {
+              id: `budget_import_${Date.now()}`,
+              fileName: file.name,
+              importedAt,
+              activityCount: parsedItems.length,
+              diffCount: importedBudgetDiffs.length
+            }
+          ].slice(-2);
 
           setImportStatus('Preparando dados e limpando registros antigos...');
 
@@ -3189,25 +3830,24 @@ const App = () => {
             if (existingItemIndex !== -1) {
               updatedFloorsData[item.floor][macroKey].items[existingItemIndex].id = item.id;
               updatedFloorsData[item.floor][macroKey].items[existingItemIndex].actualPercent = item.progress;
+              updatedFloorsData[item.floor][macroKey].items[existingItemIndex].predecessors = item.predecessors || [];
+              updatedFloorsData[item.floor][macroKey].items[existingItemIndex].successors = item.successors || [];
+              updatedFloorsData[item.floor][macroKey].items[existingItemIndex].inheritedDependenciesFrom = item.inheritedDependenciesFrom || '';
+              updatedFloorsData[item.floor][macroKey].items[existingItemIndex].originalId = item.originalId || '';
+              updatedFloorsData[item.floor][macroKey].items[existingItemIndex].replicationGroup = item.replicationGroup || '';
             } else {
-              updatedFloorsData[item.floor][macroKey].items.push({ id: item.id, name: item.service, actualPercent: item.progress });
-            }
-
-          });
-
-          const autoTasks = [];
-          parsedItems.forEach(item => {
-            if (item.progress > 0 && item.progress < 100) {
-              autoTasks.push({
-                id: crypto.randomUUID(), weekId: currentWeekId, floor: item.floor,
-                sectionId: slugify(item.macro), itemId: item.id,
-                activityName: item.service, responsible: item.responsible, weight: 100,
-                executedBefore: roundDown25(item.progress),
-                plannedThisWeek: 100, progressThisWeek: 0,
-                finishDate: item.end, dailyWork: [0, 0, 0, 0, 0], observations: '',
-                delayReason: '', finalized: false
+              updatedFloorsData[item.floor][macroKey].items.push({
+                id: item.id,
+                name: item.service,
+                actualPercent: item.progress,
+                predecessors: item.predecessors || [],
+                successors: item.successors || [],
+                inheritedDependenciesFrom: item.inheritedDependenciesFrom || '',
+                originalId: item.originalId || '',
+                replicationGroup: item.replicationGroup || ''
               });
             }
+
           });
 
           const existingMatrices = matrices.length > 0 ? matrices : [{ id: 'default_matrix', name: 'Matriz Principal', floors: [], macros: [] }];
@@ -3217,10 +3857,7 @@ const App = () => {
             macros: Array.from(new Set([...(m.macros || []), ...Array.from(importedMacroKeys)]))
           }));
 
-          // Maintain historical planning tasks for finalized/past weeks, overwrite active week tasks
-          const pastPlanning = planning.filter(t => t.weekId < currentWeekId);
-          const batchPlanning = [...pastPlanning, ...autoTasks];
-          const { recalculatedPlanning, updatedFloorsData: syncedFloors } = syncPlanningAndPhysical(batchPlanning, updatedFloorsData, parsedItems);
+          const { recalculatedPlanning, updatedFloorsData: syncedFloors } = syncPlanningAndPhysical(planning, updatedFloorsData, parsedItems);
 
 
           setImportStatus('Gravando dados no Firebase (Aguarde)...');
@@ -3241,10 +3878,14 @@ const App = () => {
             projectCity,
             weatherApiKey,
             weatherCache,
-            true
+            true,
+            updatedBudgetDiffs,
+            updatedBudgetImportVersions
           )
             .then(() => {
-              setNotification({ message: `${parsedItems.length} atividades importadas e organizadas!`, type: "success" });
+              setBudgetDiffs(updatedBudgetDiffs);
+              setBudgetImportVersions(updatedBudgetImportVersions);
+              setNotification({ message: `${parsedItems.length} atividades importadas. ${importedBudgetDiffs.length} diferenças registradas para o curto prazo.`, type: "success" });
               setActiveTab('planning');
             })
             .catch((err) => {
@@ -3563,7 +4204,7 @@ const App = () => {
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cd',this.checked)"> Dias Trabalhados</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cpr',this.checked)"> Progresso</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cdr',this.checked)"> Motivo de Atraso</label>
-      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> Observacoes</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> Observações</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cst',this.checked)"> Status</label>
     </div>
     <div style="display:flex;align-items:center;gap:6px;background:#f8fafc;padding:3px 9px;border-radius:6px;border:1.5px solid #e2e8f0;margin-top:4px;">
@@ -3607,7 +4248,7 @@ const App = () => {
         </th>
         <th class="cpr" onclick="st('progressThisWeek')" style="text-align:center">Progresso<span class="si" id="si-progressThisWeek"></span></th>
         <th class="cdr" onclick="st('delayReason')">Motivo de Atraso<span class="si" id="si-delayReason"></span></th>
-        <th class="co">Observacoes</th>
+        <th class="co">Observações</th>
         <th class="cst" onclick="st('status')" style="text-align:center">Status<span class="si" id="si-status"></span></th>
       </tr>
     </thead>
@@ -3691,9 +4332,25 @@ rt();
       newTab.document.close();
     }
   };
+  const getWhatsappAvailableTeams = () => {
+    const weekId = toLocalDateString(currentWeekStart);
+    const weekTeamNames = new Set(
+      planning
+        .filter(t => t.weekId === weekId && t.responsible)
+        .map(t => String(t.responsible).trim())
+        .filter(Boolean)
+    );
+
+    return teams.filter(team => weekTeamNames.has(String(team).trim()));
+  };
+
   const openWhatsappShareModal = () => {
-    if (teams.length === 0) return;
-    const initialTeam = teams[0];
+    const availableTeams = getWhatsappAvailableTeams();
+    if (availableTeams.length === 0) {
+      setNotification({ message: 'Nenhum empreiteiro com atividades planejadas nesta semana.', type: 'warning' });
+      return;
+    }
+    const initialTeam = availableTeams[0];
     const text = generateWhatsappMessage(initialTeam);
     setWhatsappModal({ isOpen: true, teamName: initialTeam, text });
   };
@@ -3706,15 +4363,14 @@ rt();
     const teamTasks = planning.filter(t => t.weekId === weekId && t.responsible === teamName && !t.finalized);
     
     const taskLines = teamTasks.length === 0
-      ? 'Nenhuma atividade ativa planejada para esta semana.'
+      ? 'Sem serviços planejados para esta semana.'
       : teamTasks.map(t => {
-          const comp = t.serviceComplement ? ` (${t.serviceComplement})` : '';
-          return `- *${t.floor}*: ${t.activityName}${comp} (Meta: ${t.plannedThisWeek ?? 100}%)`;
+          return `- ${getSimpleServiceInstruction(t)}.`;
         }).join('\n');
 
     const appUrl = `${window.location.origin}/?mode=team&u=${selectedProjectId || urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
 
-    return `*PLANEJAMENTO SEMANAL (${dateRange})*\n*EQUIPE:* ${teamName}\n\n*Serviços a executar nesta semana:*\n${taskLines}\n\n*Atualize o progresso da sua equipe pelo link:* \n${appUrl}`;
+    return `Oi, equipe ${teamName}!\n\nServiços da semana (${dateRange}):\n${taskLines}\n\nApontamento de campo: ${appUrl}`;
   };
 
   const handleSendWhatsapp = () => {
@@ -3740,18 +4396,29 @@ rt();
     setNotification({ message: 'Motivo removido.', type: 'success' });
   };
 
-  const handleCreateMatrix = async () => {
-    // Clona pavimentos e macroatividades da primeira matriz (Matriz Principal) para herdar a mesma formatação e sequência de colunas/linhas
-    const baseMatrix = matrices[0];
+  const handleCreateMatrix = async (replicationGroup = '') => {
+    const groupItems = replicationGroup
+      ? cronogramaInicial.filter(item => String(item?.replicationGroup || '').trim() === replicationGroup)
+      : cronogramaInicial;
+    const groupFloors = Array.from(new Set(groupItems.map(item => item.floor).filter(Boolean)));
+    const groupMacros = Array.from(new Set(groupItems.map(item => slugify(item.macro)).filter(Boolean)));
+
+    if (replicationGroup && (groupFloors.length === 0 || groupMacros.length === 0)) {
+      setNotification({ message: 'Nenhum pavimento ou macroatividade encontrado para este grupo.', type: 'error' });
+      return;
+    }
+
     const newMatrix = {
       id: crypto.randomUUID(),
-      name: `Nova Matriz ${matrices.length + 1}`,
-      floors: baseMatrix ? [...(baseMatrix.floors || [])] : [...floors],
-      macros: baseMatrix ? [...(baseMatrix.macros || [])] : [...allPossibleMacros]
+      name: replicationGroup ? `Matriz ${replicationGroup}` : `Nova Matriz ${matrices.length + 1}`,
+      replicationGroup,
+      floors: replicationGroup ? groupFloors : [...floors],
+      macros: replicationGroup ? groupMacros : [...allPossibleMacros]
     };
     const updated = [...matrices, newMatrix];
     setMatrices(updated);
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updated);
+    setMatrixGroupModalOpen(false);
   };
 
   const handleDeleteMatrix = async (matrixId) => {
@@ -4254,10 +4921,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             onClick={() => triggerConfirm(
               'Limpar Banco de Dados', 
               'Deseja realmente limpar todo o banco de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
-              async () => {
-                await saveToDB([], {}, [], {}, [], [], teams, delayReasons, [], [], undefined, undefined, undefined, undefined, undefined, true);
-                setNotification({ message: 'Base de dados limpa com sucesso!', type: 'success' });
-              }
+              handleClearProjectData
             )}
             className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-black rounded-xl text-xs uppercase tracking-wider transition active:scale-95 whitespace-nowrap"
           >
@@ -4278,11 +4942,24 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             Atividades do Cronograma Ativo
             <span className="ml-2 text-indigo-600">({filteredCronograma.length}/{cronogramaInicial.length})</span>
           </h3>
-          {lastUpdatedTime && (
-            <span className="text-[10px] font-bold text-slate-500 uppercase">
-              Última Importação: <strong className="text-indigo-600">{lastUpdatedTime}</strong>
-            </span>
-          )}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={!previousBudgetImport}
+              title={getBudgetImportTooltip(previousBudgetImport)}
+              className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              Orcamento anterior
+            </button>
+            <button
+              type="button"
+              disabled={!currentBudgetImport}
+              title={getBudgetImportTooltip(currentBudgetImport)}
+              className="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-[10px] font-black uppercase tracking-wider text-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              Orcamento atual
+            </button>
+          </div>
         </div>
 
         {/* Filter Bar */}
@@ -4334,8 +5011,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-[520px]">
-          <table className="w-full text-xs text-left">
+        <div className="overflow-auto rounded-xl border border-slate-200 max-h-[520px]">
+          <table className="min-w-[1520px] w-full text-xs text-left">
             <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
               <tr>
                 {[
@@ -4347,6 +5024,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   { label: 'Realizado', key: 'progress', center: true },
                   { label: 'Equipe', key: null, center: true },
                   { label: 'Custo Estimado', key: 'cost', right: true },
+                  { label: 'Grupo Replicacao', key: null },
+                  { label: 'Predecessoras', key: null },
+                  { label: 'Sucessoras', key: null },
+                  { label: 'Depend. herdada de', key: null },
                 ].map(({ label, key, center, right }) => (
                   <th
                     key={label}
@@ -4410,11 +5091,21 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </td>
                   <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
                   <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                  <td className="p-3 text-slate-700 font-bold text-[10px] uppercase">{item.replicationGroup || '-'}</td>
+                  <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.predecessors || []).join(', ')}>
+                    {(item.predecessors || []).length > 0 ? item.predecessors.join(', ') : '-'}
+                  </td>
+                  <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.successors || []).join(', ')}>
+                    {(item.successors || []).length > 0 ? item.successors.join(', ') : '-'}
+                  </td>
+                  <td className="p-3 text-slate-500 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={item.inheritedDependenciesFrom || ''}>
+                    {item.inheritedDependenciesFrom || '-'}
+                  </td>
                 </tr>
               ))}
               {filteredCronograma.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-10 text-center text-slate-400 italic font-medium">
+                  <td colSpan={12} className="p-10 text-center text-slate-400 italic font-medium">
                     Nenhuma atividade encontrada com os filtros aplicados.
                   </td>
                 </tr>
@@ -4471,10 +5162,18 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <span>💬</span> WhatsApp
               </button>
             )}
+            <button
+              onClick={handleGeneratePlanningFromBudgetDiffs}
+              disabled={pendingBudgetDiffs.length === 0}
+              className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+              title={`Aplica ${pendingBudgetDiffProgress}% de avanco pendente do ultimo orcamento na semana selecionada`}
+            >
+              <span>Delta</span> Gerar por Dif. {pendingBudgetDiffs.length > 0 ? `(${pendingBudgetDiffs.length})` : ''}
+            </button>
             <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>🏁</span> Finalizar Semana
             </button>
-            <button onClick={() => { setDrawerMacro(allPossibleMacros[0] || ''); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
+            <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>➕</span> Adicionar Atividades
             </button>
           </div>
@@ -4632,6 +5331,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         {t.isManual && (
                           <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
                             Extra
+                          </span>
+                        )}
+                        {t.isUnplannedDetected && (
+                          <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
+                            Fora do planejado
                           </span>
                         )}
                         <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight line-clamp-2 break-words whitespace-normal flex-1" title={t.activityName}>{t.activityName}</div>
@@ -4979,7 +5683,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Matrizes de Visualização</h2>
           <p className="text-xs text-slate-500">Crie painéis customizados para visualizar o avanço de pavimentos e etapas específicas. Arraste as linhas e colunas para reordenar.</p>
         </div>
-        <button onClick={handleCreateMatrix} className="px-5 py-2.5 bg-indigo-600 text-white font-black uppercase tracking-wider rounded-xl text-xs hover:bg-indigo-700 transition shadow-md whitespace-nowrap">+ NOVA MATRIZ</button>
+        <button onClick={() => setMatrixGroupModalOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white font-black uppercase tracking-wider rounded-xl text-xs hover:bg-indigo-700 transition shadow-md whitespace-nowrap">+ NOVA MATRIZ</button>
       </div>
 
       {matrices.map(matrix => (
@@ -6648,18 +7352,24 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     const weekId = toLocalDateString(currentWeekStart);
     const weekEndDate = new Date(currentWeekStart.getTime() + 4 * 86400000);
     const teamTasks = planning.filter(t => t.weekId === weekId && t.responsible === urlTeamName);
+    const hasDelayedTeamTask = teamTasks.some(t => {
+      const input = teamInputs[t.id] || { progress: 0, delayReason: '', observations: '' };
+      return input.progress < (t.plannedThisWeek ?? 100);
+    });
 
     const handleSubmitTeamReport = async () => {
       setLoading(true);
       try {
+        const generalDelayReason = teamGeneralDelayReason.trim();
+        const generalObservations = teamGeneralObservations.trim();
         const updatedPlanning = planning.map(t => {
           if (t.weekId === weekId && t.responsible === urlTeamName) {
             const input = teamInputs[t.id] || { progress: 0, delayReason: '', observations: '' };
             return {
               ...t,
               preFilledProgress: input.progress,
-              preFilledDelayReason: input.progress < (t.plannedThisWeek ?? 100) ? input.delayReason : '',
-              preFilledObservations: input.observations,
+              preFilledDelayReason: input.progress < (t.plannedThisWeek ?? 100) ? generalDelayReason : '',
+              preFilledObservations: generalObservations,
               preFilledAt: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR')
             };
           }
@@ -6735,7 +7445,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 {teamTasks.map(t => {
                   const input = teamInputs[t.id] || { progress: 0, delayReason: '', observations: '' };
                   const planned = t.plannedThisWeek ?? 100;
-                  const isBehind = input.progress < planned;
+                  const simpleInstruction = getSimpleServiceInstruction(t);
+                  const fieldOptions = getFieldProgressOptions(t);
+                  const isDone = input.progress >= planned;
 
                   return (
                     <div key={t.id} className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 space-y-4">
@@ -6748,7 +7460,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                                 Extra
                               </span>
                             )}
-                            <span>{t.activityName}</span>
+                            <span>{simpleInstruction}</span>
                           </h4>
                           {t.serviceComplement && (
                             <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mt-1 flex items-center gap-1">
@@ -6758,132 +7470,47 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               </span>
                             </div>
                           )}
-                          <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">📍 {t.floor}</p>
                         </div>
-                        <span className="px-2 py-0.5 bg-slate-100 border text-[9px] font-black text-slate-500 rounded-md uppercase">
-                          Meta: {planned}%
-                        </span>
                       </div>
 
                       {/* Progress input */}
                       <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <label className="block text-[9px] font-black uppercase text-slate-400">Progresso Executado na Semana (%)</label>
-                          {/* Dynamic Status Badge */}
-                          {input.progress > 0 && (
-                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase shadow-xs ${
-                              isBehind ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
-                            }`}>
-                              {isBehind ? '⚠️ Atraso' : '✓ Conforme'}
-                            </span>
-                          )}
-                        </div>
-                        
-                        <div className="flex gap-3 justify-center bg-slate-50 p-3 rounded-xl border border-slate-200/60">
-                          {[25, 50, 75, 100].map(val => {
-                            const isActive = input.progress === val;
-                            const isMeta = planned === val;
-                            
-                            let btnStyle = 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200';
-                            
-                            if (isActive) {
-                              // Active: Blue if >= Meta, Red if < Meta
-                              btnStyle = isBehind 
-                                ? 'bg-red-600 text-white shadow-md ring-4 ring-red-100 border-none scale-105' 
-                                : 'bg-blue-600 text-white shadow-md ring-4 ring-blue-100 border-none scale-105';
-                            } else if (isMeta) {
-                              // Highlight weekly meta
-                              btnStyle = 'border-2 border-dashed border-indigo-600 text-indigo-700 bg-indigo-50 font-black relative ring-2 ring-indigo-200/50';
-                            }
-
-                            return (
-                              <button
-                                key={val}
-                                type="button"
-                                onClick={() => {
-                                  const currentVal = input.progress;
-                                  const newVal = currentVal === val ? 0 : val;
-                                  setTeamInputs({
-                                    ...teamInputs,
-                                    [t.id]: { ...input, progress: newVal }
-                                  });
-                                }}
-                                className={`w-12 h-12 rounded-full text-[10px] font-black flex flex-col items-center justify-center transition-all relative ${btnStyle}`}
-                              >
-                                <span>{val}%</span>
-                                {isMeta && !isActive && (
-                                  <span className="absolute -top-1.5 -right-1.5 px-1 bg-indigo-600 text-white text-[6px] font-black rounded uppercase tracking-wider scale-90 shadow-sm">
-                                    Meta
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Delay Reason - only shown if progress < planned */}
-                      {isBehind && (
-                        <div className="space-y-1.5 animate-in fade-in duration-200">
-                          <label className="block text-[9px] font-black uppercase text-amber-600 flex items-center gap-1">
-                            <span>⚠️</span> Motivo do Atraso
-                          </label>
-                          <select
-                            className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
-                            value={input.delayReason}
-                            onChange={(e) => {
-                              setTeamInputs({
-                                ...teamInputs,
-                                [t.id]: { ...input, delayReason: e.target.value }
-                              });
-                            }}
-                          >
-                            <option value="">-- Selecione o Motivo --</option>
-                            {delayReasons.map(r => (
-                              <option key={r} value={r}>{r}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Observations input */}
-                      <div className="space-y-1.5">
-                        <label className="block text-[9px] font-black uppercase text-slate-400">Observações / Comentários</label>
-                        <div className="flex gap-2 items-center">
-                          <input
-                            type="text"
-                            placeholder="EX: Aguardando liberação de material..."
-                            className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                            value={input.observations}
-                            onChange={(e) => {
-                              setTeamInputs({
-                                ...teamInputs,
-                                [t.id]: { ...input, observations: e.target.value }
-                              });
-                            }}
-                          />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200/60">
                           <button
                             type="button"
-                            onClick={() => handleTeamVoiceInput(t.id)}
-                            className={`p-2.5 rounded-xl transition-all active:scale-95 text-sm flex items-center justify-center w-10 h-10 shrink-0 ${
-                              listeningTaskId === t.id 
-                                ? 'bg-red-600 text-white animate-pulse ring-4 ring-red-200' 
-                                : micConnectingTaskId === t.id
-                                ? 'bg-amber-500 text-white animate-pulse ring-4 ring-amber-200'
-                                : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100'
+                            onClick={() => {
+                              setTeamInputs({
+                                ...teamInputs,
+                                [t.id]: { ...input, progress: planned }
+                              });
+                            }}
+                            className={`min-h-[46px] rounded-lg px-3 py-2 text-[10px] font-black uppercase tracking-tight transition border ${
+                              isDone
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-4 ring-blue-100'
+                                : 'bg-white text-slate-700 hover:bg-blue-50 hover:text-blue-700 border-slate-200'
                             }`}
-                            title={
-                              listeningTaskId === t.id 
-                                ? "Microfone ativo (Pode falar)" 
-                                : micConnectingTaskId === t.id
-                                ? "Inicializando microfone..."
-                                : "Ditar Observação"
-                            }
                           >
-                            🎙️
+                            {fieldOptions.done}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTeamInputs({
+                                ...teamInputs,
+                                [t.id]: { ...input, progress: 0 }
+                              });
+                            }}
+                            className={`min-h-[46px] rounded-lg px-3 py-2 text-[10px] font-black uppercase tracking-tight transition border ${
+                              !isDone
+                                ? 'bg-red-600 text-white border-red-600 shadow-md ring-4 ring-red-100'
+                                : 'bg-white text-slate-700 hover:bg-red-50 hover:text-red-700 border-slate-200'
+                            }`}
+                          >
+                            {fieldOptions.pending}
                           </button>
                         </div>
                       </div>
+
                     </div>
                   );
                 })}
@@ -6896,12 +7523,67 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </div>
 
               {teamTasks.length > 0 && (
-                <button
-                  onClick={handleSubmitTeamReport}
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-wider rounded-xl shadow-md transition transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer animate-in fade-in"
-                >
-                  <span>📤 Enviar Dados de Avanço</span>
-                </button>
+                <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 space-y-4 animate-in fade-in">
+                  <div className="border-b border-slate-100 pb-2">
+                    <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">Fechamento da semana</h3>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">Essas informações valem para todos os serviços apontados.</p>
+                  </div>
+
+                  {hasDelayedTeamTask && (
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-black uppercase text-amber-600">Motivo de atraso geral</label>
+                      <select
+                        className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={teamGeneralDelayReason}
+                        onChange={(e) => setTeamGeneralDelayReason(e.target.value)}
+                      >
+                        <option value="">-- Selecione o Motivo --</option>
+                        {delayReasons.map(r => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="block text-[9px] font-black uppercase text-slate-400">Observações / Comentários gerais</label>
+                    <div className="flex gap-2 items-center">
+                      <textarea
+                        placeholder="EX: Aguardando liberação de material, ajuste de equipe, interferências..."
+                        className="flex-1 min-h-[84px] p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-medium resize-none"
+                        value={teamGeneralObservations}
+                        onChange={(e) => setTeamGeneralObservations(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleTeamVoiceInput(TEAM_GENERAL_OBSERVATIONS_ID)}
+                        className={`p-2.5 rounded-xl transition-all active:scale-95 text-sm flex items-center justify-center w-10 h-10 shrink-0 ${
+                          listeningTaskId === TEAM_GENERAL_OBSERVATIONS_ID
+                            ? 'bg-red-600 text-white animate-pulse ring-4 ring-red-200'
+                            : micConnectingTaskId === TEAM_GENERAL_OBSERVATIONS_ID
+                            ? 'bg-amber-500 text-white animate-pulse ring-4 ring-amber-200'
+                            : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100'
+                        }`}
+                        title={
+                          listeningTaskId === TEAM_GENERAL_OBSERVATIONS_ID
+                            ? "Microfone ativo (Pode falar)"
+                            : micConnectingTaskId === TEAM_GENERAL_OBSERVATIONS_ID
+                            ? "Inicializando microfone..."
+                            : "Ditar observação geral"
+                        }
+                      >
+                        Gravar
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleSubmitTeamReport}
+                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-wider rounded-xl shadow-md transition transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <span>Enviar Dados de Avanço</span>
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -7093,8 +7775,44 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </div>
               <div className="flex-1 p-5 space-y-5 overflow-y-auto">
                 {drawerWarning && <div className="bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold p-3 rounded-lg">{drawerWarning}</div>}
-                <div className="space-y-2 relative">
-                  <label className="block text-[10px] font-black uppercase text-indigo-600">1. Selecione a Macroatividade</label>
+                <div className="space-y-2 group rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-white focus-within:border-indigo-200 focus-within:bg-white">
+                  <div className="flex justify-between items-center gap-3">
+                    <label className="block text-[10px] font-black uppercase text-slate-500">Origem das atividades</label>
+                    <span className="text-[9px] font-bold text-slate-500 text-right">
+                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Sucessoras' : 'Cronograma'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 max-h-0 overflow-hidden opacity-0 transition-all duration-300 group-hover:max-h-48 group-hover:opacity-100 group-focus-within:max-h-48 group-focus-within:opacity-100">
+                    {[
+                      { id: 'cronograma', label: 'Planeje a partir das sucessoras do Cronograma' },
+                      { id: 'previous-successors', label: 'Planeje a partir das sucessoras das semana anterior' }
+                    ].map(option => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setDrawerSourceMode(option.id as any)}
+                        className={`w-full text-left p-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition ${
+                          drawerSourceMode === option.id
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {drawerSourceMode === 'previous-successors' && (
+                    <p className="text-[10px] text-slate-400 font-bold">
+                      Semana anterior: {formatDateBR(previousWeekIdForDrawer)}. Exibindo apenas sucessoras das atividades finalizadas.
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-2 group relative rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-white focus-within:border-indigo-200 focus-within:bg-white">
+                  <div className="flex justify-between items-center gap-3">
+                    <label className="block text-[10px] font-black uppercase text-indigo-600">1. Selecione a Macroatividade</label>
+                    {drawerMacro && <span className="text-[9px] font-bold text-slate-500 text-right truncate max-w-[220px]">{getMacroTitle(drawerMacro)}</span>}
+                  </div>
+                  <div className={`overflow-visible transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerMacro ? 'max-h-0 opacity-0' : 'max-h-72 opacity-100'}`}>
                   {isDrawerMacroDropdownOpen && (
                     <div className="fixed inset-0 z-40" onClick={() => setIsDrawerMacroDropdownOpen(false)} />
                   )}
@@ -7122,6 +7840,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               setDrawerSelectedServices([]);
                               setDrawerWarning('');
                               setIsDrawerMacroDropdownOpen(false);
+                              setDrawerExpandedStep(2);
                             }}
                             className="w-full text-left p-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition uppercase tracking-wider border-b border-slate-100 last:border-b-0"
                           >
@@ -7129,18 +7848,22 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                           </button>
                         ))}
                         {filteredMacros.length === 0 && (
-                          <p className="p-3 text-xs text-slate-400 italic text-center font-bold">Nenhuma macroatividade encontrada.</p>
+                          <p className="p-3 text-xs text-slate-400 italic text-center font-bold">
+                            {drawerSourceMode === 'previous-successors' ? 'Nenhuma sucessora liberada pela semana anterior.' : 'Nenhuma macroatividade encontrada.'}
+                          </p>
                         )}
                       </div>
                     )}
                   </div>
                 </div>
-                <div className="space-y-2">
+                </div>
+                <div className="space-y-2 group rounded-xl border border-indigo-100 bg-white p-3">
                   <div className="flex justify-between items-center">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">2. Marque os Pavimentos</label>
+                    {drawerFloors.length > 0 && <span className="text-[9px] font-bold text-slate-500">{drawerFloors.length} selecionado(s)</span>}
                     {availableFloorsForMacro.length > 0 && <button onClick={() => { if(drawerFloors.length === availableFloorsForMacro.length) setDrawerFloors([]); else setDrawerFloors([...availableFloorsForMacro]); }} className="text-[9px] font-bold text-indigo-700 hover:underline uppercase">Todos</button>}
                   </div>
-                  <div className={`grid grid-cols-2 gap-2 ${!drawerMacro ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <div className={`grid grid-cols-2 gap-2 overflow-hidden transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerFloors.length === 0 ? 'max-h-72 opacity-100' : 'max-h-0 opacity-0'} ${!drawerMacro ? 'pointer-events-none' : ''}`}>
                     {availableFloorsForMacro.map(floor => (
                       <label key={floor} className="flex items-center space-x-2 p-2 bg-slate-50 rounded-lg border hover:border-indigo-300 transition cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" checked={drawerFloors.includes(floor)} onChange={(e) => { if (e.target.checked) setDrawerFloors([...drawerFloors, floor]); else setDrawerFloors(drawerFloors.filter(f => f !== floor)); }} />
@@ -7155,13 +7878,18 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <label className="block text-[10px] font-black uppercase text-indigo-600">3. Selecione os Serviços</label>
                     {availableServicesForMacroAndFloors.length > 0 && <button onClick={() => { if (drawerSelectedServices.length === availableServicesForMacroAndFloors.length) setDrawerSelectedServices([]); else setDrawerSelectedServices(availableServicesForMacroAndFloors.map(s => s.id)); }} className="text-[9px] font-bold text-indigo-700 hover:underline uppercase">Todos</button>}
                   </div>
-                  <div className="bg-slate-50 border rounded-xl p-3 max-h-56 overflow-y-auto space-y-2">
+                  <div className="bg-slate-50 border rounded-xl p-3 h-[46vh] min-h-[320px] overflow-y-auto space-y-2">
                     {availableServicesForMacroAndFloors.map(item => (
                       <label key={item.id} className="flex items-center space-x-3 p-2 bg-white rounded-lg border hover:border-indigo-300 transition cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" checked={drawerSelectedServices.includes(item.id)} onChange={(e) => { if (e.target.checked) setDrawerSelectedServices([...drawerSelectedServices, item.id]); else setDrawerSelectedServices(drawerSelectedServices.filter(id => id !== item.id)); }} />
                         <div className="text-xs"><p className="font-bold text-slate-800">{item.service}</p><p className="text-[9px] text-slate-500 font-bold">{item.floor}</p></div>
                       </label>
                     ))}
+                    {availableServicesForMacroAndFloors.length === 0 && (
+                      <p className="p-3 text-[10px] text-slate-400 italic text-center font-bold">
+                        Nenhum servico disponivel para os filtros selecionados.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-2 border-t pt-3">
@@ -7193,6 +7921,38 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </div>
             <div className="mt-6 flex justify-end">
               <button onClick={() => setMatrixSelection({ isOpen: false, matrixId: '', type: 'macro' })} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-lg transition">FECHAR</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {matrixGroupModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95">
+            <h3 className="font-black text-sm text-slate-900 mb-2 uppercase tracking-tight">Grupo da Matriz</h3>
+            <p className="text-xs text-slate-500 mb-4">Selecione o grupo de replicacao para criar uma matriz somente com os pavimentos e macroatividades desse grupo.</p>
+            <div className="max-h-72 overflow-y-auto space-y-2 custom-scrollbar pr-1">
+              {replicationGroups.map(group => {
+                const groupItems = cronogramaInicial.filter(item => String(item?.replicationGroup || '').trim() === group);
+                const groupFloors = new Set(groupItems.map(item => item.floor).filter(Boolean));
+                const groupMacros = new Set(groupItems.map(item => slugify(item.macro)).filter(Boolean));
+                return (
+                  <button
+                    key={group}
+                    onClick={() => handleCreateMatrix(group)}
+                    className="w-full text-left p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 transition"
+                  >
+                    <div className="text-xs font-black text-slate-800 uppercase">{group}</div>
+                    <div className="text-[10px] font-bold text-slate-500 mt-1">{groupFloors.size} pavimento(s) · {groupMacros.size} macroatividade(s)</div>
+                  </button>
+                );
+              })}
+              {replicationGroups.length === 0 && (
+                <p className="text-xs text-slate-400 font-bold italic text-center py-4">Nenhum grupo de replicacao importado.</p>
+              )}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setMatrixGroupModalOpen(false)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-lg transition">FECHAR</button>
             </div>
           </div>
         </div>
@@ -7231,7 +7991,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       )}
 
       {/* WhatsApp Share Modal */}
-      {whatsappModal.isOpen && (
+      {whatsappModal.isOpen && (() => {
+        const whatsappAvailableTeams = getWhatsappAvailableTeams();
+
+        return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95 space-y-4">
             <div className="flex items-center space-x-2 text-indigo-600 mb-2">
@@ -7251,7 +8014,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     setWhatsappModal({ ...whatsappModal, teamName: selectedTeam, text });
                   }}
                 >
-                  {teams.map(team => (
+                  {whatsappAvailableTeams.map(team => (
                     <option key={team} value={team}>{team}</option>
                   ))}
                 </select>
@@ -7298,7 +8061,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Finalize Modal */}
       {finalizeModal.isOpen && (
