@@ -301,6 +301,20 @@ const roundPercentValue = (value) => {
   return Math.round(clampPercent(n) * 1000) / 1000;
 };
 
+const getBudgetFamilyKey = (item) => `${item?.floor || ''}||${slugify(item?.macro || item?.sectionId || '')}`;
+
+const isParentBudgetItem = (item) => {
+  if (!item) return false;
+  if (item.isParent !== undefined) return !!item.isParent;
+  return slugify(item.service || item.activityName || '') === slugify(item.macro || item.sectionId || '');
+};
+
+const getFamiliesWithBudgetChildren = (items) => new Set(
+  (Array.isArray(items) ? items : [])
+    .filter(item => item && !isParentBudgetItem(item))
+    .map(item => getBudgetFamilyKey(item))
+);
+
 const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
   if (!Array.isArray(previousItems) || previousItems.length === 0 || !Array.isArray(nextItems)) return [];
 
@@ -308,6 +322,7 @@ const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
   const importedAt = new Date().toISOString();
   const previousById = new Map();
   const nextById = new Map();
+  const nextFamiliesWithChildren = getFamiliesWithBudgetChildren(nextItems);
 
   previousItems.forEach(item => {
     if (item?.id) previousById.set(item.id, item);
@@ -320,6 +335,8 @@ const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
 
   nextItems.forEach(item => {
     if (!item?.id) return;
+    if (isParentBudgetItem(item) && nextFamiliesWithChildren.has(getBudgetFamilyKey(item))) return;
+
     const previous = previousById.get(item.id);
     const previousProgress = previous ? roundPercentValue(previous.progress || 0) : 0;
     const newProgress = roundPercentValue(item.progress || 0);
@@ -2407,9 +2424,15 @@ const App = () => {
 
   const currentWeekId = toLocalDateString(currentWeekStart);
   const weeklyTasks = planning.filter(t => t.weekId === currentWeekId);
-  const pendingBudgetDiffs = useMemo(() => (
-    budgetDiffs.filter(diff => diff && !diff.appliedWeekId && Number(diff.delta) > 0)
-  ), [budgetDiffs]);
+  const pendingBudgetDiffs = useMemo(() => {
+    const cronoFamiliesWithChildren = getFamiliesWithBudgetChildren(cronogramaInicial);
+    return budgetDiffs.filter(diff => (
+      diff &&
+      !diff.appliedWeekId &&
+      Number(diff.delta) > 0 &&
+      (!isParentBudgetItem(diff) || !cronoFamiliesWithChildren.has(getBudgetFamilyKey(diff)))
+    ));
+  }, [budgetDiffs, cronogramaInicial]);
   const pendingBudgetDiffProgress = useMemo(() => (
     Math.round(pendingBudgetDiffs.reduce((sum, diff) => sum + (Number(diff.delta) || 0), 0) * 100) / 100
   ), [pendingBudgetDiffs]);
@@ -3445,12 +3468,30 @@ const App = () => {
     saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
   };
 
+  const reopenBudgetDiffsFromTasks = (tasks) => {
+    const diffIds = new Set(
+      (Array.isArray(tasks) ? tasks : [tasks])
+        .flatMap(task => task?.budgetDiffIds || [])
+        .filter(Boolean)
+    );
+
+    if (diffIds.size === 0) return budgetDiffs;
+
+    return budgetDiffs.map(diff => {
+      if (!diffIds.has(diff.id)) return diff;
+      const { appliedWeekId, appliedAt, ...rest } = diff;
+      return rest;
+    });
+  };
+
   const handleRemoveTask = (taskId) => {
     const targetTask = planning.find(t => t.id === taskId);
     const updatedPlanning = planning.filter(t => t.id !== taskId);
+    const updatedBudgetDiffs = reopenBudgetDiffsFromTasks(targetTask);
     setPlanning(updatedPlanning);
+    setBudgetDiffs(updatedBudgetDiffs);
     if (targetTask && targetTask.isManual) {
-      saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
       setNotification({ message: 'Atividade extra removida.', type: 'success' });
       return;
     }
@@ -3458,7 +3499,7 @@ const App = () => {
       const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
       setPlanning(recalculatedPlanning);
       setAllFloorsData(updatedFloorsData);
-      saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
       setNotification({ message: 'Atividade removida do planejamento.', type: 'success' });
     }, 0);
   };
@@ -3469,15 +3510,18 @@ const App = () => {
       'Excluir Atividades', 
       `Deseja remover as ${selectedTaskIds.length} atividades selecionadas desta semana?`, 
       async () => {
+        const removedTasks = planning.filter(t => selectedTaskIds.includes(t.id));
         const updatedPlanning = planning.filter(t => !selectedTaskIds.includes(t.id));
+        const updatedBudgetDiffs = reopenBudgetDiffsFromTasks(removedTasks);
         setPlanning(updatedPlanning);
+        setBudgetDiffs(updatedBudgetDiffs);
         setSelectedTaskIds([]);
         
         // Recalcula o progresso físico e sincroniza os dados
         const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
         setPlanning(recalculatedPlanning);
         setAllFloorsData(updatedFloorsData);
-        await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+        await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
         setNotification({ message: `${updatedPlanning.length === planning.length ? 0 : planning.length - updatedPlanning.length} atividades removidas do planejamento.`, type: 'success' });
       }
     );
