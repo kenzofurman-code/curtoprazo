@@ -1216,7 +1216,7 @@ const App = () => {
 
   // Drawer Menu
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
-  const [drawerSourceMode, setDrawerSourceMode] = useState<'cronograma'|'previous-successors'>('cronograma');
+  const [drawerSourceMode, setDrawerSourceMode] = useState<'cronograma'|'previous-successors'|'unfinished'>('cronograma');
   const [drawerExpandedStep, setDrawerExpandedStep] = useState<number>(1);
   const [drawerMacro, setDrawerMacro] = useState<any>('');
   const [drawerMacroSearch, setDrawerMacroSearch] = useState<string>('');
@@ -2122,6 +2122,9 @@ const App = () => {
       (item.progress ?? 0) < 100 &&
       (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item)))
     ));
+    if (drawerSourceMode === 'unfinished') {
+      return openCronoItems.filter(item => (item.progress ?? 0) > 0 && (item.progress ?? 0) < 100);
+    }
     if (drawerSourceMode !== 'previous-successors') return openCronoItems;
 
     const successorIds = new Set<string>();
@@ -2375,22 +2378,24 @@ const App = () => {
   }), [ppcHistory]);
 
   const availableFloorsForMacro = useMemo(() => {
+    if (drawerSourceMode === 'unfinished') return [];
     if (!drawerMacro) return [];
     return Array.from(new Set(
       drawerCandidateActivities
         .filter(item => slugify(item.macro) === drawerMacro && (item.progress ?? 0) < 100)
         .map(item => item.floor)
     )).filter(Boolean);
-  }, [drawerCandidateActivities, drawerMacro]);
+  }, [drawerCandidateActivities, drawerMacro, drawerSourceMode]);
 
   const availableServicesForMacroAndFloors = useMemo(() => {
+    if (drawerSourceMode === 'unfinished') return drawerCandidateActivities;
     if (!drawerMacro || drawerFloors.length === 0) return [];
     return drawerCandidateActivities.filter(item =>
       slugify(item.macro) === drawerMacro && 
       drawerFloors.includes(item.floor) &&
       (item.progress ?? 0) < 100
     );
-  }, [drawerCandidateActivities, drawerMacro, drawerFloors]);
+  }, [drawerCandidateActivities, drawerMacro, drawerFloors, drawerSourceMode]);
 
   useEffect(() => {
     setDrawerFloors([]);
@@ -3223,8 +3228,12 @@ const App = () => {
   };
 
   const handleIncludeDrawerActivities = async () => {
-    if (!drawerMacro || drawerFloors.length === 0 || drawerSelectedServices.length === 0) {
+    if (drawerSourceMode !== 'unfinished' && (!drawerMacro || drawerFloors.length === 0)) {
       setNotification({ message: 'Selecione a Macroatividade, os Pavimentos e pelo menos um Serviço!', type: 'error' });
+      return;
+    }
+    if (drawerSelectedServices.length === 0) {
+      setNotification({ message: 'Selecione pelo menos um Serviço!', type: 'error' });
       return;
     }
     const newTasks = [];
@@ -7797,13 +7806,14 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <div className="flex justify-between items-center gap-3">
                     <label className="block text-[10px] font-black uppercase text-slate-500">Origem das atividades</label>
                     <span className="text-[9px] font-bold text-slate-500 text-right">
-                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Sucessoras' : 'Cronograma'}
+                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Sucessoras' : drawerSourceMode === 'unfinished' ? 'Não concluídas' : 'Cronograma'}
                     </span>
                   </div>
                   <div className="grid grid-cols-1 gap-2 max-h-0 overflow-hidden opacity-0 transition-all duration-300 group-hover:max-h-48 group-hover:opacity-100 group-focus-within:max-h-48 group-focus-within:opacity-100">
                     {[
                       { id: 'cronograma', label: 'Planeje a partir das sucessoras do Cronograma' },
-                      { id: 'previous-successors', label: 'Planeje a partir das sucessoras das semana anterior' }
+                      { id: 'previous-successors', label: 'Planeje a partir das sucessoras das semana anterior' },
+                      { id: 'unfinished', label: 'Planeje a partir das atividades não concluídas' }
                     ].map(option => (
                       <button
                         key={option.id}
@@ -7824,8 +7834,13 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       Semana anterior: {formatDateBR(previousWeekIdForDrawer)}. Exibindo apenas sucessoras das atividades finalizadas.
                     </p>
                   )}
+                  {drawerSourceMode === 'unfinished' && (
+                    <p className="text-[10px] text-slate-400 font-bold">
+                      Exibindo atividades importadas com andamento maior que 0% e menor que 100%.
+                    </p>
+                  )}
                 </div>
-                <div className="space-y-2 group relative rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-white focus-within:border-indigo-200 focus-within:bg-white">
+                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 group relative rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-white focus-within:border-indigo-200 focus-within:bg-white">
                   <div className="flex justify-between items-center gap-3">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">1. Selecione a Macroatividade</label>
                     {drawerMacro && <span className="text-[9px] font-bold text-slate-500 text-right truncate max-w-[220px]">{getMacroTitle(drawerMacro)}</span>}
@@ -7874,8 +7889,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     )}
                   </div>
                 </div>
-                </div>
-                <div className="space-y-2 group rounded-xl border border-indigo-100 bg-white p-3">
+                </div>}
+                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 group rounded-xl border border-indigo-100 bg-white p-3">
                   <div className="flex justify-between items-center">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">2. Marque os Pavimentos</label>
                     {drawerFloors.length > 0 && <span className="text-[9px] font-bold text-slate-500">{drawerFloors.length} selecionado(s)</span>}
@@ -7890,7 +7905,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     ))}
                     {availableFloorsForMacro.length === 0 && drawerMacro && <p className="text-[10px] text-slate-400 italic col-span-2">Nenhum pavimento para esta macro.</p>}
                   </div>
-                </div>
+                </div>}
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">3. Selecione os Serviços</label>
