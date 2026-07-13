@@ -7862,8 +7862,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </div>
                   <div className="grid grid-cols-1 gap-2 max-h-0 overflow-hidden opacity-0 transition-all duration-300 group-hover:max-h-48 group-hover:opacity-100 group-focus-within:max-h-48 group-focus-within:opacity-100">
                     {[
-                      { id: 'cronograma', label: 'Planeje a partir das sucessoras do Cronograma' },
-                      { id: 'previous-successors', label: 'Planeje a partir das sucessoras das semana anterior' },
+                      { id: 'cronograma', label: 'Planeje a partir do Cronograma' },
+                      { id: 'previous-successors', label: 'Planeje a partir das sucessoras da semana anterior' },
                       { id: 'unfinished', label: 'Planeje a partir das atividades não concluídas' }
                     ].map(option => (
                       <button
