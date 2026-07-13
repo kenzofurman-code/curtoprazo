@@ -3143,13 +3143,19 @@ const App = () => {
       const itemDiffIds = pendingBudgetDiffs.filter(d => d.itemId === diff.itemId).map(d => d.id);
       const delta = Math.round((Number(diff.delta) || 0) * 1000) / 1000;
       if (delta <= 0) return;
+      const importedProgress = roundPercentValue(diff.newProgress ?? 0);
 
       const existingIndex = updatedPlanning.findIndex(t => t.weekId === currentWeekId && t.itemId === diff.itemId && !t.finalized);
       if (existingIndex !== -1) {
         const task = updatedPlanning[existingIndex];
+        const executedBefore = roundPercentValue(task.executedBefore || 0);
+        const progressFromImport = Math.max(0, importedProgress - executedBefore);
+        const nextProgressThisWeek = importedProgress > 0
+          ? Math.round(progressFromImport * 1000) / 1000
+          : Math.min(100, Math.round(((Number(task.progressThisWeek) || 0) + delta) * 1000) / 1000);
         updatedPlanning[existingIndex] = {
           ...task,
-          progressThisWeek: Math.min(100, Math.round(((Number(task.progressThisWeek) || 0) + delta) * 1000) / 1000),
+          progressThisWeek: Math.min(100, nextProgressThisWeek),
           budgetDiffIds: Array.from(new Set([...(task.budgetDiffIds || []), ...itemDiffIds])),
           observations: task.observations || 'Avanço preenchido por diferença entre versões de orçamento',
           lastUpdatedBy: plannerUsername || 'Sistema'
@@ -3160,6 +3166,7 @@ const App = () => {
 
       const cronoMatch = cronogramaInicial.find(item => item.id === diff.itemId);
       const previousProgress = roundPercentValue(diff.previousProgress ?? Math.max(0, (Number(diff.newProgress) || 0) - delta));
+      const unplannedProgressThisWeek = Math.max(0, importedProgress - previousProgress);
       updatedPlanning.push({
         id: crypto.randomUUID(),
         weekId: currentWeekId,
@@ -3171,7 +3178,7 @@ const App = () => {
         weight: 100,
         executedBefore: previousProgress,
         plannedThisWeek: 0,
-        progressThisWeek: delta,
+        progressThisWeek: Math.round(unplannedProgressThisWeek * 1000) / 1000,
         finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
         dailyWork: [0, 0, 0, 0, 0],
         observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
