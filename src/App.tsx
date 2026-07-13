@@ -4120,6 +4120,7 @@ const App = () => {
 
     const rows = tasksToPrint.map(t => ({
       activityName: t.activityName || '',
+      serviceInstruction: getSimpleServiceInstruction(t),
       serviceComplement: t.serviceComplement || '',
       floor: t.floor || '',
       responsible: t.responsible || '',
@@ -4158,6 +4159,7 @@ const App = () => {
     const rowsJson = JSON.stringify(rows);
     const dayLabelsJson = JSON.stringify(dayLabels);
     const dayDatesJson = JSON.stringify(dayDates);
+    const teamOptionsJson = JSON.stringify(Array.from(new Set(rows.map(r => r.responsible).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR')));
     const totalCount = tasksToPrint.length;
     const genTime = new Date().toLocaleString('pt-BR');
 
@@ -4192,6 +4194,18 @@ const App = () => {
   .toolbar-actions{display:flex;gap:8px;margin-left:auto;flex-shrink:0}
   .btn-print{padding:8px 20px;background:#1e293b;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:900;cursor:pointer;transition:background .15s}
   .btn-print:hover{background:#334155}
+  .print-control{display:flex;align-items:center;gap:6px;background:#f8fafc;padding:3px 9px;border-radius:6px;border:1.5px solid #e2e8f0;margin-top:4px}
+  .print-control-label{font-size:10px;font-weight:900;color:#475569;text-transform:uppercase;letter-spacing:0.05em;white-space:nowrap}
+  .print-input,.print-select{padding:2px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:10.5px;color:#1e293b;font-family:inherit;outline:none;background:#fff}
+  .team-picker{position:relative}
+  .team-picker-btn{padding:4px 8px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#1e293b;font-size:10.5px;font-weight:800;cursor:pointer;min-width:170px;text-align:left}
+  .team-picker-menu{display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:50;width:240px;max-height:230px;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 10px 24px rgba(15,23,42,.16);padding:6px}
+  .team-picker.open .team-picker-menu{display:block}
+  .team-option{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:5px;font-size:10.5px;font-weight:700;color:#334155;cursor:pointer}
+  .team-option:hover{background:#f1f5f9}
+  .team-option input{accent-color:#4f46e5}
+  .team-picker-actions{display:flex;gap:4px;border-top:1px solid #e2e8f0;margin-top:4px;padding-top:5px}
+  .mini-btn{border:1px solid #cbd5e1;background:#f8fafc;color:#334155;border-radius:4px;padding:3px 6px;font-size:9px;font-weight:900;cursor:pointer}
   .page-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid #1e293b}
   .page-header .title h1{font-size:14px;font-weight:900;color:#1e293b;text-transform:uppercase;letter-spacing:.05em}
   .page-header .title p{font-size:10px;color:#64748b;margin-top:2px;font-weight:600}
@@ -4285,9 +4299,20 @@ const App = () => {
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> Observações</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cst',this.checked)"> Status</label>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;background:#f8fafc;padding:3px 9px;border-radius:6px;border:1.5px solid #e2e8f0;margin-top:4px;">
-      <span style="font-size:10px;font-weight:900;color:#475569;text-transform:uppercase;letter-spacing:0.05em">Filtrar Equipe:</span>
-      <input type="text" id="teamFilter" placeholder="Buscar equipe..." oninput="onFilterChange()" style="padding:2px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:10.5px;color:#1e293b;width:180px;font-family:inherit;outline:none;" />
+    <div class="print-control">
+      <span class="print-control-label">Filtrar Equipe:</span>
+      <input class="print-input" type="text" id="teamFilter" placeholder="Buscar equipe..." oninput="onFilterChange()" style="width:160px" />
+      <div class="team-picker" id="teamPicker">
+        <button type="button" class="team-picker-btn" onclick="toggleTeamPicker(event)"><span id="teamPickerLabel">Todas as equipes</span> ▾</button>
+        <div class="team-picker-menu" id="teamPickerMenu"></div>
+      </div>
+    </div>
+    <div class="print-control">
+      <span class="print-control-label">Texto do Serviço:</span>
+      <select class="print-select" id="serviceTextMode" onchange="onServiceModeChange()">
+        <option value="default">Serviço + Pavimento + Meta</option>
+        <option value="whatsapp">Texto do WhatsApp</option>
+      </select>
     </div>
     <div class="toolbar-actions">
       <button class="btn-print" onclick="window.print()">Imprimir / Salvar PDF</button>
@@ -4338,9 +4363,12 @@ const App = () => {
 var allRows=${rowsJson};
 var DL=${dayLabelsJson};
 var DD=${dayDatesJson};
+var teamOptions=${teamOptionsJson};
 var sk=null,sd='asc';
 var hiddenCols={};
 var filterText='';
+var selectedTeams=[];
+var serviceTextMode='default';
 function gso(t){if(t.finalized)return 3;var p=t.progressThisWeek,pl=t.plannedThisWeek;if(p>=pl&&pl>0)return 0;if(p<pl&&pl>0&&p>0)return 1;return 2;}
 function sv(t,k){if(k==='status')return gso(t);var v=t[k];return typeof v==='number'?v:(v||'').toString().toLowerCase();}
 function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
@@ -4353,11 +4381,57 @@ function onFilterChange(){
   filterText=document.getElementById('teamFilter').value.toLowerCase().trim();
   rt();
 }
+function esc(s){return String(s||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];});}
+function toggleTeamPicker(e){
+  if(e){e.stopPropagation();}
+  document.getElementById('teamPicker').classList.toggle('open');
+}
+function closeTeamPicker(){
+  document.getElementById('teamPicker').classList.remove('open');
+}
+function setAllTeams(checked){
+  selectedTeams=checked?teamOptions.slice():[];
+  renderTeamPicker();
+  rt();
+}
+function toggleSelectedTeam(team, checked){
+  if(checked){
+    if(selectedTeams.indexOf(team)===-1)selectedTeams.push(team);
+  }else{
+    selectedTeams=selectedTeams.filter(function(t){return t!==team;});
+  }
+  renderTeamPicker();
+  rt();
+}
+function renderTeamPicker(){
+  var menu=document.getElementById('teamPickerMenu');
+  var label=document.getElementById('teamPickerLabel');
+  if(!menu||!label)return;
+  label.textContent=selectedTeams.length===0?'Todas as equipes':selectedTeams.length+' equipe(s)';
+  var allChecked=selectedTeams.length===teamOptions.length&&teamOptions.length>0;
+  menu.innerHTML='<label class="team-option"><input type="checkbox" '+(allChecked?'checked':'')+' onchange="setAllTeams(this.checked)"> Todas as equipes</label>'+
+    teamOptions.map(function(team){
+      var checked=selectedTeams.indexOf(team)!==-1;
+      return '<label class="team-option"><input type="checkbox" '+(checked?'checked':'')+' onchange="toggleSelectedTeam('+JSON.stringify(team).replace(/"/g,'&quot;')+',this.checked)"> '+esc(team)+'</label>';
+    }).join('')+
+    '<div class="team-picker-actions"><button type="button" class="mini-btn" onclick="setAllTeams(false)">Limpar</button><button type="button" class="mini-btn" onclick="closeTeamPicker()">Ok</button></div>';
+}
+function onServiceModeChange(){
+  serviceTextMode=document.getElementById('serviceTextMode').value;
+  rt();
+}
+document.addEventListener('click',function(e){
+  var picker=document.getElementById('teamPicker');
+  if(picker&&!picker.contains(e.target))closeTeamPicker();
+});
 function rt(){var sorted=allRows.slice();
   if(filterText){
     sorted=sorted.filter(function(t){
       return (t.responsible||'').toLowerCase().indexOf(filterText)!==-1;
     });
+  }
+  if(selectedTeams.length){
+    sorted=sorted.filter(function(t){return selectedTeams.indexOf(t.responsible||'')!==-1;});
   }
   if(sk){sorted.sort(function(a,b){var va=sv(a,sk),vb=sv(b,sk);if(va<vb)return sd==='asc'?-1:1;if(va>vb)return sd==='asc'?1:-1;return 0;});}
   var cntEl=document.getElementById('activity-count');
@@ -4375,9 +4449,10 @@ function rt(){var sorted=allRows.slice();
     var sb=t.finalized?'<span class="badge badge-gray">Finalizado</span>':isOk?'<span class="badge badge-green">Conforme</span>':isDel?'<span class="badge badge-red">Atrasado</span>':'<span class="badge badge-gray">Pendente</span>';
     var comp=t.serviceComplement?'<div class="act-comp">'+t.serviceComplement+'</div>':'';
     var mb=t.isManual?' <span class="badge badge-amber">Extra</span>':'';
+    var serviceText=serviceTextMode==='whatsapp'?t.serviceInstruction:(t.activityName+' · '+(t.floor||'-')+' · meta '+planned+'%');
     return '<tr class="'+rc+'">'+
       '<td class="cn" style="color:#94a3b8;font-weight:900;font-size:9px;text-align:center">'+(i+1)+'</td>'+
-      '<td class="cs"><div class="act-name">'+t.activityName+mb+'</div>'+comp+'</td>'+
+      '<td class="cs"><div class="act-name">'+esc(serviceText)+mb+'</div>'+comp+'</td>'+
       '<td class="cf"><span class="floor-cell">'+(t.floor||'-')+'</span></td>'+
       '<td class="ct" style="font-weight:700;white-space:nowrap">'+(t.responsible||'-')+'</td>'+
       '<td class="ce" style="text-align:center;font-weight:700">'+(t.efetivo !== undefined && t.efetivo !== null && t.efetivo !== '' ? t.efetivo : '-')+'</td>'+
@@ -4399,6 +4474,7 @@ function toggleCol(c,v){
   hiddenCols[c]=!v;
   document.querySelectorAll('.'+c).forEach(function(e){e.style.display=v?'':'none';});
 }
+renderTeamPicker();
 rt();
 </script>
 </body>
