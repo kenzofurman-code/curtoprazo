@@ -3243,11 +3243,9 @@ const App = () => {
   const handleClearProjectData = async () => {
     const emptyFloors = [];
     const emptyFloorsData = {};
-    const emptyHistory = [];
     const emptyWeights = {};
-    const emptyPlanning = [];
+    const preservedPlanningHistory = planning.filter(task => task?.finalized);
     const emptyCrono = [];
-    const emptyPpcHistory = [];
     const emptyMatrices = [];
     const emptyBudgetDiffs = [];
     const emptyBudgetImportVersions = [];
@@ -3255,13 +3253,13 @@ const App = () => {
     await saveToDB(
       emptyFloors,
       emptyFloorsData,
-      emptyHistory,
+      history,
       emptyWeights,
-      emptyPlanning,
+      preservedPlanningHistory,
       emptyCrono,
       teams,
       delayReasons,
-      emptyPpcHistory,
+      ppcHistory,
       emptyMatrices,
       teamPhones,
       undefined,
@@ -3275,17 +3273,15 @@ const App = () => {
 
     setFloors(emptyFloors);
     setAllFloorsData(emptyFloorsData);
-    setHistory(emptyHistory);
     setWeights(emptyWeights);
-    setPlanning(emptyPlanning);
+    setPlanning(preservedPlanningHistory);
     setCronogramaInicial(emptyCrono);
-    setPpcHistory(emptyPpcHistory);
     setMatrices(emptyMatrices);
     setBudgetDiffs(emptyBudgetDiffs);
     setBudgetImportVersions(emptyBudgetImportVersions);
     setActiveFloor('');
     setSelectedDashboardFloor('');
-    setNotification({ message: 'Base de dados limpa e sincronizada com o Firebase!', type: 'success' });
+    setNotification({ message: 'Cronograma importado limpo sem apagar o histórico semanal!', type: 'success' });
   };
 
   const handleIncludeDrawerActivities = async () => {
@@ -5105,7 +5101,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <button 
             onClick={() => triggerConfirm(
               'Limpar Banco de Dados', 
-              'Deseja realmente limpar todo o banco de dados do cronograma, metas e painéis? Esta ação não pode ser desfeita e redefinirá o projeto.', 
+              'Deseja limpar o cronograma importado, planejamento aberto, pesos, paineis e diferencas de orcamento? O historico semanal e o PPC serao preservados.', 
               handleClearProjectData
             )}
             className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-black rounded-xl text-xs uppercase tracking-wider transition active:scale-95 whitespace-nowrap"
@@ -8306,4 +8302,5 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 };
 
 export default App;
+
 
