@@ -3150,8 +3150,9 @@ const App = () => {
         diffsByItem.set(diff.itemId, { ...diff });
         return;
       }
-      existing.delta = Math.round(((Number(existing.delta) || 0) + (Number(diff.delta) || 0)) * 1000) / 1000;
-      existing.newProgress = Math.max(Number(existing.newProgress) || 0, Number(diff.newProgress) || 0);
+      const existingTime = new Date(existing.importedAt || 0).getTime();
+      const diffTime = new Date(diff.importedAt || 0).getTime();
+      if (diffTime >= existingTime) diffsByItem.set(diff.itemId, { ...diff });
     });
 
     let mergedCount = 0;
@@ -5237,11 +5238,16 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <td className="p-3 text-center text-slate-500">{item.duration}</td>
                   <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
                   <td className="p-3 text-center">
-                    <select
-                      className="p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs cursor-pointer focus:border-indigo-500"
-                      value={item.progress ?? 0}
-                      onChange={async (e) => {
-                        const newProgress = parseInt(e.target.value, 10);
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.01"
+                      className="w-20 p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs text-center focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none"
+                      defaultValue={roundPercentValue(item.progress ?? 0)}
+                      onBlur={async (e) => {
+                        const newProgress = roundPercentValue(e.target.value);
+                        e.currentTarget.value = String(newProgress);
                         const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
                         const updatedFloorsData = cloneDeep(allFloorsData);
                         const macroKey = slugify(item.macro);
@@ -5257,11 +5263,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
                         setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
                       }}
-                    >
-                      {[0, 25, 50, 75, 100].map(val => (
-                        <option key={val} value={val}>{val}%</option>
-                      ))}
-                    </select>
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                      }}
+                    />
                   </td>
                   <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
                   <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
@@ -5496,6 +5501,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               {filteredWeeklyTasks.map(t => {
                 const currentPlan = t.plannedThisWeek ?? 100;
                 const progVal = t.progressThisWeek ?? 0;
+                const progressDisplayVal = t.source === 'budget-diff' || t.isUnplannedDetected
+                  ? Math.min(100, roundPercentValue((Number(t.executedBefore) || 0) + (Number(t.progressThisWeek) || 0)))
+                  : progVal;
                 const showDelayAlert = currentPlan > progVal;
                 return (
                   <tr key={t.id} className={`hover:bg-slate-50 transition ${t.finalized ? 'bg-slate-100/70 opacity-75' : showDelayAlert && (progVal > 0 || currentPlan > 0) ? 'bg-red-50/40' : ''}`}>
@@ -5654,7 +5662,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <div className="flex flex-col items-center gap-1">
                         <div className="flex gap-1 justify-center">
                           {[25, 50, 75, 100].map(val => {
-                            const progStep = roundDown25(progVal);
+                            const progStep = roundDown25(progressDisplayVal);
                             const prefilledStep = roundDown25(t.preFilledProgress);
                             const isActive = progStep > 0 && progStep === val;
                             const isPrefilled = prefilledStep > 0 && prefilledStep === val;
@@ -5670,7 +5678,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                                 key={val}
                                 disabled={t.finalized}
                                 onClick={() => handleWeeklyProgressChange(t.id, val)}
-                                title={isActive ? `${formatPercentBR(progVal)} realizado na semana` : `Registrar ${val}% realizado`}
+                                title={isActive ? `${formatPercentBR(progressDisplayVal)} realizado acumulado` : `Registrar ${val}% realizado`}
                                 className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
                               >
                                 {val}%
