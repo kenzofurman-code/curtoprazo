@@ -253,7 +253,19 @@ const parseExcelDate = (value, fallback = getTodayDateString()) => {
 const parsePercent = (value) => {
   if (value === undefined || value === null || value === '') return 0;
   if (typeof value === 'number') return clampPercent(value <= 1 ? value * 100 : value);
-  const normalized = String(value).replace('%', '').replace(',', '.').trim();
+  let normalized = String(value).replace('%', '').replace(/\s/g, '').trim();
+  normalized = normalized.replace(/[^\d,.-]/g, '');
+  const lastComma = normalized.lastIndexOf(',');
+  const lastDot = normalized.lastIndexOf('.');
+  if (lastComma !== -1 && lastDot !== -1) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.';
+    const thousandsSeparator = decimalSeparator === ',' ? '.' : ',';
+    normalized = normalized
+      .replace(new RegExp(`\\${thousandsSeparator}`, 'g'), '')
+      .replace(decimalSeparator, '.');
+  } else if (lastComma !== -1) {
+    normalized = normalized.replace(',', '.');
+  }
   const n = Number(normalized);
   if (!Number.isFinite(n)) return 0;
   return clampPercent(n <= 1 ? n * 100 : n);
@@ -825,12 +837,20 @@ const TEAM_GENERAL_OBSERVATIONS_ID = '__team_general_observations__';
 
 const roundDown25 = (value) => {
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return 0;
+  if (!Number.isFinite(n) || n <= 0) return 0;
   if (n >= 100) return 100;
-  if (n >= 75) return 75;
-  if (n >= 50) return 50;
-  if (n >= 25) return 25;
-  return 0;
+  if (n < 37.5) return 25;
+  if (n < 62.5) return 50;
+  return 75;
+};
+
+const formatPercentBR = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0%';
+  return `${clampPercent(n).toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  })}%`;
 };
 
 const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial = []) => {
@@ -3281,7 +3301,7 @@ const App = () => {
             sectionId: slugify(match.macro), itemId: match.id,
             activityName: match.service, responsible: drawerResponsible || match.responsible || (teams[0] || 'Equipe Geral'),
             isParent: !!match.isParent,
-            weight: 100, executedBefore: roundDown25(match.progress || 0), plannedThisWeek: 100, progressThisWeek: 0,
+            weight: 100, executedBefore: roundDown25(match.progress || 0), executedBeforeRaw: roundPercentValue(match.progress || 0), plannedThisWeek: 100, progressThisWeek: 0,
             finishDate: match.end, dailyWork: [0, 0, 0, 0, 0], observations: '', delayReason: '', finalized: false
           });
         }
@@ -5601,9 +5621,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <td className="p-3 border-r bg-emerald-50/30">
                       <div className="flex gap-1 justify-center">
                         {[25, 50, 75, 100].map(val => {
-                          const execBefore = t.executedBefore ?? 0;
+                          const execBeforeReal = t.executedBeforeRaw ?? t.executedBefore ?? 0;
+                          const execBeforeStep = roundDown25(execBeforeReal);
                           const isPlanned = currentPlan === val;
-                          const isExecuted = execBefore > 0 && val === execBefore;
+                          const isExecuted = execBeforeStep > 0 && val === execBeforeStep;
                           // Priority: green (planned) > dark-gray (executed) > default
                           let btnClass = 'bg-slate-100 text-slate-500 hover:bg-emerald-100 hover:text-emerald-700';
                           let ring = '';
@@ -5619,7 +5640,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               key={val}
                               disabled={t.finalized}
                               onClick={() => handlePlannedChange(t.id, val)}
-                              title={isExecuted && !isPlanned ? `${val}% já medido` : `Planejar ${val}%`}
+                              title={isExecuted && !isPlanned ? `${formatPercentBR(execBeforeReal)} ja medido` : `Planejar ${val}%`}
                               className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
                             >{val}%</button>
                           );
@@ -5633,8 +5654,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <div className="flex flex-col items-center gap-1">
                         <div className="flex gap-1 justify-center">
                           {[25, 50, 75, 100].map(val => {
-                            const isActive = progVal === val;
-                            const isPrefilled = t.preFilledProgress === val;
+                            const progStep = roundDown25(progVal);
+                            const prefilledStep = roundDown25(t.preFilledProgress);
+                            const isActive = progStep > 0 && progStep === val;
+                            const isPrefilled = prefilledStep > 0 && prefilledStep === val;
                             const isOk = val > currentPlan || val === currentPlan;
                             const btnColor = isOk ? 'bg-blue-600 ring-blue-300' : 'bg-red-600 ring-red-300';
                             
@@ -5647,6 +5670,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                                 key={val}
                                 disabled={t.finalized}
                                 onClick={() => handleWeeklyProgressChange(t.id, val)}
+                                title={isActive ? `${formatPercentBR(progVal)} realizado na semana` : `Registrar ${val}% realizado`}
                                 className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
                               >
                                 {val}%
@@ -8264,3 +8288,4 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 };
 
 export default App;
+
