@@ -2164,12 +2164,22 @@ const App = () => {
     }
     if (drawerSourceMode !== 'previous-successors') return openCronoItems;
 
+    const parentByFamily = new Map<string, any>();
+    cronogramaInicial.forEach(item => {
+      if (isParentCronoItem(item)) parentByFamily.set(familyKey(item), item);
+    });
+
     const successorIds = new Set<string>();
     planning
       .filter(task => task && task.weekId === previousWeekIdForDrawer && task.finalized)
       .forEach(task => {
         const cronoItem = cronogramaInicial.find(item => item.id === task.itemId);
-        const successors = task.successors || cronoItem?.successors || [];
+        const parentItem = parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
+        const successors = [
+          ...(task.successors || []),
+          ...(cronoItem?.successors || []),
+          ...(parentItem?.successors || [])
+        ];
         successors.forEach(id => {
           const value = String(id || '').trim();
           if (value) successorIds.add(value);
@@ -2177,11 +2187,11 @@ const App = () => {
       });
 
     if (successorIds.size === 0) return [];
-    const directSuccessors = openCronoItems.filter(item => {
+    const directSuccessorRefs = cronogramaInicial.filter(item => {
       const candidates = [item.id, item.originalId].filter(Boolean).map(String);
       return candidates.some(id => successorIds.has(id));
     });
-    const successorMacroKeys = new Set(directSuccessors.map(item => `${item.floor}||${slugify(item.macro)}`));
+    const successorMacroKeys = new Set(directSuccessorRefs.map(item => `${item.floor}||${slugify(item.macro)}`));
     return openCronoItems.filter(item => {
       const candidates = [item.id, item.originalId].filter(Boolean).map(String);
       return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
