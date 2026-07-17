@@ -5654,7 +5654,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               key={val}
                               disabled={t.finalized}
                               onClick={() => handlePlannedChange(t.id, val)}
-                              title={isExecuted && !isPlanned ? `${formatPercentBR(execBeforeReal)} ja medido` : `Planejar ${val}%`}
+                              title={isExecuted && !isPlanned ? `${formatPercentBR(execBeforeReal)} já medido` : `Planejar ${val}%`}
                               className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
                             >{val}%</button>
                           );
