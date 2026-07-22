@@ -8061,7 +8061,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     {drawerFloors.length > 0 && <span className="text-[9px] font-bold text-slate-500">{drawerFloors.length} selecionado(s)</span>}
                     {availableFloorsForMacro.length > 0 && <button onClick={() => { if(drawerFloors.length === availableFloorsForMacro.length) setDrawerFloors([]); else setDrawerFloors([...availableFloorsForMacro]); }} className="text-[9px] font-bold text-indigo-700 hover:underline uppercase">Todos</button>}
                   </div>
-                  <div className={`grid grid-cols-2 gap-2 overflow-hidden transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerFloors.length === 0 ? 'max-h-72 opacity-100' : 'max-h-0 opacity-0'} ${!drawerMacro ? 'pointer-events-none' : ''}`}>
+                  <div className={`grid grid-cols-2 gap-2 transition-opacity duration-300 ${drawerFloors.length === 0 ? 'opacity-100' : 'opacity-0 hidden group-hover:grid group-hover:opacity-100 group-focus-within:grid group-focus-within:opacity-100'} ${!drawerMacro ? 'pointer-events-none' : ''}`}>
                     {availableFloorsForMacro.map(floor => (
                       <label key={floor} className="flex items-center space-x-2 p-2 bg-slate-50 rounded-lg border hover:border-indigo-300 transition cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" checked={drawerFloors.includes(floor)} onChange={(e) => { if (e.target.checked) setDrawerFloors([...drawerFloors, floor]); else setDrawerFloors(drawerFloors.filter(f => f !== floor)); }} />
