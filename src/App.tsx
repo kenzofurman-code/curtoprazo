@@ -4233,6 +4233,9 @@ const App = () => {
   .team-option input{accent-color:#4f46e5}
   .team-picker-actions{display:flex;gap:4px;border-top:1px solid #e2e8f0;margin-top:4px;padding-top:5px}
   .mini-btn{border:1px solid #cbd5e1;background:#f8fafc;color:#334155;border-radius:4px;padding:3px 6px;font-size:9px;font-weight:900;cursor:pointer}
+  .team-color-panel{display:flex;flex-wrap:wrap;gap:6px;max-width:680px}
+  .team-color-item{display:flex;align-items:center;gap:5px;padding:3px 6px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;font-size:9.5px;font-weight:900;color:#334155;text-transform:uppercase}
+  .team-color-item input{width:22px;height:22px;border:0;background:transparent;cursor:pointer;padding:0}
   .page-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;padding-bottom:8px;border-bottom:2px solid #1e293b}
   .page-header .title h1{font-size:14px;font-weight:900;color:#1e293b;text-transform:uppercase;letter-spacing:.05em}
   .page-header .title p{font-size:10px;color:#64748b;margin-top:2px;font-weight:600}
@@ -4249,6 +4252,7 @@ const App = () => {
   tbody tr.finalized td{background:#f8fafc!important;color:#94a3b8}
   tbody tr.delayed td{background:#fff7f7!important}
   tbody tr.ok td{background:#f0fdf4!important}
+  tbody td.team-cell{background:var(--team-bg,#f1f5f9)!important;color:var(--team-fg,#1e293b)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   td{padding:5px 8px;vertical-align:middle;border-right:1px solid #e2e8f0;font-size:10px}
   td:last-child{border-right:none}
   .act-name{font-weight:800;text-transform:uppercase;font-size:10px;line-height:1.3}
@@ -4313,10 +4317,10 @@ const App = () => {
   <div class="toolbar no-print">
     <div class="toolbar-title">Configurar Impressao - Selecione as colunas a exibir:</div>
     <div class="col-toggles">
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('ct',this.checked)"> Equipe</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cn',this.checked)"> #</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cs',this.checked)"> Servico</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cf',this.checked)"> Pavimento</label>
-      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('ct',this.checked)"> Equipe</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('ce',this.checked)"> Efetivo</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cb',this.checked)"> % Anterior</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cp',this.checked)"> Meta Planejada</label>
@@ -4341,6 +4345,10 @@ const App = () => {
         <option value="whatsapp">Texto do WhatsApp</option>
       </select>
     </div>
+    <div class="print-control">
+      <span class="print-control-label">Cores das Equipes:</span>
+      <div class="team-color-panel" id="teamColorPanel"></div>
+    </div>
     <div class="toolbar-actions">
       <button class="btn-print" onclick="window.print()">Imprimir / Salvar PDF</button>
     </div>
@@ -4355,10 +4363,10 @@ const App = () => {
   <table id="pt">
     <thead>
       <tr>
+        <th class="ct" onclick="st('responsible')">Equipe<span class="si" id="si-responsible"></span></th>
         <th class="cn" onclick="st('num')">#<span class="si" id="si-num"></span></th>
         <th class="cs" onclick="st('activityName')">Servico<span class="si" id="si-activityName"></span></th>
         <th class="cf" onclick="st('floor')">Pavimento<span class="si" id="si-floor"></span></th>
-        <th class="ct" onclick="st('responsible')">Equipe<span class="si" id="si-responsible"></span></th>
         <th class="ce" onclick="st('efetivo')" style="text-align:center">Efetivo<span class="si" id="si-efetivo"></span></th>
         <th class="cb" onclick="st('executedBefore')" style="text-align:center">% Anterior<span class="si" id="si-executedBefore"></span></th>
         <th class="cp" onclick="st('plannedThisWeek')" style="text-align:center">Meta Planejada<span class="si" id="si-plannedThisWeek"></span></th>
@@ -4396,8 +4404,29 @@ var hiddenCols={};
 var filterText='';
 var selectedTeams=[];
 var serviceTextMode='default';
+var teamPalette=['#fde68a','#bbf7d0','#bfdbfe','#fecdd3','#ddd6fe','#fed7aa','#a7f3d0','#fbcfe8','#bae6fd','#e9d5ff','#ccfbf1','#fef08a'];
+var teamColors={};
+teamOptions.forEach(function(team,idx){teamColors[team]=teamPalette[idx%teamPalette.length];});
 function gso(t){if(t.finalized)return 3;var p=t.progressThisWeek,pl=t.plannedThisWeek;if(p>=pl&&pl>0)return 0;if(p<pl&&pl>0&&p>0)return 1;return 2;}
 function sv(t,k){if(k==='status')return gso(t);var v=t[k];return typeof v==='number'?v:(v||'').toString().toLowerCase();}
+function tc(team){return teamColors[team]||'#f1f5f9';}
+function fg(hex){
+  var h=String(hex||'').replace('#','');
+  if(h.length===3)h=h.split('').map(function(c){return c+c;}).join('');
+  var r=parseInt(h.substring(0,2),16)||0,g=parseInt(h.substring(2,4),16)||0,b=parseInt(h.substring(4,6),16)||0;
+  return ((r*299+g*587+b*114)/1000)>=150?'#1e293b':'#ffffff';
+}
+function renderTeamColors(){
+  var panel=document.getElementById('teamColorPanel');
+  if(!panel)return;
+  panel.innerHTML=teamOptions.length?teamOptions.map(function(team){
+    return '<label class="team-color-item"><input type="color" value="'+tc(team)+'" onchange="setTeamColor('+JSON.stringify(team).replace(/"/g,'&quot;')+',this.value)"> <span>'+esc(team)+'</span></label>';
+  }).join(''):'<span style="font-size:10px;color:#94a3b8;font-weight:800">Nenhuma equipe encontrada.</span>';
+}
+function setTeamColor(team,color){
+  teamColors[team]=color;
+  rt();
+}
 function st(k){if(sk===k){sd=sd==='asc'?'desc':'asc';}else{sk=k;sd='asc';}
   document.querySelectorAll('.si').forEach(function(e){e.textContent='';});
   document.querySelectorAll('thead th').forEach(function(e){e.classList.remove('sorted');});
@@ -4477,11 +4506,13 @@ function rt(){var sorted=allRows.slice();
     var comp=t.serviceComplement?'<div class="act-comp">'+t.serviceComplement+'</div>':'';
     var mb=t.isManual?' <span class="badge badge-amber">Extra</span>':'';
     var serviceText=serviceTextMode==='whatsapp'?t.serviceInstruction:(t.activityName+' · '+(t.floor||'-')+' · meta '+planned+'%');
+    var team=t.responsible||'-';
+    var teamBg=tc(team);
     return '<tr class="'+rc+'">'+
+      '<td class="ct team-cell" style="--team-bg:'+teamBg+';--team-fg:'+fg(teamBg)+';font-weight:900;white-space:nowrap;text-align:center">'+esc(team)+'</td>'+
       '<td class="cn" style="color:#94a3b8;font-weight:900;font-size:9px;text-align:center">'+(i+1)+'</td>'+
       '<td class="cs"><div class="act-name">'+esc(serviceText)+mb+'</div>'+comp+'</td>'+
       '<td class="cf"><span class="floor-cell">'+(t.floor||'-')+'</span></td>'+
-      '<td class="ct" style="font-weight:700;white-space:nowrap">'+(t.responsible||'-')+'</td>'+
       '<td class="ce" style="text-align:center;font-weight:700">'+(t.efetivo !== undefined && t.efetivo !== null && t.efetivo !== '' ? t.efetivo : '-')+'</td>'+
       '<td class="cb" style="text-align:center">'+bb+'</td>'+
       '<td class="cp" style="text-align:center">'+plb+'</td>'+
@@ -4502,6 +4533,7 @@ function toggleCol(c,v){
   document.querySelectorAll('.'+c).forEach(function(e){e.style.display=v?'':'none';});
 }
 renderTeamPicker();
+renderTeamColors();
 rt();
 </script>
 </body>
