@@ -4253,6 +4253,10 @@ const App = () => {
   tbody tr.delayed td{background:#fff7f7!important}
   tbody tr.ok td{background:#f0fdf4!important}
   tbody td.team-cell{background:var(--team-bg,#f1f5f9)!important;color:var(--team-fg,#1e293b)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  tbody tr:nth-child(even) td.team-cell,
+  tbody tr.finalized td.team-cell,
+  tbody tr.delayed td.team-cell,
+  tbody tr.ok td.team-cell{background:var(--team-bg,#f1f5f9)!important;color:var(--team-fg,#1e293b)!important}
   td{padding:5px 8px;vertical-align:middle;border-right:1px solid #e2e8f0;font-size:10px}
   td:last-child{border-right:none}
   .act-name{font-weight:800;text-transform:uppercase;font-size:10px;line-height:1.3}
@@ -4404,7 +4408,7 @@ var hiddenCols={};
 var filterText='';
 var selectedTeams=[];
 var serviceTextMode='default';
-var teamPalette=['#fde68a','#bbf7d0','#bfdbfe','#fecdd3','#ddd6fe','#fed7aa','#a7f3d0','#fbcfe8','#bae6fd','#e9d5ff','#ccfbf1','#fef08a'];
+var teamPalette=['#facc15','#22c55e','#3b82f6','#ef4444','#a855f7','#f97316','#14b8a6','#ec4899','#6366f1','#84cc16','#06b6d4','#d946ef'];
 var teamColors={};
 teamOptions.forEach(function(team,idx){teamColors[team]=teamPalette[idx%teamPalette.length];});
 function gso(t){if(t.finalized)return 3;var p=t.progressThisWeek,pl=t.plannedThisWeek;if(p>=pl&&pl>0)return 0;if(p<pl&&pl>0&&p>0)return 1;return 2;}
