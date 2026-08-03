@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 
 declare global {
   interface Window {
@@ -13,7 +13,7 @@ declare global {
   }
 }
 
-// --- UtilitÃ¡rios de Data e Dados ---
+// --- Utilitários de Data e Dados ---
 const compressString = (str: string): string => {
   if (!str) return '';
   let dictionary: { [key: string]: number } = {};
@@ -203,64 +203,6 @@ const decompressStringUnicode = (compressedStr: string): string => {
     bytes[i] = result.charCodeAt(i);
   }
   return new TextDecoder().decode(bytes);
-};
-
-const parseStoredArray = (value: any): any[] => {
-  if (Array.isArray(value)) return value;
-  if (!value) return [];
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(decompressIfNeeded(value));
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-};
-
-const mergePpcHistory = (...sources: any[][]): any[] => {
-  const byWeek = new Map<string, any>();
-  sources.forEach(source => {
-    if (!Array.isArray(source)) return;
-    source.forEach((record, index) => {
-      if (!record) return;
-      const key = String(record.weekId || record.weekStart || record.timestamp || `record_${index}`);
-      byWeek.set(key, record);
-    });
-  });
-  return Array.from(byWeek.values())
-    .sort((a, b) => String(a?.weekId || a?.weekStart || a?.timestamp || '').localeCompare(String(b?.weekId || b?.weekStart || b?.timestamp || '')));
-};
-
-const derivePpcHistoryFromPlanning = (plans: any[]): any[] => {
-  const byWeek = new Map<string, any[]>();
-  (Array.isArray(plans) ? plans : []).forEach(task => {
-    if (!task?.finalized || !task.weekId) return;
-    const weekId = String(task.weekId);
-    byWeek.set(weekId, [...(byWeek.get(weekId) || []), task]);
-  });
-
-  return Array.from(byWeek.entries()).map(([weekId, tasks]) => {
-    const plannedTasks = tasks.filter(t => (t.plannedThisWeek ?? 100) > 0);
-    const completedTasks = plannedTasks.filter(t => (t.progressThisWeek ?? 0) >= (t.plannedThisWeek ?? 100));
-    const ppc = plannedTasks.length > 0 ? (completedTasks.length / plannedTasks.length) * 100 : 0;
-    const latestTimestamp = tasks
-      .map(t => t.timestamp || t.lastUpdatedAt || t.updatedAt || '')
-      .filter(Boolean)
-      .sort()
-      .pop();
-
-    return {
-      weekId,
-      weekStart: weekId,
-      ppc,
-      totalPlanned: plannedTasks.length,
-      completed: completedTasks.length,
-      timestamp: latestTimestamp || `${weekId}T23:59:59.000Z`,
-      recoveredFromPlanning: true
-    };
-  });
 };
 
 const cloneDeep = (value) => JSON.parse(JSON.stringify(value ?? {}));
@@ -569,30 +511,30 @@ const generateMockWeather = (city, dateStr) => {
 
 const getWeatherEmoji = (icon) => {
   switch (icon) {
-    case 'snow': return 'â„ï¸';
-    case 'snow-showers': return 'ðŸŒ¨ï¸';
-    case 'rain': return 'ðŸŒ§ï¸';
+    case 'snow': return '❄️';
+    case 'snow-showers': return '🌨️';
+    case 'rain': return '🌧️';
     case 'showers-day':
     case 'showers-night':
-    case 'showers': return 'ðŸŒ¦ï¸';
+    case 'showers': return '🌦️';
     case 'thunder-rain':
     case 'thunder-showers-day':
     case 'thunder-showers-night':
-    case 'thunder': return 'ðŸŒ©ï¸';
-    case 'wind': return 'ðŸ’¨';
-    case 'fog': return 'ðŸŒ«ï¸';
-    case 'cloudy': return 'â˜ï¸';
-    case 'partly-cloudy-day': return 'â›…';
-    case 'partly-cloudy-night': return 'â˜ï¸';
-    case 'clear-day': return 'â˜€ï¸';
-    case 'clear-night': return 'ðŸŒ™';
-    default: return 'â˜€ï¸';
+    case 'thunder': return '🌩️';
+    case 'wind': return '💨';
+    case 'fog': return '🌫️';
+    case 'cloudy': return '☁️';
+    case 'partly-cloudy-day': return '⛅';
+    case 'partly-cloudy-night': return '☁️';
+    case 'clear-day': return '☀️';
+    case 'clear-night': return '🌙';
+    default: return '☀️';
   }
 };
 
 
 
-// --- Componente Inteligente: Selecionador de Dias ArrastÃ¡vel ---
+// --- Componente Inteligente: Selecionador de Dias Arrastável ---
 const DaysSelector = ({ dailyWork, disabled, onChange }) => {
   const [localDW, setLocalDW] = useState(dailyWork || [0, 0, 0, 0, 0]);
   const localDWRef = useRef(dailyWork || [0, 0, 0, 0, 0]);
@@ -668,7 +610,7 @@ const DaysSelector = ({ dailyWork, disabled, onChange }) => {
   );
 };
 
-// --- Algoritmo de SincronizaÃ§Ã£o e RecÃ¡lculo ---
+// --- Algoritmo de Sincronização e Recálculo ---
 const serializeCrono = (cronoArray) => {
   if (!Array.isArray(cronoArray)) return [];
   return cronoArray.map(item => {
@@ -728,8 +670,8 @@ const parseDependencyList = (value) => {
 };
 
 const stripServicePrefix = (value) => {
-  return String(value || 'serviÃ§o')
-    .replace(/^MO\s*[-â€“â€”:]?\s*/i, '')
+  return String(value || 'serviço')
+    .replace(/^MO\s*[-–—:]?\s*/i, '')
     .trim();
 };
 
@@ -771,6 +713,7 @@ const SERVICE_GENDER_EXCEPTIONS = {
   regularizacao: 'f',
   tubulacao: 'f',
   contrapiso: 'm',
+  emboço: 'm',
   emboco: 'm',
   forro: 'm',
   gesso: 'm',
@@ -803,7 +746,7 @@ const getServicePhrase = (service, complement = '') => {
   if (gender === 'f') return { direct: `a ${cleanService}${suffix}`, partitive: `da ${cleanService}${suffix}` };
   if (gender === 'm') return { direct: `o ${cleanService}${suffix}`, partitive: `do ${cleanService}${suffix}` };
 
-  return { direct: `serviÃ§o de ${cleanService}${suffix}`, partitive: `do serviÃ§o de ${cleanService}${suffix}` };
+  return { direct: `serviço de ${cleanService}${suffix}`, partitive: `do serviço de ${cleanService}${suffix}` };
 };
 
 const getLocationPhrase = (floor) => {
@@ -825,7 +768,7 @@ const getLocationPhrase = (floor) => {
 const getServiceTextSet = (task) => {
   const planned = Number(task?.plannedThisWeek ?? 100);
   const previous = Number(task?.executedBefore ?? 0);
-  const service = String(task?.activityName || 'serviÃ§o').trim();
+  const service = String(task?.activityName || 'serviço').trim();
   const complement = task?.serviceComplement ? ` (${task.serviceComplement})` : '';
   const floor = String(task?.floor || 'pavimento').trim();
   const servicePhrase = getServicePhrase(service, complement);
@@ -836,8 +779,8 @@ const getServiceTextSet = (task) => {
   if (planned >= 100) {
     return {
       whatsapp: `Finalizar ${directText}`,
-      done: previous <= 0 ? 'ServiÃ§o iniciado e finalizado!' : 'ServiÃ§o finalizado!',
-      pending: previous <= 0 ? 'ServiÃ§o nÃ£o iniciado' : 'Ainda faltou um pouco'
+      done: previous <= 0 ? 'Serviço iniciado e finalizado!' : 'Serviço finalizado!',
+      pending: previous <= 0 ? 'Serviço não iniciado' : 'Ainda faltou um pouco'
     };
   }
 
@@ -845,15 +788,15 @@ const getServiceTextSet = (task) => {
     if (previous <= 0) {
       return {
         whatsapp: `Iniciar e fazer mais da metade ${partitiveText}`,
-        done: 'ServiÃ§o iniciado e em andamento!',
-        pending: 'ServiÃ§o nÃ£o iniciou'
+        done: 'Serviço iniciado e em andamento!',
+        pending: 'Serviço não iniciou'
       };
     }
 
     return {
       whatsapp: `Fazer mais da metade ${partitiveText}`,
-      done: 'Mais da metade concluÃ­da',
-      pending: 'NÃ£o avanÃ§ou'
+      done: 'Mais da metade concluída',
+      pending: 'Não avançou'
     };
   }
 
@@ -861,14 +804,14 @@ const getServiceTextSet = (task) => {
     return {
       whatsapp: previous <= 0 ? `Iniciar e fazer metade ${partitiveText}` : `Fazer metade ${partitiveText}`,
       done: 'Terminamos metade',
-      pending: previous <= 0 ? 'ServiÃ§o nÃ£o iniciou' : 'NÃ£o avanÃ§ou'
+      pending: previous <= 0 ? 'Serviço não iniciou' : 'Não avançou'
     };
   }
 
   return {
     whatsapp: `Iniciar ${directText}`,
-    done: 'ServiÃ§o iniciado!',
-    pending: 'ServiÃ§o nÃ£o iniciou'
+    done: 'Serviço iniciado!',
+    pending: 'Serviço não iniciou'
   };
 };
 
@@ -880,9 +823,9 @@ const getFieldProgressStatusText = (planned, progress) => {
   const target = Number(planned ?? 100);
   const done = Number(progress || 0) >= target;
 
-  if (target >= 100) return done ? 'ServiÃ§o finalizado' : 'ServiÃ§o com pequenas pendÃªncias';
-  if (target >= 50) return done ? 'ServiÃ§o em andamento!' : 'ServiÃ§o nÃ£o continuou.';
-  return done ? 'ServiÃ§o iniciado!' : 'ServiÃ§o nÃ£o iniciado';
+  if (target >= 100) return done ? 'Serviço finalizado' : 'Serviço com pequenas pendências';
+  if (target >= 50) return done ? 'Serviço em andamento!' : 'Serviço não continuou.';
+  return done ? 'Serviço iniciado!' : 'Serviço não iniciado';
 };
 
 const getFieldProgressOptions = (task) => {
@@ -929,7 +872,7 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
 
   const updatedFloorsData = cloneDeep(floorsData);
   
-  // Mapear avanÃ§os realizados do planejamento
+  // Mapear avanços realizados do planejamento
   Object.keys(cumulativeProgress).forEach(key => {
     const [floor, sectionId, itemId] = key.split('||');
     if (updatedFloorsData[floor] && updatedFloorsData[floor][sectionId]) {
@@ -1104,25 +1047,25 @@ const playBeep = (freq = 600, duration = 0.15) => {
   }
 };
 
-// --- ConfiguraÃ§Ã£o Firebase & Constantes ---
+// --- Configuração Firebase & Constantes ---
 const firebaseConfig = (import.meta.env.VITE_FIREBASE_CONFIG ? JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG) : (typeof window.__firebase_config !== 'undefined' ? JSON.parse(window.__firebase_config) : {}));
 const appId = import.meta.env.VITE_APP_ID || (typeof window.__app_id !== 'undefined' ? window.__app_id : 'obra-app');
 const initialAuthToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN || (typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null);
 
-const INITIAL_PAVIMENTOS = ['TÃ©rreo', 'Pav. Tipo 1', 'Pav. Tipo 2', 'Pav. Cobertura'];
+const INITIAL_PAVIMENTOS = ['Térreo', 'Pav. Tipo 1', 'Pav. Tipo 2', 'Pav. Cobertura'];
 const INITIAL_STRUCTURE = {
   'estrutura': { title: 'ESTRUTURA', items: [{ id: 'forma', name: 'FORMA', actualPercent: 0 }, { id: 'armadura', name: 'ARMADURA', actualPercent: 0 }] },
-  'instalacoes': { title: 'INSTALAÃ‡Ã•ES', items: [{ id: 'hidraulica', name: 'HIDRÃULICA', actualPercent: 0 }, { id: 'eletrica', name: 'ELÃ‰TRICA', actualPercent: 0 }] }
+  'instalacoes': { title: 'INSTALAÇÕES', items: [{ id: 'hidraulica', name: 'HIDRÁULICA', actualPercent: 0 }, { id: 'eletrica', name: 'ELÉTRICA', actualPercent: 0 }] }
 };
 const INITIAL_CRONOGRAMA = [];
-const INITIAL_TEAMS = ['EQUIPE CIVIL', 'EQUIPE ARMADURA', 'EQUIPE HIDRÃULICA', 'EQUIPE ELÃ‰TRICA', 'EQUIPE ACABAMENTO'];
-const INITIAL_DELAYS = ['Chuva / Clima ImprÃ³prio', 'Falta de Material em Obra', 'Falta de MÃ£o de Obra / AbsenteÃ­smo', 'Atraso de Projeto ou Detalhe', 'Quebra de Equipamento / Ferramenta', 'ServiÃ§o Anterior nÃ£o ConcluÃ­do'];
+const INITIAL_TEAMS = ['EQUIPE CIVIL', 'EQUIPE ARMADURA', 'EQUIPE HIDRÁULICA', 'EQUIPE ELÉTRICA', 'EQUIPE ACABAMENTO'];
+const INITIAL_DELAYS = ['Chuva / Clima Impróprio', 'Falta de Material em Obra', 'Falta de Mão de Obra / Absenteísmo', 'Atraso de Projeto ou Detalhe', 'Quebra de Equipamento / Ferramenta', 'Serviço Anterior não Concluído'];
 
 const App = () => {
   const [db, setDb] = useState<any>(null);
   const [userId, setUserId] = useState<any>(null);
 
-  // IntercepÃ§Ã£o de modo de equipe (WhatsApp/Mobile)
+  // Intercepção de modo de equipe (WhatsApp/Mobile)
   const queryParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const urlUserId = queryParams.get('u');
   const urlTeamName = queryParams.get('t');
@@ -1179,7 +1122,6 @@ const App = () => {
 
   const teamsRef = useRef(teams);
   const delayReasonsRef = useRef(delayReasons);
-  const ppcHistoryRef = useRef(ppcHistory);
   const budgetDiffsRef = useRef(budgetDiffs);
   const budgetImportVersionsRef = useRef(budgetImportVersions);
 
@@ -1190,10 +1132,6 @@ const App = () => {
   useEffect(() => {
     delayReasonsRef.current = delayReasons;
   }, [delayReasons]);
-
-  useEffect(() => {
-    ppcHistoryRef.current = ppcHistory;
-  }, [ppcHistory]);
 
   useEffect(() => {
     budgetDiffsRef.current = budgetDiffs;
@@ -1220,7 +1158,7 @@ const App = () => {
   const [visibleSections, setVisibleSections] = useState<any[]>([]);
   const [visibleFloors, setVisibleFloors] = useState<any[]>([]);
 
-  // Filtros HistÃ³rico
+  // Filtros Histórico
   const [giantSearch, setHistorySearch] = useState<string>('');
   const [giantFloorFilter, setHistoryFloorFilter] = useState<string>('');
   const [giantMacroFilter, setHistoryMacroFilter] = useState<string>('');
@@ -1254,7 +1192,7 @@ const App = () => {
   const [ppcStartWeek, setPpcStartWeek] = useState<string>('');
   const [ppcEndWeek, setPpcEndWeek] = useState<string>('');
 
-  // Estados para MÃºltiplos Projetos
+  // Estados para Múltiplos Projetos
   const [selectedProjectId, setSelectedProjectId] = useState<string>(() => {
     return localStorage.getItem('selected_project_id') || '';
   });
@@ -1267,7 +1205,7 @@ const App = () => {
   const [newProjImageUrl, setNewProjImageUrl] = useState<string>('');
   const [projectSearchQuery, setProjectSearchQuery] = useState<string>('');
 
-  // Estados para EdiÃ§Ã£o de Projetos
+  // Estados para Edição de Projetos
   const [editingProject, setEditingProject] = useState<any | null>(null);
   const [editProjName, setEditProjName] = useState<string>('');
   const [editProjArea, setEditProjArea] = useState<string>('');
@@ -1302,7 +1240,7 @@ const App = () => {
   const [draggedRowIdx, setDraggedRowIdx] = useState<number | null>(null);
   const [draggedRowMatrixId, setDraggedRowMatrixId] = useState<string | null>(null);
 
-  // AnÃ¡lise IA
+  // Análise IA
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const [aiAnalyzedWeekId, setAiAnalyzedWeekId] = useState<string>('');
@@ -1397,13 +1335,13 @@ const App = () => {
     setTeamGeneralObservations(initialGeneralObservations);
   }, [currentWeekStart, planning, isTeamMode, urlTeamName]);
 
-  // XLSX carregado via dependÃªncia do npm
+  // XLSX carregado via dependência do npm
 
   useEffect(() => {
     let unsubscribe = () => {};
     try {
       if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-        throw new Error('ConfiguraÃ§Ã£o do Firebase nÃ£o encontrada.');
+        throw new Error('Configuração do Firebase não encontrada.');
       }
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
@@ -1421,7 +1359,7 @@ const App = () => {
           }
         } catch (authErr) {
           console.error('Auth error:', authErr);
-          setNotification({ message: 'Falha na autenticaÃ§Ã£o do Firebase.', type: 'error' });
+          setNotification({ message: 'Falha na autenticação do Firebase.', type: 'error' });
           setLoading(false);
         }
       });
@@ -1433,12 +1371,12 @@ const App = () => {
     return () => unsubscribe();
   }, []);
 
-  // Aviso de alteraÃ§Ãµes pendentes ao fechar o navegador
+  // Aviso de alterações pendentes ao fechar o navegador
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (dbSavingStatus !== 'saved') {
         e.preventDefault();
-        e.returnValue = 'Existem alteraÃ§Ãµes pendentes que estÃ£o sendo salvas no banco de dados. Tem certeza de que deseja sair?';
+        e.returnValue = 'Existem alterações pendentes que estão sendo salvas no banco de dados. Tem certeza de que deseja sair?';
         return e.returnValue;
       }
     };
@@ -1478,7 +1416,7 @@ const App = () => {
             type: 'Obra',
             area: '24170.23',
             badges: ['WB', 'PE', 'PK', 'PE', 'RT', 'AO', 'GP', 'AS', 'LF'],
-            address: 'Rua Monsenhor Ivo Zanlorenzi, 1230 - MossunguÃª, Curitiba - PR',
+            address: 'Rua Monsenhor Ivo Zanlorenzi, 1230 - Mossunguê, Curitiba - PR',
             imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60'
           },
           {
@@ -1487,12 +1425,12 @@ const App = () => {
             type: 'Obra',
             area: '10984.93',
             badges: ['WB', 'EL', 'LR', 'PE', 'PK', 'PE', 'RT', 'RF', 'MB', 'GP', 'AS', 'dcfi', 'LF'],
-            address: 'Rua Bispo Dom JosÃ©, 2423 - Batel, Curitiba - PR',
+            address: 'Rua Bispo Dom José, 2423 - Batel, Curitiba - PR',
             imageUrl: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=600&auto=format&fit=crop&q=60'
           },
           {
             id: 'icaro_casa_terrea',
-            name: 'ÃCARO CASA TÃ‰RREA',
+            name: 'ÍCARO CASA TÉRREA',
             type: 'Obra',
             area: '53681.76',
             badges: ['WB', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'GP', 'AS', 'KF', 'LR', 'OB', 'AH', 'AS', 'dcfi', 'LF'],
@@ -1505,7 +1443,7 @@ const App = () => {
             type: 'Obra',
             area: '16777.23',
             badges: ['PF', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'JM', 'GP', 'AS', 'dcfi', 'LF'],
-            address: 'R. Buenos Aires, 572 - Ãgua Verde, Curitiba - PR',
+            address: 'R. Buenos Aires, 572 - Água Verde, Curitiba - PR',
             imageUrl: 'https://images.unsplash.com/photo-1582407947304-fd86f028f716?w=600&auto=format&fit=crop&q=60'
           },
           {
@@ -1514,7 +1452,7 @@ const App = () => {
             type: 'Obra',
             area: '24801.92',
             badges: ['AV', 'CS', 'PE', 'PK', 'WH', 'PE', 'Jd', 'MB', 'GP', 'dcfi', 'LF'],
-            address: 'R. Bom Jesus, 969 - JuvevÃª, Curitiba - PR',
+            address: 'R. Bom Jesus, 969 - Juvevê, Curitiba - PR',
             imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=600&auto=format&fit=crop&q=60'
           }
         ];
@@ -1525,7 +1463,7 @@ const App = () => {
     return () => unsubscribe();
   }, [db, userId]);
 
-  // Carrega as configuraÃ§Ãµes de acesso do Firestore
+  // Carrega as configurações de acesso do Firestore
   useEffect(() => {
     if (!db || !userId) return;
     const accessDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'access_control');
@@ -1565,11 +1503,11 @@ const App = () => {
     const user = newAccessUser.trim();
     if (!user) return;
     if (accessControl.users.map(u => u.toLowerCase()).includes(user.toLowerCase())) {
-      setNotification({ message: 'UsuÃ¡rio jÃ¡ cadastrado.', type: 'error' });
+      setNotification({ message: 'Usuário já cadastrado.', type: 'error' });
       return;
     }
     
-    // Associa o novo usuÃ¡rio a todas as obras existentes por padrÃ£o
+    // Associa o novo usuário a todas as obras existentes por padrão
     const updatedProjectAccess = { ...accessControl.projectAccess };
     projects.forEach(p => {
       const allowed = updatedProjectAccess[p.id] || [];
@@ -1632,14 +1570,14 @@ const App = () => {
     setPlannerUsername(trimmed);
     hasLoggedSession.current = true; // Evita registrar login duplo no useEffect
 
-    // Se o usuÃ¡rio for admin, nÃ£o cadastramos ele, mas registramos o log
+    // Se o usuário for admin, não cadastramos ele, mas registramos o log
     const isUserAdmin = trimmed.toLowerCase() === 'admin';
     const isAlreadyRegistered = accessControl.users.map(u => u.toLowerCase()).includes(trimmed.toLowerCase());
 
     let updatedUsers = [...accessControl.users];
     let updatedProjectAccess = { ...accessControl.projectAccess };
 
-    // Se for operador comum e nÃ£o registrado, cadastra e associa a todas as obras
+    // Se for operador comum e não registrado, cadastra e associa a todas as obras
     if (!isUserAdmin && !isAlreadyRegistered) {
       updatedUsers.push(trimmed);
       projects.forEach(p => {
@@ -1675,7 +1613,7 @@ const App = () => {
     }
   };
 
-  // Efeito para registrar o acesso de login automÃ¡tico persistido no localStorage
+  // Efeito para registrar o acesso de login automático persistido no localStorage
   useEffect(() => {
     if (!db || !userId || !plannerUsername || projects.length === 0 || accessControl.users.length === 0) return;
     if (hasLoggedSession.current) return;
@@ -1683,14 +1621,14 @@ const App = () => {
     hasLoggedSession.current = true;
     const trimmed = plannerUsername.trim();
     
-    // Se o usuÃ¡rio for admin, nÃ£o cadastramos ele na lista, mas registramos o log
+    // Se o usuário for admin, não cadastramos ele na lista, mas registramos o log
     const isUserAdmin = trimmed.toLowerCase() === 'admin';
     const isAlreadyRegistered = accessControl.users.map(u => u.toLowerCase()).includes(trimmed.toLowerCase());
 
     let updatedUsers = [...accessControl.users];
     let updatedProjectAccess = { ...accessControl.projectAccess };
 
-    // Se for operador comum e nÃ£o registrado, cadastra e associa a todas as obras
+    // Se for operador comum e não registrado, cadastra e associa a todas as obras
     if (!isUserAdmin && !isAlreadyRegistered) {
       updatedUsers.push(trimmed);
       projects.forEach(p => {
@@ -1734,12 +1672,10 @@ const App = () => {
     const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_crono`);
     const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_floors`);
     const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_planning`);
-    const ppcRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_ppc`);
 
     let hasLoadedCrono = false;
     let hasLoadedFloors = false;
     let hasLoadedPlanning = false;
-    let hasLoadedPpc = false;
 
     const unsubMeta = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
@@ -1787,12 +1723,11 @@ const App = () => {
         }
         setBudgetImportVersions(Array.isArray(loadedBudgetImportVersions) ? loadedBudgetImportVersions : []);
 
-        const loadedPpcHistory = parseStoredArray(d.ppcHistory);
-        if (!hasLoadedPpc) {
-          const mergedPpcHistory = mergePpcHistory(ppcHistoryRef.current, loadedPpcHistory);
-          ppcHistoryRef.current = mergedPpcHistory;
-          setPpcHistory(mergedPpcHistory);
+        let loadedPpcHistory = d.ppcHistory || [];
+        if (typeof loadedPpcHistory === 'string') {
+          try { loadedPpcHistory = JSON.parse(decompressIfNeeded(loadedPpcHistory)); } catch { loadedPpcHistory = []; }
         }
+        setPpcHistory(loadedPpcHistory);
 
         let loadedMatrices: any[] = d.matrices || [];
         if (typeof loadedMatrices === 'string') {
@@ -1856,12 +1791,6 @@ const App = () => {
             }
           }
           setPlanning(loadedPlanning);
-          const recoveredPpcHistory = derivePpcHistoryFromPlanning(loadedPlanning);
-          if (recoveredPpcHistory.length > 0) {
-            const mergedPpcHistory = mergePpcHistory(recoveredPpcHistory, ppcHistoryRef.current);
-            ppcHistoryRef.current = mergedPpcHistory;
-            setPpcHistory(mergedPpcHistory);
-          }
         }
       } else {
         saveToDB([], {}, [], {}, [], [], [], [], [], [], {}, targetId);
@@ -1922,23 +1851,6 @@ const App = () => {
           }
         }
         setPlanning(loadedPlanning);
-        const recoveredPpcHistory = derivePpcHistoryFromPlanning(loadedPlanning);
-        if (recoveredPpcHistory.length > 0) {
-          const mergedPpcHistory = mergePpcHistory(recoveredPpcHistory, ppcHistoryRef.current);
-          ppcHistoryRef.current = mergedPpcHistory;
-          setPpcHistory(mergedPpcHistory);
-        }
-      }
-    });
-
-    const unsubPpc = onSnapshot(ppcRef, (snap) => {
-      if (snap.exists()) {
-        hasLoadedPpc = true;
-        const d = snap.data();
-        const loadedPpcHistory = parseStoredArray(d.ppcHistory);
-        const mergedPpcHistory = mergePpcHistory(ppcHistoryRef.current, loadedPpcHistory);
-        ppcHistoryRef.current = mergedPpcHistory;
-        setPpcHistory(mergedPpcHistory);
       }
     });
 
@@ -1947,7 +1859,6 @@ const App = () => {
       unsubCrono();
       unsubFloors();
       unsubPlanning();
-      unsubPpc();
     };
   }, [db, userId, isTeamMode, urlUserId, selectedProjectId]);
 
@@ -2079,7 +1990,6 @@ const App = () => {
     const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_crono`);
     const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_floors`);
     const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_planning`);
-    const ppcRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_ppc`);
 
     const trimmedHistory = (hist || []).slice(-100);
     const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
@@ -2094,24 +2004,6 @@ const App = () => {
       const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
       const budgetDiffsStr = typeof bDiffs === 'string' ? bDiffs : JSON.stringify(Array.isArray(bDiffs) ? bDiffs.slice(-1200) : []);
       const budgetImportVersionsStr = typeof bImportVersions === 'string' ? bImportVersions : JSON.stringify(Array.isArray(bImportVersions) ? bImportVersions.slice(-2) : []);
-      let legacyPpcHistory: any[] = [];
-      let storedPpcHistory: any[] = [];
-      try {
-        const [metaSnap, ppcSnap] = await Promise.all([getDoc(docRef), getDoc(ppcRef)]);
-        if (metaSnap.exists()) {
-          legacyPpcHistory = parseStoredArray(metaSnap.data()?.ppcHistory);
-        }
-        if (ppcSnap.exists()) {
-          storedPpcHistory = parseStoredArray(ppcSnap.data()?.ppcHistory);
-        }
-      } catch (ppcReadError) {
-        console.error("PPC history read before save failed:", ppcReadError);
-      }
-      const recoveredPpcHistory = derivePpcHistoryFromPlanning(Array.isArray(plans) ? plans : []);
-      const mergedPpcHistory = mergePpcHistory(legacyPpcHistory, storedPpcHistory, recoveredPpcHistory, ppcHistoryRef.current, Array.isArray(ppcHist) ? ppcHist : []);
-      const ppcHistoryStr = JSON.stringify(mergedPpcHistory);
-      ppcHistoryRef.current = mergedPpcHistory;
-      setPpcHistory(mergedPpcHistory);
 
       await Promise.all([
         setDoc(docRef, {
@@ -2121,7 +2013,7 @@ const App = () => {
           teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
           teamPhones: tPhones || {},
           delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
-          ppcHistory: compressStringUnicode(ppcHistoryStr),
+          ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
           matrices: compressStringUnicode(matricesStr),
           projectCity: pCity || "Curitiba, PR",
           weatherApiKey: wApiKey || "",
@@ -2139,11 +2031,6 @@ const App = () => {
         }),
         setDoc(planningRef, {
           planning: compressStringUnicode(planningStr)
-        }),
-        setDoc(ppcRef, {
-          ppcHistory: compressStringUnicode(ppcHistoryStr),
-          lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
-          lastUpdated: new Date()
         })
       ]);
 
@@ -2167,7 +2054,7 @@ const App = () => {
     crono = cronogramaInicial,
     tms = teams,
     delays = delayReasons,
-    ppcHist = ppcHistoryRef.current,
+    ppcHist = ppcHistory,
     mats = matrices,
     tPhones = teamPhones,
     targetUserId = (urlUserId ? urlUserId : (selectedProjectId ? selectedProjectId : 'projeto_principal')),
@@ -2282,53 +2169,32 @@ const App = () => {
       if (isParentCronoItem(item)) parentByFamily.set(familyKey(item), item);
     });
 
-    const normalizeDependencyId = (value) => String(value || '').trim();
-    const getItemRefs = (item) => [item?.id, item?.originalId].map(normalizeDependencyId).filter(Boolean);
-    const completedRefs = new Set<string>();
     const successorIds = new Set<string>();
     planning
-      .filter(task => {
-        if (!task || task.weekId !== previousWeekIdForDrawer) return false;
-        const planned = task.plannedThisWeek ?? 100;
-        const progressed = task.progressThisWeek ?? 0;
-        return task.finalized || (planned > 0 && progressed >= planned);
-      })
+      .filter(task => task && task.weekId === previousWeekIdForDrawer && task.finalized)
       .forEach(task => {
         const cronoItem = cronogramaInicial.find(item => item.id === task.itemId);
         const parentItem = parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
-        [
-          task.itemId,
-          task.originalId,
-          ...(getItemRefs(cronoItem)),
-          ...(getItemRefs(parentItem))
-        ].forEach(id => {
-          const value = normalizeDependencyId(id);
-          if (value) completedRefs.add(value);
-        });
         const successors = [
           ...(task.successors || []),
           ...(cronoItem?.successors || []),
           ...(parentItem?.successors || [])
         ];
         successors.forEach(id => {
-          const value = normalizeDependencyId(id);
+          const value = String(id || '').trim();
           if (value) successorIds.add(value);
         });
       });
 
-    if (successorIds.size === 0 && completedRefs.size === 0) return [];
+    if (successorIds.size === 0) return [];
     const directSuccessorRefs = cronogramaInicial.filter(item => {
-      const candidates = getItemRefs(item);
-      const predecessors = (item.predecessors || []).map(normalizeDependencyId).filter(Boolean);
-      return candidates.some(id => successorIds.has(id)) || predecessors.some(id => completedRefs.has(id));
+      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
+      return candidates.some(id => successorIds.has(id));
     });
     const successorMacroKeys = new Set(directSuccessorRefs.map(item => `${item.floor}||${slugify(item.macro)}`));
     return openCronoItems.filter(item => {
-      const candidates = getItemRefs(item);
-      const predecessors = (item.predecessors || []).map(normalizeDependencyId).filter(Boolean);
-      return candidates.some(id => successorIds.has(id)) ||
-        predecessors.some(id => completedRefs.has(id)) ||
-        successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
+      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
+      return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
     });
   }, [cronogramaInicial, drawerSourceMode, planning, previousWeekIdForDrawer]);
 
@@ -2784,7 +2650,7 @@ const App = () => {
             macroDelta: initialProgress,
             macroPercent: initialProgress,
             isImported: true,
-            services: [{ name: 'AvanÃ§o inicial/importado', delta: initialProgress }]
+            services: [{ name: 'Avanço inicial/importado', delta: initialProgress }]
           });
         }
 
@@ -2817,7 +2683,7 @@ const App = () => {
     return result;
   }, [history, allFloorsData]);
 
-  // --- MemÃ³ria do Detalhamento PPC ---
+  // --- Memória do Detalhamento PPC ---
   const uniqueContractors = useMemo(() => {
     const set = new Set<string>();
     (teams || []).forEach(t => {
@@ -3187,7 +3053,7 @@ const App = () => {
     let nextGroupMacroOrder = 0;
 
     (cronogramaInicial || []).forEach((item, index) => {
-      const group = String(item?.replicationGroup || 'NÃ£o agrupado').trim() || 'NÃ£o agrupado';
+      const group = String(item?.replicationGroup || 'Não agrupado').trim() || 'Não agrupado';
       const macroKey = slugify(item?.macro || item?.sectionId || '');
       const compositeKey = `${item?.floor || ''}||${macroKey}||${item?.service || item?.activityName || ''}`.toLowerCase();
 
@@ -3216,7 +3082,7 @@ const App = () => {
       cronogramaOrderMap.byItemId.get(String(task?.itemId || '')) ||
       cronogramaOrderMap.byOriginalId.get(String(task?.originalId || '')) ||
       cronogramaOrderMap.byComposite.get(compositeKey);
-    const group = String(task?.replicationGroup || cronoItem?.replicationGroup || 'NÃ£o agrupado').trim() || 'NÃ£o agrupado';
+    const group = String(task?.replicationGroup || cronoItem?.replicationGroup || 'Não agrupado').trim() || 'Não agrupado';
     const resolvedMacroKey = slugify(cronoItem?.macro || task?.sectionId || task?.macro || '');
     const groupMacroKey = `${group}||${resolvedMacroKey}`;
 
@@ -3280,7 +3146,7 @@ const App = () => {
     return tasks.map(({ task }) => task);
   }, [weeklyTasks, planningSearch, planningTeamFilter, planningStatusFilter, planningSortKey, planningSortDir, cronogramaOrderMap]);
 
-  // --- Handlers de AÃ§Ãµes ---
+  // --- Handlers de Ações ---
   const handleGeneratePlanningFromBudgetDiffs = async () => {
     if (pendingBudgetDiffs.length === 0) {
       setNotification({ message: 'Nao ha diferencas de orcamento pendentes para aplicar.', type: 'error' });
@@ -3322,7 +3188,7 @@ const App = () => {
           ...task,
           progressThisWeek: Math.min(100, nextProgressThisWeek),
           budgetDiffIds: Array.from(new Set([...(task.budgetDiffIds || []), ...itemDiffIds])),
-          observations: task.observations || 'AvanÃ§o preenchido por diferenÃ§a entre versÃµes de orÃ§amento',
+          observations: task.observations || 'Avanço preenchido por diferença entre versões de orçamento',
           lastUpdatedBy: plannerUsername || 'Sistema'
         };
         mergedCount++;
@@ -3375,15 +3241,18 @@ const App = () => {
   };
 
   const handleClearProjectData = async () => {
+    const emptyFloors = [];
+    const emptyFloorsData = {};
     const emptyWeights = {};
     const preservedPlanningHistory = planning.filter(task => task?.finalized);
     const emptyCrono = [];
+    const emptyMatrices = [];
     const emptyBudgetDiffs = [];
     const emptyBudgetImportVersions = [];
 
     await saveToDB(
-      floors,
-      allFloorsData,
+      emptyFloors,
+      emptyFloorsData,
       history,
       emptyWeights,
       preservedPlanningHistory,
@@ -3391,7 +3260,7 @@ const App = () => {
       teams,
       delayReasons,
       ppcHistory,
-      matrices,
+      emptyMatrices,
       teamPhones,
       undefined,
       projectCity,
@@ -3402,21 +3271,26 @@ const App = () => {
       emptyBudgetImportVersions
     );
 
+    setFloors(emptyFloors);
+    setAllFloorsData(emptyFloorsData);
     setWeights(emptyWeights);
     setPlanning(preservedPlanningHistory);
     setCronogramaInicial(emptyCrono);
+    setMatrices(emptyMatrices);
     setBudgetDiffs(emptyBudgetDiffs);
     setBudgetImportVersions(emptyBudgetImportVersions);
-    setNotification({ message: 'Cronograma importado limpo sem apagar pavimentos, matriz ou historico semanal!', type: 'success' });
+    setActiveFloor('');
+    setSelectedDashboardFloor('');
+    setNotification({ message: 'Cronograma importado limpo sem apagar o histórico semanal!', type: 'success' });
   };
 
   const handleIncludeDrawerActivities = async () => {
     if (drawerSourceMode !== 'unfinished' && (!drawerMacro || drawerFloors.length === 0)) {
-      setNotification({ message: 'Selecione a Macroatividade, os Pavimentos e pelo menos um ServiÃ§o!', type: 'error' });
+      setNotification({ message: 'Selecione a Macroatividade, os Pavimentos e pelo menos um Serviço!', type: 'error' });
       return;
     }
     if (drawerSelectedServices.length === 0) {
-      setNotification({ message: 'Selecione pelo menos um ServiÃ§o!', type: 'error' });
+      setNotification({ message: 'Selecione pelo menos um Serviço!', type: 'error' });
       return;
     }
     const newTasks = [];
@@ -3441,7 +3315,7 @@ const App = () => {
       }
     });
 
-    if (duplicates.length > 0) setDrawerWarning(`âš ï¸ AtenÃ§Ã£o, jÃ¡ incluÃ­das nesta semana: ${duplicates.join('; ')}`);
+    if (duplicates.length > 0) setDrawerWarning(`⚠️ Atenção, já incluídas nesta semana: ${duplicates.join('; ')}`);
     else setDrawerWarning('');
 
     if (newTasks.length > 0) {
@@ -3449,13 +3323,13 @@ const App = () => {
       const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
       await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
       if (duplicates.length === 0) { setDrawerSelectedServices([]); setIsDrawerOpen(false); }
-      setNotification({ message: `${newTasks.length} Novas atividades adicionadas Ã  semana!`, type: 'success' });
+      setNotification({ message: `${newTasks.length} Novas atividades adicionadas à semana!`, type: 'success' });
     }
   };
 
   const handleAddManualActivity = async () => {
     if (!manualServiceName.trim()) {
-      setNotification({ message: 'Digite o nome do serviÃ§o!', type: 'error' });
+      setNotification({ message: 'Digite o nome do serviço!', type: 'error' });
       return;
     }
     if (!manualFloor) {
@@ -3467,7 +3341,7 @@ const App = () => {
     
     const exists = weeklyTasks.some(t => t.floor === manualFloor && t.activityName.trim().toUpperCase() === manualServiceName.trim().toUpperCase());
     if (exists) {
-      setNotification({ message: 'Esta atividade jÃ¡ estÃ¡ incluÃ­da para este pavimento na semana!', type: 'error' });
+      setNotification({ message: 'Esta atividade já está incluída para este pavimento na semana!', type: 'error' });
       return;
     }
 
@@ -3604,7 +3478,7 @@ const App = () => {
             carryOverTasks.push({
               ...t, id: crypto.randomUUID(), weekId: nextWeekId, executedBefore: finalProgress,
               plannedThisWeek: Math.max(0, 100 - finalProgress), progressThisWeek: 0,
-              observations: 'Saldo de avanÃ§o fÃ­sico reprogramado', delayReason: '', finalized: false
+              observations: 'Saldo de avanço físico reprogramado', delayReason: '', finalized: false
             });
           }
         }
@@ -3677,7 +3551,7 @@ const App = () => {
         setBudgetDiffs(updatedBudgetDiffs);
         setSelectedTaskIds([]);
         
-        // Recalcula o progresso fÃ­sico e sincroniza os dados
+        // Recalcula o progresso físico e sincroniza os dados
         const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
         setPlanning(recalculatedPlanning);
         setAllFloorsData(updatedFloorsData);
@@ -3690,7 +3564,7 @@ const App = () => {
   const handleVoiceInput = (taskId) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setNotification({ message: "Reconhecimento de voz nÃ£o suportado pelo seu navegador.", type: "error" });
+      setNotification({ message: "Reconhecimento de voz não suportado pelo seu navegador.", type: "error" });
       return;
     }
     const recognition = new SpeechRecognition();
@@ -3698,14 +3572,14 @@ const App = () => {
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
     setMicConnectingTaskId(taskId);
-    setNotification({ message: 'ðŸŽ™ï¸ Aguardando microfone... Fale APÃ“S o sinal e o aviso de ativo.', type: 'warning' });
+    setNotification({ message: '🎙️ Aguardando microfone... Fale APÓS o sinal e o aviso de ativo.', type: 'warning' });
     recognition.start();
     
     recognition.onstart = () => {
       setMicConnectingTaskId(null);
       setListeningTaskId(taskId);
       playBeep(600, 0.15);
-      setNotification({ message: 'ðŸŸ¢ Microfone ATIVO! Pode falar agora.', type: 'success' });
+      setNotification({ message: '🟢 Microfone ATIVO! Pode falar agora.', type: 'success' });
     };
 
     recognition.onresult = (event) => {
@@ -3716,7 +3590,7 @@ const App = () => {
       setListeningTaskId(null);
       setMicConnectingTaskId(null);
       playBeep(520, 0.12);
-      setNotification({ message: 'ObservaÃ§Ã£o ditada com sucesso!', type: 'success' });
+      setNotification({ message: 'Observação ditada com sucesso!', type: 'success' });
     };
     recognition.onerror = () => {
       setListeningTaskId(null);
@@ -3734,7 +3608,7 @@ const App = () => {
   const handleServiceComplementVoiceInput = (taskId) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setNotification({ message: "Reconhecimento de voz nÃ£o suportado pelo seu navegador.", type: "error" });
+      setNotification({ message: "Reconhecimento de voz não suportado pelo seu navegador.", type: "error" });
       return;
     }
     const recognition = new SpeechRecognition();
@@ -3742,14 +3616,14 @@ const App = () => {
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
     setMicConnectingComplementTaskId(taskId);
-    setNotification({ message: 'ðŸŽ™ï¸ Aguardando microfone... Fale APÃ“S o sinal e o aviso de ativo.', type: 'warning' });
+    setNotification({ message: '🎙️ Aguardando microfone... Fale APÓS o sinal e o aviso de ativo.', type: 'warning' });
     recognition.start();
     
     recognition.onstart = () => {
       setMicConnectingComplementTaskId(null);
       setListeningComplementTaskId(taskId);
       playBeep(600, 0.15);
-      setNotification({ message: 'ðŸŸ¢ Microfone ATIVO! Pode falar agora.', type: 'success' });
+      setNotification({ message: '🟢 Microfone ATIVO! Pode falar agora.', type: 'success' });
     };
 
     recognition.onresult = (event) => {
@@ -3764,7 +3638,7 @@ const App = () => {
       setListeningComplementTaskId(null);
       setMicConnectingComplementTaskId(null);
       playBeep(520, 0.12);
-      setNotification({ message: 'Complemento de serviÃ§o ditado com sucesso!', type: 'success' });
+      setNotification({ message: 'Complemento de serviço ditado com sucesso!', type: 'success' });
     };
     recognition.onerror = () => {
       setListeningComplementTaskId(null);
@@ -3782,7 +3656,7 @@ const App = () => {
   const handleTeamVoiceInput = (taskId) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setNotification({ message: "Reconhecimento de voz nÃ£o suportado pelo seu navegador.", type: "error" });
+      setNotification({ message: "Reconhecimento de voz não suportado pelo seu navegador.", type: "error" });
       return;
     }
     const recognition = new SpeechRecognition();
@@ -3790,14 +3664,14 @@ const App = () => {
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
     setMicConnectingTaskId(taskId);
-    setNotification({ message: 'ðŸŽ™ï¸ Aguardando microfone... Fale APÃ“S o sinal e o aviso de ativo.', type: 'warning' });
+    setNotification({ message: '🎙️ Aguardando microfone... Fale APÓS o sinal e o aviso de ativo.', type: 'warning' });
     recognition.start();
     
     recognition.onstart = () => {
       setMicConnectingTaskId(null);
       setListeningTaskId(taskId);
       playBeep(600, 0.15);
-      setNotification({ message: 'ðŸŸ¢ Microfone ATIVO! Pode falar agora.', type: 'success' });
+      setNotification({ message: '🟢 Microfone ATIVO! Pode falar agora.', type: 'success' });
     };
 
     recognition.onresult = (event) => {
@@ -3807,7 +3681,7 @@ const App = () => {
         setListeningTaskId(null);
         setMicConnectingTaskId(null);
         playBeep(520, 0.12);
-        setNotification({ message: 'ObservaÃ§Ã£o geral ditada com sucesso!', type: 'success' });
+        setNotification({ message: 'Observação geral ditada com sucesso!', type: 'success' });
         return;
       }
       setTeamInputs(prev => {
@@ -3822,7 +3696,7 @@ const App = () => {
       setListeningTaskId(null);
       setMicConnectingTaskId(null);
       playBeep(520, 0.12);
-      setNotification({ message: 'ObservaÃ§Ã£o ditada com sucesso!', type: 'success' });
+      setNotification({ message: 'Observação ditada com sucesso!', type: 'success' });
     };
     recognition.onerror = () => {
       setListeningTaskId(null);
@@ -3866,14 +3740,14 @@ const App = () => {
           for (let i = 0; i < Math.min(10, data.length); i++) {
             const rowStr = (data[i] || []).join('').toLowerCase();
             // Exclude 'id' to prevent matching rows above header containing 'unidade' (which contains 'id')
-            if (rowStr.includes('pacote de trabalho') || rowStr.includes('serviÃ§o') || rowStr.includes('macroatividade')) {
+            if (rowStr.includes('pacote de trabalho') || rowStr.includes('serviço') || rowStr.includes('macroatividade')) {
               headerIndex = i; 
               break;
             }
           }
 
           if (data.length <= headerIndex + 1) {
-            setNotification({ message: "NÃ£o hÃ¡ dados abaixo da linha de cabeÃ§alho.", type: "error" });
+            setNotification({ message: "Não há dados abaixo da linha de cabeçalho.", type: "error" });
             setIsImporting(false);
             setImportStatus('');
             return;
@@ -3884,26 +3758,26 @@ const App = () => {
           const progressColumn = findGroupedColumnIndex(
             headerRow,
             groupRow,
-            ['AvanÃ§o fÃ­sico (%)', 'Avanco fisico (%)'],
+            ['Avanço físico (%)', 'Avanco fisico (%)'],
             ['Realizado']
           );
           
           const colIdx = {
             id: findColumnIndex(headerRow, ['ID', 'Identificador']),
             macro: findColumnIndex(headerRow, ['Pacote de trabalho/tarefas', 'Pacote de trabalho', 'Macroatividade'], 2),
-            service: findColumnIndex(headerRow, ['ServiÃ§o', 'Servico'], 3),
-            replicationGroup: findColumnIndex(headerRow, ['Grupo de replicaÃ§Ã£o', 'Grupo de replicacao', 'Grupo Replicacao']),
-            floor: findColumnIndex(headerRow, ['Lote', 'Local do serviÃ§o', 'Local do servico'], 5),
-            duration: findColumnIndex(headerRow, ['DuraÃ§Ã£o', 'Duracao', 'Prazo', 'Dias'], 12),
-            start: findColumnIndex(headerRow, ['Data de InÃ­cio', 'Data de Inicio'], 10),
-            end: findColumnIndex(headerRow, ['Data de TÃ©rmino', 'Data de Termino'], 11),
+            service: findColumnIndex(headerRow, ['Serviço', 'Servico'], 3),
+            replicationGroup: findColumnIndex(headerRow, ['Grupo de replicação', 'Grupo de replicacao', 'Grupo Replicacao']),
+            floor: findColumnIndex(headerRow, ['Lote', 'Local do serviço', 'Local do servico'], 5),
+            duration: findColumnIndex(headerRow, ['Duração', 'Duracao', 'Prazo', 'Dias'], 12),
+            start: findColumnIndex(headerRow, ['Data de Início', 'Data de Inicio'], 10),
+            end: findColumnIndex(headerRow, ['Data de Término', 'Data de Termino'], 11),
             cost: findColumnIndex(headerRow, ['Custo Vinculado Atual'], 15),
-            responsible: findColumnIndex(headerRow, ['ResponsÃ¡veis', 'Responsaveis', 'ResponsÃ¡vel', 'Responsavel'], 14),
+            responsible: findColumnIndex(headerRow, ['Responsáveis', 'Responsaveis', 'Responsável', 'Responsavel'], 14),
             predecessors: findColumnIndex(headerRow, ['Predecessoras', 'Predecessores', 'Predecessora', 'Predecessor']),
             successors: findColumnIndex(headerRow, ['Sucessoras', 'Sucessores', 'Sucessora', 'Sucessor']),
             progress: progressColumn !== -1
               ? progressColumn
-              : findGroupedColumnIndex(headerRow, groupRow, ['Ãšltima MediÃ§Ã£o do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
+              : findGroupedColumnIndex(headerRow, groupRow, ['Última Medição do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
           };
 
           // Two-pass import: 1st pass collects all detail rows (with explicit service names).
@@ -3918,7 +3792,7 @@ const App = () => {
           const processRow = (row: any) => {
             if (!row || row.length === 0) return;
 
-            const rawFloor = colIdx.floor !== -1 && row[colIdx.floor] !== undefined ? String(row[colIdx.floor]).trim() : 'TÃ©rreo';
+            const rawFloor = colIdx.floor !== -1 && row[colIdx.floor] !== undefined ? String(row[colIdx.floor]).trim() : 'Térreo';
             const rawMacro = colIdx.macro !== -1 && row[colIdx.macro] !== undefined ? String(row[colIdx.macro]).trim() : 'ESTRUTURA';
             const rawReplicationGroup = colIdx.replicationGroup !== -1 && row[colIdx.replicationGroup] !== undefined ? String(row[colIdx.replicationGroup]).trim() : '';
             let rawService = colIdx.service !== -1 && row[colIdx.service] !== undefined ? String(row[colIdx.service]).trim() : '';
@@ -3930,7 +3804,7 @@ const App = () => {
             if (!rawService) return;
 
             const rawId = colIdx.id !== -1 && row[colIdx.id] !== undefined ? String(row[colIdx.id]).trim() : '';
-            const floorName = String(rawFloor || 'TÃ©rreo').trim();
+            const floorName = String(rawFloor || 'Térreo').trim();
             const itemKey = `xls_${slugify(floorName)}_${slugify(rawMacro)}_${slugify(rawService)}${rawId ? '_' + rawId : ''}`;
 
             if (seenItemKeys.has(itemKey)) return; // skip duplicates
@@ -3955,7 +3829,7 @@ const App = () => {
               id: itemKey,
               originalId: rawId,
               macro: String(rawMacro || 'ESTRUTURA').trim().toUpperCase(),
-              replicationGroup: String(rawReplicationGroup || 'NÃ£o agrupado').trim().toUpperCase(),
+              replicationGroup: String(rawReplicationGroup || 'Não agrupado').trim().toUpperCase(),
               floor: floorName,
               service: rawService.toUpperCase(),
               isParent,
@@ -4000,14 +3874,14 @@ const App = () => {
           });
 
           if (parsedItems.length === 0) {
-            setNotification({ message: "NÃ£o foi possÃ­vel extrair nenhum serviÃ§o.", type: "error" });
+            setNotification({ message: "Não foi possível extrair nenhum serviço.", type: "error" });
             setIsImporting(false);
             setImportStatus('');
             return;
           }
           
           if (parsedItems.length > 6000) {
-            setNotification({ message: `Limite de seguranÃ§a: Importados apenas os primeiros 6000 serviÃ§os.`, type: "error" });
+            setNotification({ message: `Limite de segurança: Importados apenas os primeiros 6000 serviços.`, type: "error" });
             parsedItems = parsedItems.slice(0, 6000);
           }
 
@@ -4116,7 +3990,7 @@ const App = () => {
             .then(() => {
               setBudgetDiffs(updatedBudgetDiffs);
               setBudgetImportVersions(updatedBudgetImportVersions);
-              setNotification({ message: `${parsedItems.length} atividades importadas. ${importedBudgetDiffs.length} diferenÃ§as registradas para o curto prazo.`, type: "success" });
+              setNotification({ message: `${parsedItems.length} atividades importadas. ${importedBudgetDiffs.length} diferenças registradas para o curto prazo.`, type: "success" });
               setActiveTab('planning');
             })
             .catch((err) => {
@@ -4230,7 +4104,7 @@ const App = () => {
   const handleAddTeam = async () => {
     if (!newTeamName.trim()) return;
     const upper = newTeamName.trim().toUpperCase();
-    if (teams.includes(upper)) { setNotification({ message: 'Equipe jÃ¡ existente.', type: 'error' }); return; }
+    if (teams.includes(upper)) { setNotification({ message: 'Equipe já existente.', type: 'error' }); return; }
     const updatedTeams = [...teams, upper];
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, updatedTeams, delayReasons, ppcHistory, matrices);
     setNewTeamName(''); setNotification({ message: 'Equipe adicionada!', type: 'success' });
@@ -4402,7 +4276,7 @@ const App = () => {
   .day-chip.off{background:#f1f5f9;color:#94a3b8}
   .empty-row td{text-align:center;color:#94a3b8;font-style:italic;padding:20px}
   
-  /* ConfiguraÃ§Ã£o de Larguras e Quebras de TÃ­tulo para Colunas de ImpressÃ£o */
+  /* Configuração de Larguras e Quebras de Título para Colunas de Impressão */
   .cn, .cb, .cp, .cpr, .cst, .ce {
     width: 1%;
   }
@@ -4457,21 +4331,21 @@ const App = () => {
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cd',this.checked)"> Dias Trabalhados</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cpr',this.checked)"> Progresso</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cdr',this.checked)"> Motivo de Atraso</label>
-      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> ObservaÃ§Ãµes</label>
+      <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('co',this.checked)"> Observações</label>
       <label class="col-toggle"><input type="checkbox" checked onchange="toggleCol('cst',this.checked)"> Status</label>
     </div>
     <div class="print-control">
       <span class="print-control-label">Filtrar Equipe:</span>
       <input class="print-input" type="text" id="teamFilter" placeholder="Buscar equipe..." oninput="onFilterChange()" style="width:160px" />
       <div class="team-picker" id="teamPicker">
-        <button type="button" class="team-picker-btn" onclick="toggleTeamPicker(event)"><span id="teamPickerLabel">Todas as equipes</span> â–¾</button>
+        <button type="button" class="team-picker-btn" onclick="toggleTeamPicker(event)"><span id="teamPickerLabel">Todas as equipes</span> ▾</button>
         <div class="team-picker-menu" id="teamPickerMenu"></div>
       </div>
     </div>
     <div class="print-control">
-      <span class="print-control-label">Texto do ServiÃ§o:</span>
+      <span class="print-control-label">Texto do Serviço:</span>
       <select class="print-select" id="serviceTextMode" onchange="onServiceModeChange()">
-        <option value="default">ServiÃ§o + Pavimento + Meta</option>
+        <option value="default">Serviço + Pavimento + Meta</option>
         <option value="whatsapp">Texto do WhatsApp</option>
       </select>
     </div>
@@ -4516,7 +4390,7 @@ const App = () => {
         </th>
         <th class="cpr" onclick="st('progressThisWeek')" style="text-align:center">Progresso<span class="si" id="si-progressThisWeek"></span></th>
         <th class="cdr" onclick="st('delayReason')">Motivo de Atraso<span class="si" id="si-delayReason"></span></th>
-        <th class="co">ObservaÃ§Ãµes</th>
+        <th class="co">Observações</th>
         <th class="cst" onclick="st('status')" style="text-align:center">Status<span class="si" id="si-status"></span></th>
       </tr>
     </thead>
@@ -4635,7 +4509,7 @@ function rt(){var sorted=allRows.slice();
     var sb=t.finalized?'<span class="badge badge-gray">Finalizado</span>':isOk?'<span class="badge badge-green">Conforme</span>':isDel?'<span class="badge badge-red">Atrasado</span>':'<span class="badge badge-gray">Pendente</span>';
     var comp=t.serviceComplement?'<div class="act-comp">'+t.serviceComplement+'</div>':'';
     var mb=t.isManual?' <span class="badge badge-amber">Extra</span>':'';
-    var serviceText=serviceTextMode==='whatsapp'?t.serviceInstruction:(t.activityName+' Â· '+(t.floor||'-')+' Â· meta '+planned+'%');
+    var serviceText=serviceTextMode==='whatsapp'?t.serviceInstruction:(t.activityName+' · '+(t.floor||'-')+' · meta '+planned+'%');
     var team=t.responsible||'-';
     var teamBg=tc(team);
     return '<tr class="'+rc+'">'+
@@ -4706,14 +4580,14 @@ rt();
     const teamTasks = planning.filter(t => t.weekId === weekId && t.responsible === teamName && !t.finalized);
     
     const taskLines = teamTasks.length === 0
-      ? 'Sem serviÃ§os planejados para esta semana.'
+      ? 'Sem serviços planejados para esta semana.'
       : teamTasks.map(t => {
           return `- ${getSimpleServiceInstruction(t)}.`;
         }).join('\n');
 
     const appUrl = `${window.location.origin}/?mode=team&u=${selectedProjectId || urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
 
-    return `Oi, equipe ${teamName}!\n\nServiÃ§os da semana (${dateRange}):\n${taskLines}\n\nApontamento de campo: ${appUrl}`;
+    return `Oi, equipe ${teamName}!\n\nServiços da semana (${dateRange}):\n${taskLines}\n\nApontamento de campo: ${appUrl}`;
   };
 
   const handleSendWhatsapp = () => {
@@ -4802,7 +4676,7 @@ rt();
     });
     setMatrices(updated);
     await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, updated);
-    // MantÃ©m a janela de seleÃ§Ã£o aberta para permitir adiÃ§Ãµes contÃ­nuas
+    // Mantém a janela de seleção aberta para permitir adições contínuas
   };
 
   const handleDragColStart = (e, matrixId, idx) => {
@@ -4864,7 +4738,7 @@ rt();
   };
 
   const handleExportCSV = () => {
-    const headers = ['Semana ID', 'Pavimento', 'Macroatividade', 'ServiÃ§o', 'ResponsÃ¡vel', 'Meta Planeada (%)', 'Dias Ativos', 'Progresso Semana (%)', 'Progresso Acumulado (%)', 'Motivo Atraso', 'ObservaÃ§Ãµes', 'Status'];
+    const headers = ['Semana ID', 'Pavimento', 'Macroatividade', 'Serviço', 'Responsável', 'Meta Planeada (%)', 'Dias Ativos', 'Progresso Semana (%)', 'Progresso Acumulado (%)', 'Motivo Atraso', 'Observações', 'Status'];
     const rows = filteredGiantPlanningTasks.map(t => [
       t?.weekId || '', t?.floor || '', (t?.sectionId || '').toUpperCase(), t?.activityName || '', t?.responsible || '',
       `${t?.plannedThisWeek ?? 100}%`,
@@ -4884,11 +4758,11 @@ rt();
 
   const triggerConfirm = (title, message, onConfirm) => setConfirmModal({ isOpen: true, title, message, onConfirm });
 
-  // --- AnÃ¡lise por IA ---
+  // --- Análise por IA ---
   const handleAIAnalysis = async () => {
     const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
     if (!GEMINI_API_KEY) {
-      setAiAnalysis('âš ï¸ **Chave de API nÃ£o configurada.**\n\nPara usar a anÃ¡lise por IA, adicione no arquivo `.env.local`:\n```\nVITE_GEMINI_API_KEY=sua_chave_aqui\n```\nObtenha sua chave gratuita em **aistudio.google.com** â†’ "Get API key".');
+      setAiAnalysis('⚠️ **Chave de API não configurada.**\n\nPara usar a análise por IA, adicione no arquivo `.env.local`:\n```\nVITE_GEMINI_API_KEY=sua_chave_aqui\n```\nObtenha sua chave gratuita em **aistudio.google.com** → "Get API key".');
       return;
     }
 
@@ -4898,7 +4772,7 @@ rt();
     const ppcRecord = ppcHistory.find(h => h.weekId === weekId);
 
     if (weekTasks.length === 0) {
-      setAiAnalysis('â„¹ï¸ Nenhuma atividade encontrada para a semana selecionada. Navegue para uma semana com atividades registradas.');
+      setAiAnalysis('ℹ️ Nenhuma atividade encontrada para a semana selecionada. Navegue para uma semana com atividades registradas.');
       return;
     }
 
@@ -4918,7 +4792,7 @@ rt();
     const tasksWithObs = weekTasks.filter(t => t.observations && t.observations.trim());
 
     const delaySummary = tasksWithDelay
-      .map(t => `- ${t.activityName} (${t.floor}): meta ${t.plannedThisWeek ?? 100}%, realizado ${t.progressThisWeek ?? 0}%${t.delayReason ? ` â€” Motivo: ${t.delayReason}` : ''}`)
+      .map(t => `- ${t.activityName} (${t.floor}): meta ${t.plannedThisWeek ?? 100}%, realizado ${t.progressThisWeek ?? 0}%${t.delayReason ? ` — Motivo: ${t.delayReason}` : ''}`)
       .slice(0, 15).join('\n');
 
     const okSummary = tasksOk
@@ -4933,27 +4807,27 @@ rt();
     weekTasks.forEach(t => { if (t.delayReason) delayCounts[t.delayReason] = (delayCounts[t.delayReason] || 0) + 1; });
     const topDelays = Object.entries(delayCounts).sort((a, b) => b[1] - a[1]).map(([r, c]) => `${r} (${c}x)`).join(', ');
 
-    const prompt = `VocÃª Ã© um consultor sÃªnior de gestÃ£o de obras e projetos de construÃ§Ã£o civil. Analise os dados da semana de obra abaixo e gere um relatÃ³rio gerencial completo em portuguÃªs do Brasil.
+    const prompt = `Você é um consultor sênior de gestão de obras e projetos de construção civil. Analise os dados da semana de obra abaixo e gere um relatório gerencial completo em português do Brasil.
 
 **DADOS DA SEMANA: ${dateRange}**
 - Status: ${isFinalized ? 'SEMANA FINALIZADA' : 'SEMANA EM ANDAMENTO'}
-- PPC (Percentual de Planos ConcluÃ­dos): ${ppcVal}%
+- PPC (Percentual de Planos Concluídos): ${ppcVal}%
 - Atividades planejadas: ${totalPlanned}
-- Atividades concluÃ­das conforme meta: ${totalCompleted}
+- Atividades concluídas conforme meta: ${totalCompleted}
 
 **ATIVIDADES COM DESVIO OU ATRASO (${tasksWithDelay.length} itens):**
 ${delaySummary || 'Nenhum desvio registrado.'}
 
-**ATIVIDADES CONCLUÃDAS NO PRAZO (${tasksOk.length} itens):**
-${okSummary || 'Nenhuma atividade concluÃ­da.'}
+**ATIVIDADES CONCLUÍDAS NO PRAZO (${tasksOk.length} itens):**
+${okSummary || 'Nenhuma atividade concluída.'}
 
 **PRINCIPAIS CAUSAS DE ATRASO:**
 ${topDelays || 'Nenhuma causa registrada.'}
 
-**OBSERVAÃ‡Ã•ES DE CAMPO:**
-${obsSummary || 'Nenhuma observaÃ§Ã£o registrada.'}
+**OBSERVAÇÕES DE CAMPO:**
+${obsSummary || 'Nenhuma observação registrada.'}
 
-Gere um relatÃ³rio com as seguintes seÃ§Ãµes:
+Gere um relatório com as seguintes seções:
 
 ## Resumo Executivo
 (2-3 frases sobre o desempenho geral da semana)
@@ -4962,15 +4836,15 @@ Gere um relatÃ³rio com as seguintes seÃ§Ãµes:
 (lista com o que foi bem executado)
 
 ## Problemas e Riscos Identificados
-(anÃ¡lise dos desvios, causas provÃ¡veis e impactos)
+(análise dos desvios, causas prováveis e impactos)
 
-## ObservaÃ§Ãµes de Campo
-(anÃ¡lise das observaÃ§Ãµes registradas, se houver)
+## Observações de Campo
+(análise das observações registradas, se houver)
 
-## RecomendaÃ§Ãµes para a PrÃ³xima Semana
-(aÃ§Ãµes concretas e priorizadas)
+## Recomendações para a Próxima Semana
+(ações concretas e priorizadas)
 
-Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ¡ximo de 500 palavras.`;
+Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máximo de 500 palavras.`;
 
     let text = '';
     let lastError: any = null;
@@ -5026,7 +4900,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         updateDoc(docRef, { aiAnalyses: compressStringUnicode(JSON.stringify(newCache)) }).catch(console.error);
       }
     } catch (e: any) {
-      setAiAnalysis(`âŒ **Erro ao chamar a API:** ${e.message}\n\nVerifique sua chave de API em \`VITE_GEMINI_API_KEY\` no arquivo \`.env.local\`.`);
+      setAiAnalysis(`❌ **Erro ao chamar a API:** ${e.message}\n\nVerifique sua chave de API em \`VITE_GEMINI_API_KEY\` no arquivo \`.env.local\`.`);
     } finally {
       setAiLoading(false);
     }
@@ -5050,11 +4924,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
     }
   }, [currentWeekStart, planning, aiAnalysesHistory, aiLoading, aiAnalyzedWeekId]);
 
-  // --- SecÃ§Ãµes de RenderizaÃ§Ã£o Isoladas (Para evitar falhas do compilador) ---
+  // --- Secções de Renderização Isoladas (Para evitar falhas do compilador) ---
   
   const renderDashboard = () => {
     const MONTHS_PT = [
-      'janeiro', 'fevereiro', 'marÃ§o', 'abril', 'maio', 'junho',
+      'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
       'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'
     ];
     const analysisMonth = MONTHS_PT[currentWeekStart.getMonth()];
@@ -5069,9 +4943,9 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Top Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          <StatCard title="AvanÃ§o FÃ­sico Real" value={`${overallActual.toFixed(2)}%`} color="bg-emerald-600" />
-          <StatCard title="Meta Semanal Ativa" value={`${weeklyTasks.length} ServiÃ§os`} color="bg-indigo-600" />
-          <StatCard title="MÃ©dia de PPC" value={ppcHistory.length > 0 ? `${(ppcHistory.reduce((a, b) => a + b.ppc, 0) / ppcHistory.length).toFixed(1)}%` : '0.0%'} color="bg-cyan-600" />
+          <StatCard title="Avanço Físico Real" value={`${overallActual.toFixed(2)}%`} color="bg-emerald-600" />
+          <StatCard title="Meta Semanal Ativa" value={`${weeklyTasks.length} Serviços`} color="bg-indigo-600" />
+          <StatCard title="Média de PPC" value={ppcHistory.length > 0 ? `${(ppcHistory.reduce((a, b) => a + b.ppc, 0) / ppcHistory.length).toFixed(1)}%` : '0.0%'} color="bg-cyan-600" />
           <StatCard title="Equipes Registradas" value={`${teams.length} Grupos`} color="bg-slate-800" />
         </div>
 
@@ -5081,23 +4955,23 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-4 gap-4">
             <div>
               <h2 className="text-xl font-black text-slate-800 tracking-tight">
-                SituaÃ§Ã£o da obra em <span className="text-blue-600 capitalize">{analysisMonth}</span>
+                Situação da obra em <span className="text-blue-600 capitalize">{analysisMonth}</span>
               </h2>
               <p className="text-xs text-slate-500 mt-1 uppercase font-bold tracking-wider">
-                Mapeamento FÃ­sico Semanal por Pavimento e Pacote
+                Mapeamento Físico Semanal por Pavimento e Pacote
               </p>
             </div>
 
               {/* Week Navigation */}
               <div className="flex items-center space-x-2 bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
-                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">â—€</button>
+                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">◀</button>
                 <div className="text-center min-w-[160px]">
                   <div className="text-[8px] uppercase font-black text-slate-400">Semana Ativa</div>
                   <div className="text-xs font-black text-slate-700">
                     {currentWeekStart.toLocaleDateString('pt-BR')} - {new Date(currentWeekStart.getTime() + 4*86400000).toLocaleDateString('pt-BR')}
                   </div>
                 </div>
-                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">â–¶</button>
+                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">▶</button>
               </div>
             </div>
 
@@ -5106,7 +4980,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               <div className="p-5 flex justify-between items-center border-b border-slate-100 bg-slate-50/50">
                 <div className="flex items-center gap-3">
                   <div>
-                    <h3 className="text-sm font-black text-slate-800 tracking-tight uppercase">AnÃ¡lise da semana</h3>
+                    <h3 className="text-sm font-black text-slate-800 tracking-tight uppercase">Análise da semana</h3>
                     <p className="text-[10px] text-slate-500 mt-0.5 font-bold">
                       Gerada automaticamente
                     </p>
@@ -5118,7 +4992,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       onClick={() => handleAIAnalysis()}
                       className="text-[9px] font-black uppercase text-indigo-700 hover:text-white bg-indigo-50 hover:bg-indigo-600 border border-indigo-200 hover:border-indigo-600 px-3 py-1.5 rounded-lg transition duration-200 flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
                     >
-                      ðŸ”„ Reavaliar semana
+                      🔄 Reavaliar semana
                     </button>
                   )}
                   {(() => {
@@ -5126,11 +5000,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     const isFinalized = planning.some(t => t.weekId === weekId && t.finalized);
                     return isFinalized ? (
                       <span className="text-[9px] font-black uppercase text-emerald-700 bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1">
-                        <span>ðŸ”’</span> Salvo no histÃ³rico
+                        <span>🔒</span> Salvo no histórico
                       </span>
                     ) : (
                       <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-100 border border-amber-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1">
-                        <span>âš¡</span> AnÃ¡lise em tempo real
+                        <span>⚡</span> Análise em tempo real
                       </span>
                     );
                   })()}
@@ -5174,7 +5048,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       if (line.startsWith('- ') || line.startsWith('* ')) {
                         return (
                           <div key={i} className="flex gap-2 text-slate-600 text-xs items-start">
-                            <span className="text-indigo-500 mt-0.5 shrink-0 text-[10px]">â– </span>
+                            <span className="text-indigo-500 mt-0.5 shrink-0 text-[10px]">■</span>
                             <span dangerouslySetInnerHTML={{ __html: line.replace(/^[-*]\s/, '').replace(/\*\*(.*?)\*\*/g, '<strong class="text-slate-900">$1</strong>') }}/>
                           </div>
                         );
@@ -5195,8 +5069,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         {/* Bottom charts (PPC & Delay analysis) */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
-            <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">EvoluÃ§Ã£o do PPC</h3>
-            <p className="text-[10px] text-slate-500 mb-4">Percentual de Planos ConcluÃ­dos ao longo das semanas.</p>
+            <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Evolução do PPC</h3>
+            <p className="text-[10px] text-slate-500 mb-4">Percentual de Planos Concluídos ao longo das semanas.</p>
             <div className="relative flex-1 flex items-end gap-2 pb-6 px-2 min-h-[200px]">
               <div className="absolute left-0 right-0 bottom-6 top-0 pointer-events-none">
                 <div className="absolute w-full border-t-2 border-dashed border-emerald-400 z-0" style={{ bottom: '75%' }}>
@@ -5226,7 +5100,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
 
           <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
             <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Principais Causas de Atraso (Top 5)</h3>
-            <p className="text-[10px] text-slate-500 mb-4">FrequÃªncia e percentual acumulado dos motivos de desvio.</p>
+            <p className="text-[10px] text-slate-500 mb-4">Frequência e percentual acumulado dos motivos de desvio.</p>
             <div className="flex-1 flex flex-col justify-center">
               {delayStats.length === 0 ? (
                 <div className="w-full flex items-center justify-center text-slate-400 text-xs italic h-full">Nenhum atraso com motivo registrado.</div>
@@ -5236,7 +5110,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     <div key={i} className="relative">
                       <div className="flex justify-between text-[10px] font-bold mb-1">
                         <span className="text-slate-700 truncate pr-2" title={d.reason}>{d.reason}</span>
-                        <span className="text-rose-600 whitespace-nowrap">{d.count} ocorrÃªncia(s) ({d.cumulativePercent.toFixed(1)}% acum.)</span>
+                        <span className="text-rose-600 whitespace-nowrap">{d.count} ocorrência(s) ({d.cumulativePercent.toFixed(1)}% acum.)</span>
                       </div>
                       <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden relative">
                         <div className="bg-rose-500 h-full rounded-full transition-all" style={{ width: `${d.percent}%` }}></div>
@@ -5257,24 +5131,24 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
           <div>
-            <h2 className="text-lg font-black text-indigo-900 uppercase tracking-tight mb-1">ImportaÃ§Ã£o Directa de Planilha</h2>
+            <h2 className="text-lg font-black text-indigo-900 uppercase tracking-tight mb-1">Importação Directa de Planilha</h2>
             <p className="text-xs text-slate-500">Envie o arquivo de planejamento gerado pelo seu software (Excel ou CSV).</p>
           </div>
           <button 
             onClick={() => triggerConfirm(
               'Limpar Banco de Dados', 
-              'Deseja limpar o cronograma importado, planejamento aberto, pesos e diferencas de orcamento? Pavimentos, matriz, historico semanal e PPC serao preservados.', 
+              'Deseja limpar o cronograma importado, planejamento aberto, pesos, paineis e diferencas de orcamento? O historico semanal e o PPC serao preservados.', 
               handleClearProjectData
             )}
             className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-black rounded-xl text-xs uppercase tracking-wider transition active:scale-95 whitespace-nowrap"
           >
-            ðŸ—‘ï¸ Limpar BD
+            🗑️ Limpar BD
           </button>
         </div>
-        <p className="text-xs text-slate-500 mb-6">O sistema localiza automaticamente os cabeÃ§alhos (ex: Linha 4) e mapeia colunas como "Pacote de trabalho", "Lote" e "ServiÃ§o".</p>
+        <p className="text-xs text-slate-500 mb-6">O sistema localiza automaticamente os cabeçalhos (ex: Linha 4) e mapeia colunas como "Pacote de trabalho", "Lote" e "Serviço".</p>
         <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 bg-slate-50 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500 transition relative">
           <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-          <span className="text-4xl mb-2">ðŸ“Š</span>
+          <span className="text-4xl mb-2">📊</span>
           <p className="text-xs font-black text-slate-700">CLIQUE OU ARRASTE O SEU EXCEL AQUI</p>
           <p className="text-[10px] text-slate-400 mt-1 uppercase">Aceita formatos .xlsx, .xls ou .csv</p>
         </div>
@@ -5308,11 +5182,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         {/* Filter Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
           <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">ðŸ” Pesquisa</label>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
             <input
               type="text"
               className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
-              placeholder="ServiÃ§o, macro, equipe..."
+              placeholder="Serviço, macro, equipe..."
               value={cronoSearch}
               onChange={e => setCronoSearch(e.target.value)}
             />
@@ -5347,9 +5221,9 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               onChange={e => setCronoProgressFilter(e.target.value)}
             >
               <option value="">-- Todos --</option>
-              <option value="notstarted">â¬œ NÃ£o iniciado (0%)</option>
-              <option value="inprogress">ðŸ”µ Em andamento</option>
-              <option value="done">âœ… ConcluÃ­do (100%)</option>
+              <option value="notstarted">⬜ Não iniciado (0%)</option>
+              <option value="inprogress">🔵 Em andamento</option>
+              <option value="done">✅ Concluído (100%)</option>
             </select>
           </div>
         </div>
@@ -5361,7 +5235,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 {[
                   { label: 'Etapa (Macro)', key: 'macro' },
                   { label: 'Pavimento (Lote)', key: 'floor' },
-                  { label: 'ServiÃ§o', key: 'service' },
+                  { label: 'Serviço', key: 'service' },
                   { label: 'Dias', key: 'duration', center: true },
                   { label: 'Fim Planeado', key: 'end', center: true },
                   { label: 'Realizado', key: 'progress', center: true },
@@ -5389,7 +5263,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       {label}
                       {key && (
                         <span className={`text-[10px] transition-opacity ${cronoSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
-                          {cronoSortKey === key ? (cronoSortDir === 'asc' ? 'â–²' : 'â–¼') : 'â‡•'}
+                          {cronoSortKey === key ? (cronoSortDir === 'asc' ? '▲' : '▼') : '⇕'}
                         </span>
                       )}
                     </span>
@@ -5470,13 +5344,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
       <div className="bg-gradient-to-r from-indigo-900 to-slate-900 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
         <div className="space-y-2">
           <span className="px-3 py-1 bg-indigo-800 text-[10px] font-black tracking-wider uppercase rounded-full border border-indigo-700 text-indigo-300">KPI Produtividade</span>
-          <h2 className="text-xl font-black">PPC - Percentual de Planos ConcluÃ­dos</h2>
-          <p className="text-xs text-indigo-200">Percentual de serviÃ§os planejados executados integralmente conforme a meta semanal ativa.</p>
+          <h2 className="text-xl font-black">PPC - Percentual de Planos Concluídos</h2>
+          <p className="text-xs text-indigo-200">Percentual de serviços planejados executados integralmente conforme a meta semanal ativa.</p>
         </div>
         <div className="flex items-center space-x-6">
           <div className="text-center bg-indigo-950/50 p-4 rounded-xl border border-indigo-800">
             <div className="text-3xl font-black text-emerald-400">{currentWeekPpcStats.percent.toFixed(1)}%</div>
-            <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-tight mt-1">{currentWeekPpcStats.completedCount} de {currentWeekPpcStats.totalPlannedCount} ConcluÃ­dos</div>
+            <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-tight mt-1">{currentWeekPpcStats.completedCount} de {currentWeekPpcStats.totalPlannedCount} Concluídos</div>
           </div>
         </div>
       </div>
@@ -5484,21 +5358,21 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
       <div className="bg-white p-4 rounded-2xl shadow-md border border-slate-200">
         <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
           <div className="flex items-center space-x-2 bg-slate-100 p-1.5 rounded-xl">
-            <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">â—€</button>
+            <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">◀</button>
             <div className="text-center min-w-[180px]">
               <div className="text-[9px] uppercase font-bold text-slate-500">Semana Selecionada</div>
               <div className="text-xs font-black text-indigo-900">{currentWeekStart.toLocaleDateString()} - {new Date(currentWeekStart.getTime() + 4*86400000).toLocaleDateString()}</div>
             </div>
-            <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">â–¶</button>
+            <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">▶</button>
           </div>
           <div className="flex gap-2 w-full md:w-auto flex-wrap">
             {weeklyTasks.length > 0 && (
               <button
                 onClick={handlePrintPlanning}
                 className="flex-1 md:flex-none px-4 py-3 bg-slate-700 hover:bg-slate-800 border border-slate-600 text-white font-black rounded-xl shadow-sm transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"
-                title="Abrir visualizaÃ§Ã£o de impressÃ£o da tabela atual"
+                title="Abrir visualização de impressão da tabela atual"
               >
-                <span>ðŸ–¨ï¸</span> ImpressÃ£o
+                <span>🖨️</span> Impressão
               </button>
             )}
             {teams.length > 0 && weeklyTasks.length > 0 && (
@@ -5506,7 +5380,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 onClick={openWhatsappShareModal}
                 className="flex-1 md:flex-none px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 hover:border-indigo-300 text-indigo-700 font-black rounded-xl shadow-sm transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"
               >
-                <span>ðŸ’¬</span> WhatsApp
+                <span>💬</span> WhatsApp
               </button>
             )}
             <button
@@ -5518,10 +5392,10 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               <span>Delta</span> Gerar por Dif. {pendingBudgetDiffs.length > 0 ? `(${pendingBudgetDiffs.length})` : ''}
             </button>
             <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
-              <span>ðŸ</span> Finalizar Semana
+              <span>🏁</span> Finalizar Semana
             </button>
             <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
-              <span>âž•</span> Adicionar Atividades
+              <span>➕</span> Adicionar Atividades
             </button>
           </div>
         </div>
@@ -5529,11 +5403,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         {/* Planning Filter Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
           <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">ðŸ” Pesquisa</label>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
             <input
               type="text"
               className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
-              placeholder="Atividade, pavimento, observaÃ§Ã£o..."
+              placeholder="Atividade, pavimento, observação..."
               value={planningSearch}
               onChange={e => setPlanningSearch(e.target.value)}
             />
@@ -5557,9 +5431,9 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               onChange={e => setPlanningStatusFilter(e.target.value)}
             >
               <option value="">-- Todos --</option>
-              <option value="ok">âœ… Conforme</option>
-              <option value="delayed">âš ï¸ Com Atraso</option>
-              <option value="finalized">ðŸ”’ Finalizado</option>
+              <option value="ok">✅ Conforme</option>
+              <option value="delayed">⚠️ Com Atraso</option>
+              <option value="finalized">🔒 Finalizado</option>
             </select>
           </div>
         </div>
@@ -5569,17 +5443,17 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             <thead className="sticky top-[118px] z-20 bg-slate-800">
               <tr className="bg-slate-800 text-white uppercase text-[9px] tracking-tight">
                 {[
-                  { label: 'ServiÃ§o / Pavimento', key: 'activityName', cls: 'w-108' },
-                  { label: 'ResponsÃ¡vel / Equipe', key: 'responsible', cls: 'w-24 text-center' },
+                  { label: 'Serviço / Pavimento', key: 'activityName', cls: 'w-108' },
+                  { label: 'Responsável / Equipe', key: 'responsible', cls: 'w-24 text-center' },
                   { label: 'Efetivo', key: 'efetivo', cls: 'w-9 text-center' },
                   { label: 'Meta Planeada', key: 'plannedThisWeek', cls: 'text-center w-32 bg-slate-900' },
                   { label: 'Dias de Trabalho', key: null, cls: 'text-center w-32', isWeather: true },
                   { label: 'Progresso da Semana', key: 'progressThisWeek', cls: 'text-center w-32' },
                   { label: 'Motivo de Atraso', key: null, cls: 'text-center w-18' },
-                  { label: 'ObservaÃ§Ãµes', key: null, cls: 'w-20' },
-                  { label: 'AÃ§Ã£o', key: null, cls: 'text-center w-10' },
+                  { label: 'Observações', key: null, cls: 'w-20' },
+                  { label: 'Ação', key: null, cls: 'text-center w-10' },
                 ].map((col) => {
-                  if (col.label === 'AÃ§Ã£o') {
+                  if (col.label === 'Ação') {
                     return (
                       <th key={col.label} className={`p-2 border-r border-slate-700 text-center sticky top-[118px] z-20 bg-slate-800 ${col.cls}`}>
                         <div className="flex items-center justify-center gap-2">
@@ -5602,7 +5476,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                             className="text-red-400 hover:text-red-500 font-bold text-sm disabled:opacity-30 cursor-pointer transition-opacity"
                             title="Excluir selecionados"
                           >
-                            ðŸ—‘ï¸
+                            🗑️
                           </button>
                         </div>
                       </th>
@@ -5627,8 +5501,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                               const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
                               const weather = isWithinRange ? weatherCache[cacheKey] : null;
                               
-                              const weatherEmoji = isWithinRange && weather ? getWeatherEmoji(weather.icon) : (isWithinRange && weatherLoading ? 'â³' : '');
-                              const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}Â°C - ${weather.tempMax}Â°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
+                              const weatherEmoji = isWithinRange && weather ? getWeatherEmoji(weather.icon) : (isWithinRange && weatherLoading ? '⏳' : '');
+                              const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                               
                               return (
                                 <div key={idx} className="flex flex-col items-center w-6 group relative cursor-help" title={`${dayChar} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
@@ -5656,7 +5530,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                         {col.label}
                         {col.key && (
                           <span className={`text-[10px] ${planningSortKey === col.key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
-                            {planningSortKey === col.key ? (planningSortDir === 'asc' ? 'â–²' : 'â–¼') : 'â‡•'}
+                            {planningSortKey === col.key ? (planningSortDir === 'asc' ? '▲' : '▼') : '⇕'}
                           </span>
                         )}
                       </span>
@@ -5677,7 +5551,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   <tr key={t.id} className={`hover:bg-slate-50 transition ${t.finalized ? 'bg-slate-100/70 opacity-75' : showDelayAlert && (progVal > 0 || currentPlan > 0) ? 'bg-red-50/40' : ''}`}>
                     <td className="p-3 border-r">
                       <div className="flex items-start space-x-1.5">
-                        {t.finalized && <span className="text-[10px] text-slate-500 mt-0.5" title="Semana Finalizada">ðŸ”’</span>}
+                        {t.finalized && <span className="text-[10px] text-slate-500 mt-0.5" title="Semana Finalizada">🔒</span>}
                         {t.isManual && (
                           <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
                             Extra
@@ -5704,7 +5578,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       </div>
                       {(t.serviceComplement || editingComplementTaskId === t.id) && (
                         <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mt-1.5 flex items-center gap-1">
-                          <span className="text-indigo-550 font-black">â†³</span>
+                          <span className="text-indigo-550 font-black">↳</span>
                           <input
                             type="text"
                             disabled={t.finalized}
@@ -5744,7 +5618,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                                   : "Ditar complemento"
                               }
                             >
-                              ðŸŽ™ï¸
+                              🎙️
                             </button>
                           )}
                           {!t.finalized && t.serviceComplement && (
@@ -5769,7 +5643,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                         <div className="text-[10px] font-black uppercase text-slate-800 leading-tight whitespace-normal break-words text-center pr-3">
                           {t.responsible || '-- ESCOLHA --'}
                         </div>
-                        <div className="absolute right-1 text-[8px] text-slate-500 pointer-events-none">â–¼</div>
+                        <div className="absolute right-1 text-[8px] text-slate-500 pointer-events-none">▼</div>
                         <select
                           disabled={t.finalized}
                           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
@@ -5816,7 +5690,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                               key={val}
                               disabled={t.finalized}
                               onClick={() => handlePlannedChange(t.id, val)}
-                              title={isExecuted && !isPlanned ? `${formatPercentBR(execBeforeReal)} jÃ¡ medido` : `Planejar ${val}%`}
+                              title={isExecuted && !isPlanned ? `${formatPercentBR(execBeforeReal)} já medido` : `Planejar ${val}%`}
                               className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
                             >{val}%</button>
                           );
@@ -5855,8 +5729,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                           })}
                         </div>
                         {t.preFilledProgress !== undefined && (
-                          <div className="text-[8px] font-black text-purple-700 uppercase tracking-tight bg-purple-100/70 border border-purple-200 px-1.5 py-0.5 rounded-md flex items-center gap-0.5 mt-0.5" title={`SugestÃ£o da equipe enviada em ${t.preFilledAt || ''}`}>
-                            <span>ðŸ“² Sugerido: {t.preFilledProgress}%</span>
+                          <div className="text-[8px] font-black text-purple-700 uppercase tracking-tight bg-purple-100/70 border border-purple-200 px-1.5 py-0.5 rounded-md flex items-center gap-0.5 mt-0.5" title={`Sugestão da equipe enviada em ${t.preFilledAt || ''}`}>
+                            <span>📲 Sugerido: {t.preFilledProgress}%</span>
                           </div>
                         )}
                       </div>
@@ -5866,27 +5740,27 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                         <div className="space-y-1">
                           <div className="relative w-full min-h-[32px] flex items-center justify-center bg-red-100/80 border border-red-200 rounded-lg py-1 px-1.5 hover:bg-red-200/80 transition-colors">
                             <div className="text-[9px] font-black uppercase text-red-800 leading-tight whitespace-normal break-words text-center pr-3">
-                              {t.delayReason || 'âš ï¸ MOTIVO...'}
+                              {t.delayReason || '⚠️ MOTIVO...'}
                             </div>
-                            <div className="absolute right-1 text-[7px] text-red-600 pointer-events-none">â–¼</div>
+                            <div className="absolute right-1 text-[7px] text-red-600 pointer-events-none">▼</div>
                             <select
                               disabled={t.finalized}
                               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                               value={t.delayReason || ''}
                               onChange={e => handleUpdateTaskField(t.id, 'delayReason', e.target.value)}
                             >
-                              <option value="">âš ï¸ Motivo...</option>
+                              <option value="">⚠️ Motivo...</option>
                               {delayReasons.map(r => <option key={r} value={r}>{r}</option>)}
                             </select>
                           </div>
                           {t.preFilledDelayReason && (
                             <div className="text-[8px] text-purple-600 font-bold italic leading-tight text-left pl-1">
-                              ðŸ“² Sugerido: "{t.preFilledDelayReason}"
+                              📲 Sugerido: "{t.preFilledDelayReason}"
                             </div>
                           )}
                         </div>
                       ) : (
-                        <span className="text-[10px] font-bold text-emerald-600">âœ“ Conforme</span>
+                        <span className="text-[10px] font-bold text-emerald-600">✓ Conforme</span>
                       )}
                     </td>
                     <td className="p-3 border-r">
@@ -5920,16 +5794,16 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                                   ? "Microfone ativo (Pode falar)" 
                                   : micConnectingTaskId === t.id
                                   ? "Inicializando microfone..."
-                                  : "Ditar ObservaÃ§Ã£o"
+                                  : "Ditar Observação"
                               }
                             >
-                              ðŸŽ™ï¸
+                              🎙️
                             </button>
                           )}
                         </div>
                         {t.preFilledObservations && (
                           <div className="text-[8px] text-purple-600 font-bold italic leading-tight pl-2 text-left">
-                            ðŸ“² Sugerido: "{t.preFilledObservations}"
+                            📲 Sugerido: "{t.preFilledObservations}"
                           </div>
                         )}
                       </div>
@@ -5943,7 +5817,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                             className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-lg border border-emerald-200 hover:border-emerald-300 font-bold text-xs disabled:opacity-30 cursor-pointer shadow-xs active:scale-95 flex items-center justify-center animate-bounce"
                             title={`Aceitar apontamento da equipe (sugerido em ${t.preFilledAt || ''})`}
                           >
-                            âœ…
+                            ✅
                           </button>
                         )}
                         <input
@@ -5958,7 +5832,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                             }
                           }}
                           className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
-                          title="Selecionar para exclusÃ£o"
+                          title="Selecionar para exclusão"
                         />
                       </div>
                     </td>
@@ -5968,14 +5842,14 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             </tbody>
           </table>
           {weeklyTasks.length === 0 && (
-            <div className="p-12 text-center text-slate-400 font-medium italic">Nenhuma atividade agendada para esta semana. Toque no botÃ£o acima para adicionar.</div>
+            <div className="p-12 text-center text-slate-400 font-medium italic">Nenhuma atividade agendada para esta semana. Toque no botão acima para adicionar.</div>
           )}
           {weeklyTasks.length > 0 && filteredWeeklyTasks.length === 0 && (
             <div className="p-12 text-center text-slate-400 font-medium italic">Nenhuma atividade encontrada com os filtros aplicados.</div>
           )}
         </div>
 
-        {/* Container para InclusÃ£o de Atividades Manuais (Extras) */}
+        {/* Container para Inclusão de Atividades Manuais (Extras) */}
         <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button 
@@ -5984,7 +5858,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               className={`w-8 h-8 rounded-full border flex items-center justify-center font-black text-sm transition shadow-xs active:scale-95 cursor-pointer ${isAddingManual ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'}`}
               title="Adicionar atividade extra fora de cronograma"
             >
-              {isAddingManual ? 'Ã—' : '+'}
+              {isAddingManual ? '×' : '+'}
             </button>
             <div className="flex flex-col">
               <span className="text-[11px] font-black uppercase text-slate-700 tracking-tight">Atividade Extra</span>
@@ -5997,7 +5871,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               <div className="flex-1">
                 <input
                   type="text"
-                  placeholder="DescriÃ§Ã£o do serviÃ§o extra (ex: Limpeza final, Ajuste de prumo...)"
+                  placeholder="Descrição do serviço extra (ex: Limpeza final, Ajuste de prumo...)"
                   className="w-full p-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-400 outline-none bg-slate-50 focus:bg-white transition"
                   value={manualServiceName}
                   onChange={(e) => setManualServiceName(e.target.value)}
@@ -6034,8 +5908,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-5 rounded-2xl shadow-md border border-slate-200 gap-4">
         <div>
-          <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Matrizes de VisualizaÃ§Ã£o</h2>
-          <p className="text-xs text-slate-500">Crie painÃ©is customizados para visualizar o avanÃ§o de pavimentos e etapas especÃ­ficas. Arraste as linhas e colunas para reordenar.</p>
+          <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Matrizes de Visualização</h2>
+          <p className="text-xs text-slate-500">Crie painéis customizados para visualizar o avanço de pavimentos e etapas específicas. Arraste as linhas e colunas para reordenar.</p>
         </div>
         <button onClick={() => setMatrixGroupModalOpen(true)} className="px-5 py-2.5 bg-indigo-600 text-white font-black uppercase tracking-wider rounded-xl text-xs hover:bg-indigo-700 transition shadow-md whitespace-nowrap">+ NOVA MATRIZ</button>
       </div>
@@ -6064,7 +5938,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       title="Arraste para reordenar esta coluna"
                     >
                       <div className="flex items-center justify-center gap-1">
-                        <span className="text-slate-500 font-black text-[9px] tracking-tighter">â‹®â‹®</span>
+                        <span className="text-slate-500 font-black text-[9px] tracking-tighter">⋮⋮</span>
                         <span className="truncate max-w-[90px]">{getMacroTitle(mId)}</span>
                       </div>
                       <button onClick={(e) => { e.stopPropagation(); removeMatrixColumn(matrix.id, mId); }} className="absolute top-1 right-2 opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300 font-black text-xs leading-none" title="Remover Coluna">&times;</button>
@@ -6088,7 +5962,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       title="Arraste para reordenar este pavimento"
                     >
                       <div className="flex items-center gap-1.5">
-                        <span className="text-slate-400 font-black text-[9px] tracking-tighter">â‹®â‹®</span>
+                        <span className="text-slate-400 font-black text-[9px] tracking-tighter">⋮⋮</span>
                         <span>{fId}</span>
                       </div>
                       <button onClick={(e) => { e.stopPropagation(); removeMatrixRow(matrix.id, fId); }} className="opacity-0 group-hover:opacity-100 text-rose-500 font-black hover:bg-rose-100 px-1.5 rounded" title="Remover Linha">&times;</button>
@@ -6153,7 +6027,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   <option key={c} value={c}>{c}</option>
                 ))}
                 {contractorsInPeriod.length === 0 && (
-                  <option value="">Nenhum empreiteiro no perÃ­odo</option>
+                  <option value="">Nenhum empreiteiro no período</option>
                 )}
               </select>
             </div>
@@ -6221,15 +6095,15 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             {/* Left Column: Variable-height PPC Table */}
             <div className="lg:col-span-5 bg-white p-5 rounded-2xl shadow-md border border-slate-200">
               <div className="border-b border-slate-100 pb-3 mb-4 flex justify-between items-center">
-                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider">HistÃ³rico Semanal</h3>
-                <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">PerÃ­odo Selecionado</span>
+                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider">Histórico Semanal</h3>
+                <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">Período Selecionado</span>
               </div>
               
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-xs text-left border-collapse border border-slate-300">
                   <thead className="bg-yellow-400 text-slate-900 border border-slate-300 uppercase text-[10px] tracking-wider">
                     <tr>
-                      <th className="p-2 border border-slate-300 text-center font-bold">InÃ­cio</th>
+                      <th className="p-2 border border-slate-300 text-center font-bold">Início</th>
                       <th className="p-2 border border-slate-300 text-center font-bold">Fim</th>
                       <th className="p-2 border border-slate-300 text-center font-bold">PPC</th>
                       <th className="p-2 border border-slate-300 text-center font-bold">FAROL</th>
@@ -6264,15 +6138,15 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     {contractorWeeklyPpcData.length === 0 && (
                       <tr>
                         <td colSpan={5} className="p-8 text-center text-slate-400 italic font-medium">
-                          Nenhuma semana encontrada no perÃ­odo selecionado.
+                          Nenhuma semana encontrada no período selecionado.
                         </td>
                       </tr>
                     )}
                   </tbody>
-                  {/* Footer: MÃ©dia row */}
+                  {/* Footer: Média row */}
                   <tfoot className="border-t-2 border-slate-400 text-slate-950 font-bold">
                     <tr>
-                      <td colSpan={2} className="p-2 text-center bg-yellow-400 border border-slate-300 text-xs font-black uppercase text-slate-950">MÃ©dia</td>
+                      <td colSpan={2} className="p-2 text-center bg-yellow-400 border border-slate-300 text-xs font-black uppercase text-slate-950">Média</td>
                       <td className="p-2 text-center bg-pink-300 border border-slate-300 text-xs font-black text-slate-950">
                         {averagePpc}%
                       </td>
@@ -6289,8 +6163,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               
               {/* PPC Evolution Line Chart */}
               <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
-                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">EvoluÃ§Ã£o do PPC</h3>
-                <p className="text-[10px] text-slate-500 mb-4">Comportamento semanal de cumprimento de metas no perÃ­odo selecionado.</p>
+                <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Evolução do PPC</h3>
+                <p className="text-[10px] text-slate-500 mb-4">Comportamento semanal de cumprimento de metas no período selecionado.</p>
                 
                 {ppcEvolutionChart && ppcEvolutionChart.validPoints.length > 0 ? (
                   <div className="w-full overflow-hidden flex justify-center py-2">
@@ -6422,7 +6296,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   </div>
                 ) : (
                   <div className="py-12 text-center text-slate-400 text-xs font-bold uppercase italic">
-                    Nenhum dado disponÃ­vel para plotagem da curva neste perÃ­odo.
+                    Nenhum dado disponível para plotagem da curva neste período.
                   </div>
                 )}
               </div>
@@ -6430,7 +6304,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               {/* Delay Causes (Pie Chart) */}
               <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200">
                 <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Causas</h3>
-                <p className="text-[10px] text-slate-500 mb-4">ProporÃ§Ã£o dos maiores motivos de desvio nas atividades neste perÃ­odo.</p>
+                <p className="text-[10px] text-slate-500 mb-4">Proporção dos maiores motivos de desvio nas atividades neste período.</p>
                 
                 {delayCausesData.length > 0 ? (
                   <div className="flex flex-col sm:flex-row items-center justify-around gap-6 py-2">
@@ -6497,7 +6371,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                               {slice.reason}
                             </p>
                             <p className="text-[9px] text-slate-400 font-bold uppercase">
-                              {slice.count} {slice.count === 1 ? 'ocorrÃªncia' : 'ocorrÃªncias'} ({slice.percent}%)
+                              {slice.count} {slice.count === 1 ? 'ocorrência' : 'ocorrências'} ({slice.percent}%)
                             </p>
                           </div>
                         </div>
@@ -6507,7 +6381,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   </div>
                 ) : (
                   <div className="py-12 text-center text-slate-400 text-xs font-bold uppercase italic">
-                    Sem justificativas de atraso registradas para este perÃ­odo.
+                    Sem justificativas de atraso registradas para este período.
                   </div>
                 )}
               </div>
@@ -6532,12 +6406,12 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
   const handleAddNewProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjName.trim() || !newProjArea.trim() || !newProjAddress.trim()) {
-      setNotification({ message: 'Por favor, preencha o nome, a Ã¡rea e o endereÃ§o.', type: 'error' });
+      setNotification({ message: 'Por favor, preencha o nome, a área e o endereço.', type: 'error' });
       return;
     }
     const cleanId = slugify(newProjName);
     if (projects.some(p => p.id === cleanId)) {
-      setNotification({ message: 'Um projeto com esse nome jÃ¡ existe.', type: 'error' });
+      setNotification({ message: 'Um projeto com esse nome já existe.', type: 'error' });
       return;
     }
     const defaultImage = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
@@ -6639,7 +6513,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
     e.preventDefault();
     if (!editingProject) return;
     if (!editProjName.trim() || !editProjArea.trim() || !editProjAddress.trim()) {
-      setNotification({ message: 'Por favor, preencha o nome, a Ã¡rea e o endereÃ§o.', type: 'error' });
+      setNotification({ message: 'Por favor, preencha o nome, a área e o endereço.', type: 'error' });
       return;
     }
     
@@ -6702,7 +6576,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-6">
             <div>
               <h1 className="text-xl md:text-2xl font-black uppercase tracking-tight text-white leading-none">PLANEJAMENTO DE CURTO PRAZO</h1>
-              <p className="text-xs text-indigo-400 font-bold uppercase tracking-widest mt-1">GestÃ£o e controle de obras</p>
+              <p className="text-xs text-indigo-400 font-bold uppercase tracking-widest mt-1">Gestão e controle de obras</p>
             </div>
             
             {/* Operator, Search and Access Control */}
@@ -6714,13 +6588,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   setShowAccessModal(true);
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 bg-slate-900/60 border border-slate-800 hover:border-indigo-500/50 hover:bg-slate-900 text-xs font-bold text-slate-300 hover:text-white rounded-xl transition cursor-pointer"
-                title="ConfiguraÃ§Ãµes de Controle de Acesso"
+                title="Configurações de Controle de Acesso"
               >
-                ðŸ” {isAccessAdmin ? 'Acesso Admin' : 'Controle de Acesso'}
+                🔐 {isAccessAdmin ? 'Acesso Admin' : 'Controle de Acesso'}
               </button>
 
               <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/60 border border-slate-800 rounded-xl text-xs font-bold text-slate-300">
-                <span>ðŸ‘¤ Operador: <b>{plannerUsername}</b></span>
+                <span>👤 Operador: <b>{plannerUsername}</b></span>
                 <button 
                   onClick={() => {
                     localStorage.removeItem('planner_username');
@@ -6746,7 +6620,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           {/* Title Area */}
           <div className="space-y-1">
             <h2 className="text-base md:text-lg font-black uppercase tracking-tight text-slate-200">Meus projetos</h2>
-            <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Selecione uma obra abaixo para acessar as mediÃ§Ãµes e planejamento semanal.</p>
+            <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Selecione uma obra abaixo para acessar as medições e planejamento semanal.</p>
           </div>
 
           {/* Grid of Projects */}
@@ -6771,14 +6645,14 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                           <button 
                             onClick={(e) => handleOpenEditProject(p, e)}
                             className="text-slate-600 hover:text-indigo-400 p-1 rounded transition cursor-pointer"
-                            title="Editar informaÃ§Ãµes do projeto"
+                            title="Editar informações do projeto"
                           >
-                            <span className="text-xs">âœï¸</span>
+                            <span className="text-xs">✏️</span>
                           </button>
                           <button 
                             onClick={async (e) => {
                               e.stopPropagation();
-                              if (confirm(`Deseja excluir o projeto "${p.name}"? Isso nÃ£o apagarÃ¡ seus dados histÃ³ricos do banco.`)) {
+                              if (confirm(`Deseja excluir o projeto "${p.name}"? Isso não apagará seus dados históricos do banco.`)) {
                                 const newList = projects.filter(x => x.id !== p.id);
                                 const projectsDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'all_projects_metadata');
                                 await setDoc(projectsDocRef, { list: newList });
@@ -6789,7 +6663,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                             className="text-slate-600 hover:text-rose-400 p-1 rounded transition cursor-pointer"
                             title="Remover projeto da lista"
                           >
-                            <span className="text-xs">ðŸ—‘ï¸</span>
+                            <span className="text-xs">🗑️</span>
                           </button>
                         </div>
                       )}
@@ -6811,15 +6685,15 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     <div className="p-4 space-y-3.5 text-xs text-slate-300">
                       {/* Area */}
                       <div className="flex items-center gap-2.5">
-                        <span className="text-slate-500 text-xs w-4 text-center">ðŸ“</span>
+                        <span className="text-slate-500 text-xs w-4 text-center">📐</span>
                         <span className="font-bold text-[11px] text-slate-400 bg-slate-950/40 px-2 py-0.5 border border-slate-800 rounded font-mono">
-                          {p.area ? `${parseFloat(p.area).toLocaleString('pt-BR')} mÂ²` : '0 mÂ²'}
+                          {p.area ? `${parseFloat(p.area).toLocaleString('pt-BR')} m²` : '0 m²'}
                         </span>
                       </div>
                       
                       {/* Badges / Equipes */}
                       <div className="flex items-start gap-2.5">
-                        <span className="text-slate-500 text-xs w-4 text-center mt-0.5">ðŸ‘¥</span>
+                        <span className="text-slate-500 text-xs w-4 text-center mt-0.5">👥</span>
                         <div className="flex flex-wrap gap-1">
                           {displayBadges.map((b: string, i: number) => (
                             <span key={i} className="px-1.5 py-0.5 bg-slate-800 text-slate-400 border border-slate-700 text-[8px] font-black uppercase rounded">
@@ -6839,7 +6713,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
 
                       {/* Address */}
                       <div className="flex items-start gap-2.5 leading-relaxed">
-                        <span className="text-slate-500 text-xs w-4 text-center mt-0.5">ðŸ“</span>
+                        <span className="text-slate-500 text-xs w-4 text-center mt-0.5">📍</span>
                         <span className="text-[10px] text-slate-400 line-clamp-2" title={p.address}>
                           {p.address}
                         </span>
@@ -6878,11 +6752,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
 
           {filteredProjects.length === 0 && !isSystemAdmin && (
             <div className="bg-slate-900/40 border border-slate-800/80 p-12 rounded-3xl text-center max-w-md mx-auto space-y-4 my-8">
-              <span className="text-4xl block">ðŸ“­</span>
+              <span className="text-4xl block">📭</span>
               <h3 className="text-sm font-black uppercase text-slate-300 tracking-wider">Nenhuma Obra Associada</h3>
               <p className="text-[10px] text-slate-550 uppercase tracking-tight font-bold leading-relaxed">
-                VocÃª nÃ£o possui permissÃ£o de acesso a nenhum projeto no momento. <br />
-                Por favor, solicite a liberaÃ§Ã£o ao administrador do sistema.
+                Você não possui permissão de acesso a nenhum projeto no momento. <br />
+                Por favor, solicite a liberação ao administrador do sistema.
               </p>
             </div>
           )}
@@ -6890,7 +6764,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
 
         {/* Footer */}
         <div className="max-w-[1400px] w-full mx-auto text-center border-t border-slate-900 pt-6 mt-8 relative z-10 text-[9px] text-slate-600 uppercase font-black tracking-widest">
-          PLANEJAMENTO DE CURTO PRAZO &copy; {new Date().getFullYear()} &middot; GestÃ£o e controle de obras
+          PLANEJAMENTO DE CURTO PRAZO &copy; {new Date().getFullYear()} &middot; Gestão e controle de obras
         </div>
 
         {/* Add Project Modal */}
@@ -6916,7 +6790,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Ãrea Privativa / ConstruÃ­da (mÂ²)</label>
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Área Privativa / Construída (m²)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -6929,7 +6803,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">EndereÃ§o Completo</label>
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Endereço Completo</label>
                   <input
                     type="text"
                     required
@@ -6941,7 +6815,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Siglas das Equipes (badges, separadas por vÃ­rgula)</label>
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Siglas das Equipes (badges, separadas por vírgula)</label>
                   <input
                     type="text"
                     placeholder="Ex: PF, PE, PK, RT, AO..."
@@ -6949,14 +6823,14 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     onChange={e => setNewProjBadges(e.target.value)}
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
                   />
-                  <span className="block text-[8px] text-slate-500">Deixe em branco para usar as siglas padrÃ£o de equipes.</span>
+                  <span className="block text-[8px] text-slate-500">Deixe em branco para usar as siglas padrão de equipes.</span>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Imagem de Capa (PNG/JPG ou URL)</label>
                   <div className="flex gap-2">
                     <label className="flex-1 flex flex-col items-center justify-center p-3 bg-slate-950 border border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl cursor-pointer text-slate-450 hover:text-white transition">
-                      <span className="text-[10px] uppercase font-black">ðŸ“ Selecionar Foto</span>
+                      <span className="text-[10px] uppercase font-black">📁 Selecionar Foto</span>
                       <input 
                         type="file" 
                         accept="image/png, image/jpeg, image/jpg" 
@@ -7004,7 +6878,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
             <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-md w-full space-y-6 animate-in zoom-in-95 duration-200 text-left text-slate-200">
               <div className="space-y-1">
-                <h3 className="text-sm font-black uppercase tracking-tight text-white">Editar InformaÃ§Ãµes da Obra</h3>
+                <h3 className="text-sm font-black uppercase tracking-tight text-white">Editar Informações da Obra</h3>
                 <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Modifique os dados do projeto abaixo</p>
               </div>
 
@@ -7022,7 +6896,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Ãrea Privativa / ConstruÃ­da (mÂ²)</label>
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Área Privativa / Construída (m²)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -7035,7 +6909,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">EndereÃ§o Completo</label>
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Endereço Completo</label>
                   <input
                     type="text"
                     required
@@ -7047,7 +6921,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Siglas das Equipes (badges, separadas por vÃ­rgula)</label>
+                  <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Siglas das Equipes (badges, separadas por vírgula)</label>
                   <input
                     type="text"
                     placeholder="Ex: PF, PE, PK, RT, AO..."
@@ -7061,7 +6935,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Imagem de Capa (PNG/JPG ou URL)</label>
                   <div className="flex gap-2">
                     <label className="flex-1 flex flex-col items-center justify-center p-3 bg-slate-950 border border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl cursor-pointer text-slate-450 hover:text-white transition">
-                      <span className="text-[10px] uppercase font-black">ðŸ“ Selecionar Foto</span>
+                      <span className="text-[10px] uppercase font-black">📁 Selecionar Foto</span>
                       <input 
                         type="file" 
                         accept="image/png, image/jpeg, image/jpg" 
@@ -7096,7 +6970,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     type="submit"
                     className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl shadow-lg transition active:scale-98 cursor-pointer"
                   >
-                    Salvar AlteraÃ§Ãµes
+                    Salvar Alterações
                   </button>
                 </div>
               </form>
@@ -7125,20 +6999,20 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       setIsAccessAdmin(true);
                       setNotification({ message: 'Autenticado como Administrador!', type: 'success' });
                     } else {
-                      setNotification({ message: 'UsuÃ¡rio ou senha incorretos.', type: 'error' });
+                      setNotification({ message: 'Usuário ou senha incorretos.', type: 'error' });
                     }
                   }} 
                   className="space-y-4 max-w-xs mx-auto text-center"
                 >
-                  <span className="text-3xl block">ðŸ”</span>
+                  <span className="text-3xl block">🔐</span>
                   <div className="space-y-1 text-left">
                     <h3 className="text-sm font-black uppercase text-white text-center">Acesso Administrativo</h3>
-                    <p className="text-[9px] text-slate-500 text-center uppercase tracking-wider font-bold">Autentique-se para gerenciar permissÃµes</p>
+                    <p className="text-[9px] text-slate-500 text-center uppercase tracking-wider font-bold">Autentique-se para gerenciar permissões</p>
                   </div>
 
                   <div className="space-y-3 pt-2 text-left">
                     <div>
-                      <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black mb-1">UsuÃ¡rio</label>
+                      <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black mb-1">Usuário</label>
                       <input 
                         type="text" 
                         required 
@@ -7176,12 +7050,12 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   </div>
                 </form>
               ) : (
-                // 2. Tela de ConfiguraÃ§Ãµes Administrativas
+                // 2. Tela de Configurações Administrativas
                 <div className="space-y-6">
                   <div className="flex justify-between items-center border-b border-slate-800 pb-3">
                     <div>
                       <h3 className="text-sm font-black uppercase tracking-tight text-white">Painel de Controle de Acesso</h3>
-                      <p className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">Gerencie permissÃµes de acesso por obra</p>
+                      <p className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">Gerencie permissões de acesso por obra</p>
                     </div>
                     <button 
                       onClick={() => setIsAccessAdmin(false)} 
@@ -7191,13 +7065,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     </button>
                   </div>
 
-                  {/* Gerenciamento de UsuÃ¡rios */}
+                  {/* Gerenciamento de Usuários */}
                   <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-2xl space-y-3">
-                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">1. Cadastrar UsuÃ¡rios</h4>
+                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">1. Cadastrar Usuários</h4>
                     <div className="flex gap-2 max-w-md">
                       <input 
                         type="text" 
-                        placeholder="Nome do usuÃ¡rio/funÃ§Ã£o (ex: Felipe, Engenharia)..." 
+                        placeholder="Nome do usuário/função (ex: Felipe, Engenharia)..." 
                         value={newAccessUser} 
                         onChange={e => setNewAccessUser(e.target.value)} 
                         className="flex-1 p-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-650 focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -7211,11 +7085,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     </div>
 
                     <div className="space-y-1.5 pt-1">
-                      <span className="block text-[8px] text-slate-500 uppercase tracking-widest font-black">UsuÃ¡rios Cadastrados:</span>
+                      <span className="block text-[8px] text-slate-500 uppercase tracking-widest font-black">Usuários Cadastrados:</span>
                       <div className="flex flex-wrap gap-1.5">
                         {accessControl.users.map(u => (
                           <span key={u} className="bg-slate-900 border border-slate-800 text-slate-300 font-bold text-[10px] px-2.5 py-1 rounded-xl flex items-center gap-1.5 hover:border-slate-700 transition">
-                            <span>ðŸ‘¤ {u}</span>
+                            <span>👤 {u}</span>
                             <button 
                               onClick={() => handleRemoveUser(u)} 
                               className="text-slate-550 hover:text-red-400 font-black text-xs cursor-pointer"
@@ -7226,16 +7100,16 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                           </span>
                         ))}
                         {accessControl.users.length === 0 && (
-                          <span className="text-[10px] text-slate-550 italic uppercase font-bold">Nenhum usuÃ¡rio cadastrado.</span>
+                          <span className="text-[10px] text-slate-550 italic uppercase font-bold">Nenhum usuário cadastrado.</span>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* AssociaÃ§Ã£o com Obras */}
+                  {/* Associação com Obras */}
                   <div className="space-y-3">
-                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">2. PermissÃµes de Acesso por Obra</h4>
-                    <p className="text-[9px] text-slate-500 uppercase tracking-tight font-bold">Clique no usuÃ¡rio sob o projeto correspondente para alternar a permissÃ£o de acesso.</p>
+                    <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">2. Permissões de Acesso por Obra</h4>
+                    <p className="text-[9px] text-slate-500 uppercase tracking-tight font-bold">Clique no usuário sob o projeto correspondente para alternar a permissão de acesso.</p>
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[350px] overflow-y-auto pr-1">
                       {projects.map(p => {
@@ -7248,7 +7122,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                                 <span className="block text-[8px] text-slate-500 italic mt-0.5">{p.address}</span>
                               </div>
                               <span className="bg-indigo-950 border border-indigo-900 text-indigo-400 font-black text-[8px] px-1.5 py-0.5 rounded-md uppercase">
-                                {allowed.length} PermissÃ£o(Ãµes)
+                                {allowed.length} Permissão(ões)
                               </span>
                             </div>
 
@@ -7265,13 +7139,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                                         : 'bg-slate-900 border border-slate-800 text-slate-400 hover:border-slate-700'
                                     }`}
                                   >
-                                    <span>{isAllowed ? 'âœ“' : '+'}</span>
+                                    <span>{isAllowed ? '✓' : '+'}</span>
                                     <span>{u}</span>
                                   </button>
                                 );
                               })}
                               {accessControl.users.length === 0 && (
-                                <span className="text-[9px] text-slate-550 italic uppercase font-bold">Cadastre usuÃ¡rios no painel acima primeiro.</span>
+                                <span className="text-[9px] text-slate-550 italic uppercase font-bold">Cadastre usuários no painel acima primeiro.</span>
                               )}
                             </div>
                           </div>
@@ -7280,10 +7154,10 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     </div>
                   </div>
 
-                  {/* HistÃ³rico de Acessos Recentes */}
+                  {/* Histórico de Acessos Recentes */}
                   <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-2xl space-y-2.5">
                     <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350 flex justify-between items-center">
-                      <span>3. HistÃ³rico de Acessos Recentes</span>
+                      <span>3. Histórico de Acessos Recentes</span>
                       <button 
                         onClick={async () => {
                           if (confirm('Deseja limpar todos os logs de acesso?')) {
@@ -7294,13 +7168,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                         }}
                         className="text-[8px] font-black uppercase text-rose-400 hover:text-rose-350 cursor-pointer"
                       >
-                        Limpar HistÃ³rico
+                        Limpar Histórico
                       </button>
                     </h4>
                     <div className="max-h-[140px] overflow-y-auto pr-1 space-y-1.5 font-mono text-[9px] text-slate-400">
                       {(accessControl.logs || []).map((log, i) => (
                         <div key={i} className="flex justify-between items-center bg-slate-900/60 border border-slate-850 px-2.5 py-1.5 rounded-lg hover:border-slate-800 transition">
-                          <span className="font-bold text-slate-300">ðŸ‘¤ {log.username}</span>
+                          <span className="font-bold text-slate-300">👤 {log.username}</span>
                           <span className="text-slate-500 font-medium">{new Date(log.timestamp).toLocaleString('pt-BR')}</span>
                         </div>
                       ))}
@@ -7315,7 +7189,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       onClick={() => setShowAccessModal(false)} 
                       className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl shadow-lg transition active:scale-98 cursor-pointer"
                     >
-                      Fechar ConfiguraÃ§Ãµes
+                      Fechar Configurações
                     </button>
                   </div>
                 </div>
@@ -7331,7 +7205,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
   const renderInfographic = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
-        <h3 className="text-sm font-black text-slate-800 uppercase mb-4">EvoluÃ§Ã£o Semanal de PPC do Projeto</h3>
+        <h3 className="text-sm font-black text-slate-800 uppercase mb-4">Evolução Semanal de PPC do Projeto</h3>
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           {(ppcHistory || []).map((h, i) => {
             const ppcVal = typeof h?.ppc === 'number' ? h.ppc : parseFloat(h?.ppc) || 0;
@@ -7339,7 +7213,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               <div key={i} className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col justify-between">
                 <div className="text-[10px] font-black text-slate-400 uppercase">Semana de {formatDateBR(h?.weekStart)}</div>
                 <div className="text-2xl font-black text-indigo-900 mt-1">{ppcVal.toFixed(1)}%</div>
-                <div className="text-[10px] text-slate-500 font-bold uppercase mt-2">{h?.completed ?? 0} / {h?.totalPlanned ?? 0} planos concluÃ­dos</div>
+                <div className="text-[10px] text-slate-500 font-bold uppercase mt-2">{h?.completed ?? 0} / {h?.totalPlanned ?? 0} planos concluídos</div>
               </div>
             );
           })}
@@ -7350,16 +7224,16 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b pb-4">
           <div>
-            <h3 className="text-sm font-black text-slate-800 uppercase">Tabela Consolidada de Planejamento Semanal (HistÃ³rico Geral)</h3>
+            <h3 className="text-sm font-black text-slate-800 uppercase">Tabela Consolidada de Planejamento Semanal (Histórico Geral)</h3>
           </div>
-          <button onClick={handleExportCSV} className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg flex items-center gap-2 transition"><span>ðŸ“¥</span> Exportar para Excel (.csv)</button>
+          <button onClick={handleExportCSV} className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg flex items-center gap-2 transition"><span>📥</span> Exportar para Excel (.csv)</button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pesquisa</label><input type="text" className="w-full p-2 border rounded-lg text-xs" placeholder="Pesquise..." value={giantSearch} onChange={e => setHistorySearch(e.target.value)} /></div>
           <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantFloorFilter} onChange={e => setHistoryFloorFilter(e.target.value)}><option value="">-- Todos --</option>{(floors || []).map(f => <option key={f} value={f}>{f}</option>)}</select></div>
           <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantMacroFilter} onChange={e => setHistoryMacroFilter(e.target.value)}><option value="">-- Todas --</option>{(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}</select></div>
-          <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Estado</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantStatusFilter} onChange={e => setHistoryStatusFilter(e.target.value)}><option value="">-- Todos --</option><option value="finalized">ðŸ”’ Somente Finalizadas</option><option value="active">ðŸ”“ Somente Ativas</option></select></div>
+          <div><label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Estado</label><select className="w-full p-2 border rounded-lg text-xs font-bold" value={giantStatusFilter} onChange={e => setHistoryStatusFilter(e.target.value)}><option value="">-- Todos --</option><option value="finalized">🔒 Somente Finalizadas</option><option value="active">🔓 Somente Ativas</option></select></div>
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-[500px]">
@@ -7370,14 +7244,14 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   { label: 'Semana ID', key: 'weekId', cls: '' },
                   { label: 'Pavimento', key: 'floor', cls: '' },
                   { label: 'Macroatividade', key: 'sectionId', cls: '' },
-                  { label: 'ServiÃ§o', key: 'activityName', cls: '' },
+                  { label: 'Serviço', key: 'activityName', cls: '' },
                   { label: 'Equipe', key: 'responsible', cls: '' },
                   { label: 'Meta Plan.', key: 'plannedThisWeek', cls: 'text-center' },
                   { label: 'Dias Ativos', key: null, cls: 'text-center' },
-                  { label: 'AvanÃ§o Sem.', key: 'progressThisWeek', cls: 'text-center' },
+                  { label: 'Avanço Sem.', key: 'progressThisWeek', cls: 'text-center' },
                   { label: 'Acumulado', key: 'accumulated', cls: 'text-center' },
                   { label: 'Desvio/Atraso', key: null, cls: 'text-center' },
-                  { label: 'ObservaÃ§Ãµes', key: null, cls: '' },
+                  { label: 'Observações', key: null, cls: '' },
                   { label: 'Estado', key: null, cls: 'text-center' },
                 ].map(({ label, key, cls }) => (
                   <th
@@ -7393,7 +7267,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                       {label}
                       {key && (
                         <span className={`text-[10px] ${giantSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
-                          {giantSortKey === key ? (giantSortDir === 'asc' ? 'â–²' : 'â–¼') : 'â‡•'}
+                          {giantSortKey === key ? (giantSortDir === 'asc' ? '▲' : '▼') : '⇕'}
                         </span>
                       )}
                     </span>
@@ -7431,8 +7305,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                           
                           const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
                           const weather = isWithinRange ? weatherCache[cacheKey] : null;
-                          const weatherEmoji = isWithinRange && weather ? getWeatherEmoji(weather.icon) : (isWithinRange && weatherLoading ? 'â³' : '');
-                          const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}Â°C - ${weather.tempMax}Â°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
+                          const weatherEmoji = isWithinRange && weather ? getWeatherEmoji(weather.icon) : (isWithinRange && weatherLoading ? '⏳' : '');
+                          const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                           
                           return (
                             <div key={i} className="flex flex-col items-center group relative cursor-help" title={`${['Seg','Ter','Qua','Qui','Sex'][i]} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
@@ -7447,9 +7321,9 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     </td>
                     <td className="p-2.5 border-r text-center font-black text-emerald-600">{progressW}%</td>
                     <td className="p-2.5 border-r text-center font-black"><div className="flex items-center justify-center space-x-1.5"><div className="w-10 bg-slate-200 rounded-full h-1.5 hidden sm:block"><div className="bg-slate-700 h-1.5 rounded-full" style={{ width: `${totalAcc}%` }}></div></div><span>{totalAcc.toFixed(0)}%</span></div></td>
-                    <td className="p-2.5 border-r text-center font-bold">{isDelayed ? <span className="text-red-600 text-[10px] leading-tight block">âš ï¸ {t?.delayReason || 'N/A'}</span> : <span className="text-emerald-600">âœ“ ConcluÃ­do</span>}</td>
+                    <td className="p-2.5 border-r text-center font-bold">{isDelayed ? <span className="text-red-600 text-[10px] leading-tight block">⚠️ {t?.delayReason || 'N/A'}</span> : <span className="text-emerald-600">✓ Concluído</span>}</td>
                     <td className="p-2.5 border-r italic text-[10px] max-w-xs truncate" title={t?.observations}>{t?.observations || 'N/A'}</td>
-                    <td className="p-2.5 text-center font-black whitespace-nowrap">{t?.finalized ? 'ðŸ”’ Finalizado' : 'ðŸ”“ Ativo'}</td>
+                    <td className="p-2.5 text-center font-black whitespace-nowrap">{t?.finalized ? '🔒 Finalizado' : '🔓 Ativo'}</td>
                   </tr>
                 );
               })}
@@ -7460,9 +7334,9 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
 
       <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
-          <h3 className="text-sm font-black text-slate-800 uppercase">EvoluÃ§Ã£o e VariaÃ§Ã£o Acumulada por Pacote (HistÃ³rico Geral)</h3>
+          <h3 className="text-sm font-black text-slate-800 uppercase">Evolução e Variação Acumulada por Pacote (Histórico Geral)</h3>
           <div className="relative w-full sm:w-64">
-            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">ðŸ”</span>
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">🔍</span>
             <input
               type="text"
               className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none bg-slate-50"
@@ -7477,7 +7351,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             <div key={idx} className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
               <div className="flex justify-between items-center border-b pb-2">
                 <span className="text-[10px] font-black bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded uppercase tracking-wider">{macro?.sectionTitle}</span>
-                <span className="text-[10px] font-black text-slate-400 uppercase">AvanÃ§o HistÃ³rico do Pacote</span>
+                <span className="text-[10px] font-black text-slate-400 uppercase">Avanço Histórico do Pacote</span>
               </div>
               <div className="space-y-3 divide-y divide-slate-100">
                 {(macro?.floors || []).map((fData, fIdx) => (
@@ -7485,9 +7359,9 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     <div className="sm:w-20 shrink-0 flex items-center">
                       <span className="text-xs font-black text-slate-700 uppercase">{fData.floor}</span>
                     </div>
-                    <div className="flex items-center gap-1.5 flex-nowrap flex-1 min-w-0 overflow-x-auto pb-2">
+                    <div className="flex items-center gap-1.5 flex-wrap flex-1">
                       <span className="text-[10px] font-bold text-slate-400">0%</span>
-                      <span className="text-slate-300">â†’</span>
+                      <span className="text-slate-300">→</span>
                       {(fData?.changes || []).map((change, cIdx) => {
                         const pctVal = Number(change?.macroPercent) || 0;
                         const isImported = change?.isImported;
@@ -7511,7 +7385,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                         
                         return (
                           <React.Fragment key={cIdx}>
-                            {cIdx > 0 && <span className="text-slate-300">â†’</span>}
+                            {cIdx > 0 && <span className="text-slate-300">→</span>}
                             <div className={`${boxBg} border px-3 py-2 rounded-lg text-center cursor-help transition-all hover:shadow-md hover:-translate-y-0.5 relative group min-w-[70px]`}>
                               <div className={`text-xs font-black ${textColor}`}>{pctVal.toFixed(1)}%</div>
                               <div className={`text-[8px] font-mono font-bold ${subTextColor}`}>{labelText}</div>
@@ -7519,7 +7393,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                               {/* Detailed Hover Tooltip */}
                               <div className="opacity-0 group-hover:opacity-100 pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-900 text-white text-[10px] p-3 rounded shadow-xl whitespace-nowrap z-10 transition-opacity border border-slate-700">
                                 <p className="font-bold text-indigo-300 border-b border-slate-700 pb-1 mb-1">
-                                  {isImported ? 'MediÃ§Ã£o Inicial/ImportaÃ§Ã£o:' : 'ServiÃ§os na Semana:'}
+                                  {isImported ? 'Medição Inicial/Importação:' : 'Serviços na Semana:'}
                                 </p>
                                 {(change?.services || []).map((s, sIdx) => {
                                   const sDelta = Number(s?.delta) || 0;
@@ -7544,7 +7418,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
               </div>
             </div>
           ))}
-          {(macroEvolutionHistory || []).length === 0 && <div className="text-center py-12 text-slate-400 font-bold uppercase italic text-xs">Nenhum dado de variaÃ§Ã£o acumulada disponÃ­vel.</div>}
+          {(macroEvolutionHistory || []).length === 0 && <div className="text-center py-12 text-slate-400 font-bold uppercase italic text-xs">Nenhum dado de variação acumulada disponível.</div>}
         </div>
       </div>
     </div>
@@ -7638,7 +7512,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     className="p-1.5 hover:bg-red-50 text-red-500 hover:text-red-700 rounded-lg transition text-xs"
                     title="Remover equipe"
                   >
-                    Excluir
+                    🗑️
                   </button>
                 </div>
               </div>
@@ -7696,7 +7570,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           </div>
         </div>
         <p className="text-xs text-slate-500 leading-relaxed font-medium">
-          ?? Nota: Se nenhuma chave for fornecida, o aplicativo usará dados climáticos simulados deterministicamente com base no clima de {projectCity}.
+          💡 Nota: Se nenhuma chave for fornecida, o aplicativo usará dados climáticos simulados deterministicamente com base no clima de {projectCity}.
         </p>
       </div>
     </div>
@@ -7733,7 +7607,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId);
         
         setTeamSubmitSuccess(true);
-        setNotification({ message: 'AvanÃ§o enviado com sucesso!', type: 'success' });
+        setNotification({ message: 'Avanço enviado com sucesso!', type: 'success' });
       } catch (err: any) {
         console.error(err);
         setNotification({ message: 'Erro ao enviar dados: ' + err.message, type: 'error' });
@@ -7763,13 +7637,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         <main className="flex-1 max-w-xl w-full mx-auto p-4 md:p-6 space-y-6 pb-20">
           {teamSubmitSuccess ? (
             <div className="bg-white p-8 rounded-2xl shadow-md border border-slate-200 text-center space-y-4 animate-in zoom-in-95">
-              <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto">âœ“</div>
-              <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">RelatÃ³rio Enviado!</h2>
+              <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto">✓</div>
+              <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Relatório Enviado!</h2>
               <p className="text-xs text-slate-500 leading-relaxed">
-                As informaÃ§Ãµes de progresso da equipe <strong>{urlTeamName}</strong> para a semana de <strong>{currentWeekStart.toLocaleDateString('pt-BR')}</strong> foram registradas com sucesso.
+                As informações de progresso da equipe <strong>{urlTeamName}</strong> para a semana de <strong>{currentWeekStart.toLocaleDateString('pt-BR')}</strong> foram registradas com sucesso.
               </p>
               <p className="text-[10px] text-slate-400">
-                O planejador responsÃ¡vel recebeu seus dados e irÃ¡ validÃ¡-los no painel principal.
+                O planejador responsável recebeu seus dados e irá validá-los no painel principal.
               </p>
               <button
                 onClick={() => setTeamSubmitSuccess(false)}
@@ -7782,19 +7656,19 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             <div className="space-y-4">
               {/* Date Navigation */}
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex justify-between items-center">
-                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">â—€</button>
+                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">◀</button>
                 <div className="text-center">
                   <div className="text-[8px] uppercase font-black text-slate-400">Semana de Trabalho</div>
                   <div className="text-xs font-black text-indigo-900">
                     {currentWeekStart.toLocaleDateString('pt-BR')} - {weekEndDate.toLocaleDateString('pt-BR')}
                   </div>
                 </div>
-                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">â–¶</button>
+                <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">▶</button>
               </div>
 
               {/* Tasks List */}
               <div className="space-y-4">
-                <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider">ServiÃ§os da Semana ({teamTasks.length})</h3>
+                <h3 className="text-xs font-black text-slate-500 uppercase tracking-wider">Serviços da Semana ({teamTasks.length})</h3>
                 
                 {teamTasks.map(t => {
                   const input = teamInputs[t.id] || { progress: 0, delayReason: '', observations: '' };
@@ -7818,7 +7692,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                           </h4>
                           {t.serviceComplement && (
                             <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mt-1 flex items-center gap-1">
-                              <span className="text-indigo-500 font-black">â†³</span>
+                              <span className="text-indigo-500 font-black">↳</span>
                               <span className="bg-slate-100 px-1 py-0.5 rounded border border-slate-200/60 max-w-[250px] truncate" title={t.serviceComplement}>
                                 {t.serviceComplement}
                               </span>
@@ -7871,7 +7745,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
 
                 {teamTasks.length === 0 && (
                   <div className="bg-white p-12 text-center border border-slate-200 rounded-2xl shadow-xs">
-                    <p className="text-xs text-slate-400 font-bold uppercase italic">Nenhum serviÃ§o planejado para a sua equipe nesta semana.</p>
+                    <p className="text-xs text-slate-400 font-bold uppercase italic">Nenhum serviço planejado para a sua equipe nesta semana.</p>
                   </div>
                 )}
               </div>
@@ -7880,7 +7754,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 space-y-4 animate-in fade-in">
                   <div className="border-b border-slate-100 pb-2">
                     <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">Fechamento da semana</h3>
-                    <p className="text-[10px] font-bold text-slate-400 mt-1">Essas informaÃ§Ãµes valem para todos os serviÃ§os apontados.</p>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">Essas informações valem para todos os serviços apontados.</p>
                   </div>
 
                   {hasDelayedTeamTask && (
@@ -7900,10 +7774,10 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   )}
 
                   <div className="space-y-1.5">
-                    <label className="block text-[9px] font-black uppercase text-slate-400">ObservaÃ§Ãµes / ComentÃ¡rios gerais</label>
+                    <label className="block text-[9px] font-black uppercase text-slate-400">Observações / Comentários gerais</label>
                     <div className="flex gap-2 items-center">
                       <textarea
-                        placeholder="EX: Aguardando liberaÃ§Ã£o de material, ajuste de equipe, interferÃªncias..."
+                        placeholder="EX: Aguardando liberação de material, ajuste de equipe, interferências..."
                         className="flex-1 min-h-[84px] p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-medium resize-none"
                         value={teamGeneralObservations}
                         onChange={(e) => setTeamGeneralObservations(e.target.value)}
@@ -7923,7 +7797,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                             ? "Microfone ativo (Pode falar)"
                             : micConnectingTaskId === TEAM_GENERAL_OBSERVATIONS_ID
                             ? "Inicializando microfone..."
-                            : "Ditar observaÃ§Ã£o geral"
+                            : "Ditar observação geral"
                         }
                       >
                         Gravar
@@ -7935,7 +7809,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     onClick={handleSubmitTeamReport}
                     className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-wider rounded-xl shadow-md transition transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>Enviar Dados de AvanÃ§o</span>
+                    <span>Enviar Dados de Avanço</span>
                   </button>
                 </div>
               )}
@@ -7982,12 +7856,12 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         <div className="bg-slate-800/80 backdrop-blur-xl border border-slate-700/50 p-8 rounded-3xl shadow-2xl max-w-sm w-full space-y-6 relative z-10 text-center animate-in zoom-in-95 duration-500">
           <div className="space-y-2">
             <h2 className="text-xl font-black uppercase tracking-tight text-white">PLANEJAMENTO DE CURTO PRAZO</h2>
-            <p className="text-[10px] text-indigo-300 uppercase tracking-widest font-bold">IdentificaÃ§Ã£o de Operador</p>
+            <p className="text-[10px] text-indigo-300 uppercase tracking-widest font-bold">Identificação de Operador</p>
           </div>
 
           <div className="space-y-4">
             <div className="text-left space-y-1">
-              <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Seu Nome / FunÃ§Ã£o</label>
+              <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Seu Nome / Função</label>
               <input
                 type="text"
                 placeholder="Ex: Kenzo, Engenharia, Planejador..."
@@ -8019,7 +7893,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           </div>
           
           <div className="text-[9px] text-slate-500 leading-relaxed">
-            Esta identificaÃ§Ã£o Ã© salva neste computador e registrarÃ¡ quem realizou cada atualizaÃ§Ã£o no banco de dados.
+            Esta identificação é salva neste computador e registrará quem realizou cada atualização no banco de dados.
           </div>
         </div>
       </div>
@@ -8037,7 +7911,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
       <header className="bg-slate-900 p-4 text-white shadow-xl sticky top-0 z-40">
         <div className="max-w-[1600px] w-full mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center space-x-3">
-            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">GestÃ£o e controle de obras</span></div>
+            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-350">
@@ -8045,7 +7919,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             </span>
             {selectedProjectId && !urlUserId && (
               <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/50 border border-emerald-800/40 rounded-full text-[9px] font-bold text-emerald-300">
-                <span>ðŸ¢ {activeProjectObj?.name || selectedProjectId.toUpperCase()}</span>
+                <span>🏢 {activeProjectObj?.name || selectedProjectId.toUpperCase()}</span>
                 <button
                   onClick={() => {
                     localStorage.removeItem('selected_project_id');
@@ -8054,13 +7928,13 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   className="hover:text-white font-black ml-1 text-[11px] leading-none"
                   title="Trocar de projeto"
                 >
-                  ðŸ”„
+                  🔄
                 </button>
               </div>
             )}
             {plannerUsername && (
               <div className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 border border-indigo-700/50 rounded-full text-[9px] font-bold text-indigo-200">
-                <span>ðŸ‘¤ {plannerUsername}</span>
+                <span>👤 {plannerUsername}</span>
                 <button
                   onClick={() => {
                     localStorage.removeItem('planner_username');
@@ -8075,22 +7949,22 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
             )}
             {dbSavingStatus === 'saving' && (
               <span className="px-3 py-1 bg-blue-900/80 border border-blue-700/50 rounded-full text-[9px] font-bold text-blue-200 animate-pulse flex items-center gap-1">
-                ðŸ’¾ Gravando...
+                💾 Gravando...
               </span>
             )}
             {dbSavingStatus === 'pending' && (
               <span className="px-3 py-1 bg-amber-950 border border-amber-800/40 rounded-full text-[9px] font-bold text-amber-300 animate-pulse flex items-center gap-1">
-                â³ AlteraÃ§Ãµes pendentes...
+                ⏳ Alterações pendentes...
               </span>
             )}
             {dbSavingStatus === 'saved' && (
               <span className="px-3 py-1 bg-emerald-950/50 border border-emerald-800/40 rounded-full text-[9px] font-bold text-emerald-300 flex items-center gap-1">
-                âœ… Sincronizado
+                ✅ Sincronizado
               </span>
             )}
             {dbLastUpdatedBy && (
               <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] border border-slate-700 text-slate-400 italic">
-                Ãšltimo avanÃ§o: {dbLastUpdatedBy}
+                Último avanço: {dbLastUpdatedBy}
               </span>
             )}
           </div>
@@ -8104,8 +7978,8 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
           <button onClick={() => setActiveTab('planning')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'planning' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Planejamento Semanal</button>
           <button onClick={() => setActiveTab('visualization')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'visualization' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Matriz Geral</button>
           <button onClick={() => setActiveTab('detalhamento-ppc')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'detalhamento-ppc' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Detalhamento PPC</button>
-          <button onClick={() => setActiveTab('historico-andamento')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'historico-andamento' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>HistÃ³rico andamento</button>
-          <button onClick={() => setActiveTab('config')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'config' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>ConfiguraÃ§Ãµes</button>
+          <button onClick={() => setActiveTab('historico-andamento')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'historico-andamento' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Histórico andamento</button>
+          <button onClick={() => setActiveTab('config')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'config' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Configurações</button>
         </nav>
 
         {activeTab === 'dashboard' && renderDashboard()}
@@ -8133,14 +8007,14 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   <div className="flex justify-between items-center gap-3">
                     <label className="block text-[10px] font-black uppercase text-slate-500">Origem das atividades</label>
                     <span className="text-[9px] font-bold text-slate-500 text-right">
-                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Sucessoras' : drawerSourceMode === 'unfinished' ? 'NÃ£o concluÃ­das' : 'Cronograma'}
+                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Sucessoras' : drawerSourceMode === 'unfinished' ? 'Não concluídas' : 'Cronograma'}
                     </span>
                   </div>
                   <div className="grid grid-cols-1 gap-2 max-h-0 overflow-hidden opacity-0 transition-all duration-300 group-hover:max-h-48 group-hover:opacity-100 group-focus-within:max-h-48 group-focus-within:opacity-100">
                     {[
                       { id: 'cronograma', label: 'Planeje a partir do Cronograma' },
                       { id: 'previous-successors', label: 'Planeje a partir das sucessoras da semana anterior' },
-                      { id: 'unfinished', label: 'Planeje a partir das atividades nÃ£o concluÃ­das' }
+                      { id: 'unfinished', label: 'Planeje a partir das atividades não concluídas' }
                     ].map(option => (
                       <button
                         key={option.id}
@@ -8158,7 +8032,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   </div>
                   {drawerSourceMode === 'previous-successors' && (
                     <p className="text-[10px] text-slate-400 font-bold">
-                      Semana anterior: {formatDateBR(previousWeekIdForDrawer)}. Exibindo sucessoras das atividades concluidas ou finalizadas.
+                      Semana anterior: {formatDateBR(previousWeekIdForDrawer)}. Exibindo apenas sucessoras das atividades finalizadas.
                     </p>
                   )}
                   {drawerSourceMode === 'unfinished' && (
@@ -8179,7 +8053,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   <div className="relative z-50">
                     <input
                       type="text"
-                      placeholder="ðŸ”Ž Buscar macroatividade..."
+                      placeholder="🔎 Buscar macroatividade..."
                       className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-xs focus:bg-white outline-none cursor-pointer"
                       value={isDrawerMacroDropdownOpen ? drawerMacroSearch : (drawerMacro ? getMacroTitle(drawerMacro) : '')}
                       onFocus={() => {
@@ -8235,7 +8109,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 </div>}
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <label className="block text-[10px] font-black uppercase text-indigo-600">3. Selecione os ServiÃ§os</label>
+                    <label className="block text-[10px] font-black uppercase text-indigo-600">3. Selecione os Serviços</label>
                     {availableServicesForMacroAndFloors.length > 0 && <button onClick={() => { if (drawerSelectedServices.length === availableServicesForMacroAndFloors.length) setDrawerSelectedServices([]); else setDrawerSelectedServices(availableServicesForMacroAndFloors.map(s => s.id)); }} className="text-[9px] font-bold text-indigo-700 hover:underline uppercase">Todos</button>}
                   </div>
                   <div className="bg-slate-50 border rounded-xl p-3 h-[46vh] min-h-[320px] overflow-y-auto space-y-2">
@@ -8255,7 +8129,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 <div className="space-y-2 border-t pt-3">
                   <label className="block text-[10px] font-black uppercase text-slate-400">4. Atribuir Equipe</label>
                   <select className="w-full p-2.5 bg-slate-100 border rounded-lg text-xs font-bold uppercase cursor-pointer" value={drawerResponsible} onChange={e => setDrawerResponsible(e.target.value)}>
-                    <option value="">-- PadrÃ£o --</option>
+                    <option value="">-- Padrão --</option>
                     {teams.map(team => <option key={team} value={team}>{team}</option>)}
                   </select>
                 </div>
@@ -8303,7 +8177,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                     className="w-full text-left p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 transition"
                   >
                     <div className="text-xs font-black text-slate-800 uppercase">{group}</div>
-                    <div className="text-[10px] font-bold text-slate-500 mt-1">{groupFloors.size} pavimento(s) Â· {groupMacros.size} macroatividade(s)</div>
+                    <div className="text-[10px] font-bold text-slate-500 mt-1">{groupFloors.size} pavimento(s) · {groupMacros.size} macroatividade(s)</div>
                   </button>
                 );
               })}
@@ -8330,7 +8204,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                   {importStatus}
                 </div>
               )}
-              <p className="text-[10px] text-slate-400 mt-2">Extraindo atividades e salvando no Firebase. Por favor, nÃ£o feche o navegador.</p>
+              <p className="text-[10px] text-slate-400 mt-2">Extraindo atividades e salvando no Firebase. Por favor, não feche o navegador.</p>
             </div>
           </div>
         </div>
@@ -8358,7 +8232,7 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95 space-y-4">
             <div className="flex items-center space-x-2 text-indigo-600 mb-2">
-              <span className="text-xl">ðŸ’¬</span>
+              <span className="text-xl">💬</span>
               <h3 className="font-black text-sm uppercase tracking-wider">Enviar para WhatsApp</h3>
             </div>
             
@@ -8384,18 +8258,18 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                   <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-tight mb-1">
                     <span>Telefone Cadastrado</span>
-                    <span className="text-indigo-600 font-mono">{teamPhones[whatsappModal.teamName] || 'NÃ£o cadastrado'}</span>
+                    <span className="text-indigo-600 font-mono">{teamPhones[whatsappModal.teamName] || 'Não cadastrado'}</span>
                   </div>
                   {!teamPhones[whatsappModal.teamName] && (
                     <div className="text-[10px] text-amber-600 font-bold leading-tight">
-                      âš ï¸ Nenhum telefone cadastrado para esta equipe. Adicione um nas ConfiguraÃ§Ãµes ou vocÃª terÃ¡ que digitar o telefone no WhatsApp manualmente.
+                      ⚠️ Nenhum telefone cadastrado para esta equipe. Adicione um nas Configurações ou você terá que digitar o telefone no WhatsApp manualmente.
                     </div>
                   )}
                 </div>
               )}
 
               <div>
-                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">ConteÃºdo da Mensagem</label>
+                <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">Conteúdo da Mensagem</label>
                 <textarea
                   rows={8}
                   className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-slate-700 bg-slate-50"
@@ -8429,11 +8303,11 @@ Seja objetivo, tÃ©cnico e use linguagem adequada para um gestor de obras. MÃ�
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95">
             <div className="flex items-center space-x-2 text-emerald-600 mb-3"><h3 className="font-black text-sm uppercase tracking-wider">Finalizar Semana de Trabalho</h3></div>
-            <p className="text-xs text-slate-600 mb-4 leading-relaxed">VocÃª estÃ¡ concluindo as atividades planejadas para a semana de <strong className="text-indigo-900">{formatDateBR(currentWeekStart)}</strong>. Isso salvarÃ¡ o PPC finalizado de <strong className="text-emerald-600">{currentWeekPpcStats.percent.toFixed(1)}%</strong> diretamente no banco de dados.</p>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">Você está concluindo as atividades planejadas para a semana de <strong className="text-indigo-900">{formatDateBR(currentWeekStart)}</strong>. Isso salvará o PPC finalizado de <strong className="text-emerald-600">{currentWeekPpcStats.percent.toFixed(1)}%</strong> diretamente no banco de dados.</p>
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mb-6">
               <label className="flex items-start space-x-3 cursor-pointer">
                 <input type="checkbox" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 mt-0.5" checked={finalizeModal.carryOverUnfinished} onChange={(e) => setFinalizeModal({ ...finalizeModal, carryOverUnfinished: e.target.checked })} />
-                <div className="text-xs"><p className="font-bold text-slate-800">Reprogramar saldos nÃ£o concluÃ­dos</p><p className="text-slate-500 mt-0.5 leading-tight">Atividades com avanÃ§o parcial serÃ£o automaticamente duplicadas para a prÃ³xima semana.</p></div>
+                <div className="text-xs"><p className="font-bold text-slate-800">Reprogramar saldos não concluídos</p><p className="text-slate-500 mt-0.5 leading-tight">Atividades com avanço parcial serão automaticamente duplicadas para a próxima semana.</p></div>
               </label>
             </div>
             <div className="flex justify-end space-x-2">
