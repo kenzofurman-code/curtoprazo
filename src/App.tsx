@@ -656,7 +656,9 @@ const deserializeCrono = (tuplesArray) => {
       inheritedDependenciesFrom: t[12] || '',
       originalId: t[13] || '',
       replicationGroup: t[14] || '',
-      isParent: !!t[15]
+      isParent: t.length > 15
+        ? !!t[15]
+        : slugify(t[3] || '') === slugify(t[1] || '')
     };
   });
 };
@@ -2171,7 +2173,11 @@ const App = () => {
 
     const successorIds = new Set<string>();
     planning
-      .filter(task => task && task.weekId === previousWeekIdForDrawer && task.finalized)
+      .filter(task => {
+        if (!task || task.weekId !== previousWeekIdForDrawer) return false;
+        const cumulativeProgress = Number(task.executedBefore || 0) + Number(task.progressThisWeek || 0);
+        return task.finalized || cumulativeProgress >= 100;
+      })
       .forEach(task => {
         const cronoItem = cronogramaInicial.find(item => item.id === task.itemId);
         const parentItem = parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
@@ -8007,19 +8013,29 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <div className="flex justify-between items-center gap-3">
                     <label className="block text-[10px] font-black uppercase text-slate-500">Origem das atividades</label>
                     <span className="text-[9px] font-bold text-slate-500 text-right">
-                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Sucessoras' : drawerSourceMode === 'unfinished' ? 'Não concluídas' : 'Cronograma'}
+                      Selecionado: {drawerSourceMode === 'previous-successors' ? 'Frentes liberadas' : drawerSourceMode === 'unfinished' ? 'Não concluídas' : 'Cronograma'}
                     </span>
                   </div>
                   <div className="grid grid-cols-1 gap-2 max-h-0 overflow-hidden opacity-0 transition-all duration-300 group-hover:max-h-48 group-hover:opacity-100 group-focus-within:max-h-48 group-focus-within:opacity-100">
                     {[
                       { id: 'cronograma', label: 'Planeje a partir do Cronograma' },
-                      { id: 'previous-successors', label: 'Planeje a partir das sucessoras da semana anterior' },
+                      { id: 'previous-successors', label: 'Planeje a partir das frentes liberadas' },
                       { id: 'unfinished', label: 'Planeje a partir das atividades não concluídas' }
                     ].map(option => (
                       <button
                         key={option.id}
                         type="button"
-                        onClick={() => setDrawerSourceMode(option.id as any)}
+                        onClick={() => {
+                          setDrawerSourceMode(option.id as any);
+                          if (option.id === 'previous-successors' && drawerSourceMode !== 'previous-successors') {
+                            setDrawerMacro('');
+                            setDrawerFloors([]);
+                            setDrawerSelectedServices([]);
+                            setDrawerWarning('');
+                            setDrawerExpandedStep(1);
+                            setIsDrawerMacroDropdownOpen(false);
+                          }
+                        }}
                         className={`w-full text-left p-3 rounded-xl border text-[10px] font-black uppercase tracking-wider transition ${
                           drawerSourceMode === option.id
                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
@@ -8032,7 +8048,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </div>
                   {drawerSourceMode === 'previous-successors' && (
                     <p className="text-[10px] text-slate-400 font-bold">
-                      Semana anterior: {formatDateBR(previousWeekIdForDrawer)}. Exibindo apenas sucessoras das atividades finalizadas.
+                      Semana anterior: {formatDateBR(previousWeekIdForDrawer)}. Exibindo frentes liberadas pelas atividades concluídas.
                     </p>
                   )}
                   {drawerSourceMode === 'unfinished' && (
@@ -8041,30 +8057,24 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </p>
                   )}
                 </div>
-                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 group relative rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-white focus-within:border-indigo-200 focus-within:bg-white">
+                {drawerSourceMode !== 'unfinished' && <div className={`space-y-2 relative rounded-xl border border-slate-200 bg-slate-50 p-3 transition hover:border-indigo-200 hover:bg-white focus-within:border-indigo-200 focus-within:bg-white ${drawerSourceMode === 'previous-successors' ? '' : 'group'}`}>
                   <div className="flex justify-between items-center gap-3">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">1. Selecione a Macroatividade</label>
-                    {drawerMacro && <span className="text-[9px] font-bold text-slate-500 text-right truncate max-w-[220px]">{getMacroTitle(drawerMacro)}</span>}
+                    {drawerMacro && drawerSourceMode !== 'previous-successors' && <span className="text-[9px] font-bold text-slate-500 text-right truncate max-w-[220px]">{getMacroTitle(drawerMacro)}</span>}
                   </div>
-                  <div className={`overflow-visible transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerMacro ? 'max-h-0 opacity-0' : 'max-h-72 opacity-100'}`}>
-                  {isDrawerMacroDropdownOpen && (
-                    <div className="fixed inset-0 z-40" onClick={() => setIsDrawerMacroDropdownOpen(false)} />
-                  )}
-                  <div className="relative z-50">
-                    <input
-                      type="text"
-                      placeholder="🔎 Buscar macroatividade..."
-                      className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-xs focus:bg-white outline-none cursor-pointer"
-                      value={isDrawerMacroDropdownOpen ? drawerMacroSearch : (drawerMacro ? getMacroTitle(drawerMacro) : '')}
-                      onFocus={() => {
-                        setDrawerMacroSearch('');
-                        setIsDrawerMacroDropdownOpen(true);
-                      }}
-                      onChange={(e) => setDrawerMacroSearch(e.target.value)}
-                    />
-                    {isDrawerMacroDropdownOpen && (
-                      <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-y-auto custom-scrollbar z-50">
-                        {filteredMacros.map(macro => (
+                  {drawerSourceMode === 'previous-successors' ? (
+                    drawerMacro && drawerExpandedStep !== 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => setDrawerExpandedStep(1)}
+                        className="w-full h-10 flex items-center justify-between gap-3 px-3 bg-white border border-indigo-200 rounded-lg text-left hover:border-indigo-400 transition"
+                      >
+                        <span className="min-w-0 truncate text-xs font-black text-slate-700 uppercase">{getMacroTitle(drawerMacro)}</span>
+                        <span className="shrink-0 text-[9px] font-black uppercase text-indigo-600">Alterar</span>
+                      </button>
+                    ) : (
+                      <div className="max-h-[22rem] overflow-y-auto custom-scrollbar rounded-lg border border-slate-200 bg-white p-2 space-y-1">
+                        {drawerMacroOptions.map(macro => (
                           <button
                             key={macro}
                             type="button"
@@ -8073,23 +8083,66 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               setDrawerFloors([]);
                               setDrawerSelectedServices([]);
                               setDrawerWarning('');
-                              setIsDrawerMacroDropdownOpen(false);
                               setDrawerExpandedStep(2);
                             }}
-                            className="w-full text-left p-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition uppercase tracking-wider border-b border-slate-100 last:border-b-0"
+                            className={`w-full min-h-10 text-left px-3 py-2 rounded-md border text-xs font-bold uppercase transition ${
+                              drawerMacro === macro
+                                ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                                : 'border-transparent text-slate-700 hover:border-indigo-200 hover:bg-indigo-50'
+                            }`}
                           >
                             {getMacroTitle(macro)}
                           </button>
                         ))}
-                        {filteredMacros.length === 0 && (
-                          <p className="p-3 text-xs text-slate-400 italic text-center font-bold">
-                            {drawerSourceMode === 'previous-successors' ? 'Nenhuma sucessora liberada pela semana anterior.' : 'Nenhuma macroatividade encontrada.'}
-                          </p>
+                        {drawerMacroOptions.length === 0 && (
+                          <p className="p-4 text-xs text-slate-400 italic text-center font-bold">Nenhuma frente liberada pela semana anterior.</p>
                         )}
                       </div>
-                    )}
-                  </div>
-                </div>
+                    )
+                  ) : (
+                    <div className={`overflow-visible transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerMacro ? 'max-h-0 opacity-0' : 'max-h-72 opacity-100'}`}>
+                      {isDrawerMacroDropdownOpen && (
+                        <div className="fixed inset-0 z-40" onClick={() => setIsDrawerMacroDropdownOpen(false)} />
+                      )}
+                      <div className="relative z-50">
+                        <input
+                          type="text"
+                          placeholder="🔎 Buscar macroatividade..."
+                          className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg font-bold text-xs focus:bg-white outline-none cursor-pointer"
+                          value={isDrawerMacroDropdownOpen ? drawerMacroSearch : (drawerMacro ? getMacroTitle(drawerMacro) : '')}
+                          onFocus={() => {
+                            setDrawerMacroSearch('');
+                            setIsDrawerMacroDropdownOpen(true);
+                          }}
+                          onChange={(e) => setDrawerMacroSearch(e.target.value)}
+                        />
+                        {isDrawerMacroDropdownOpen && (
+                          <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-y-auto custom-scrollbar z-50">
+                            {filteredMacros.map(macro => (
+                              <button
+                                key={macro}
+                                type="button"
+                                onClick={() => {
+                                  setDrawerMacro(macro);
+                                  setDrawerFloors([]);
+                                  setDrawerSelectedServices([]);
+                                  setDrawerWarning('');
+                                  setIsDrawerMacroDropdownOpen(false);
+                                  setDrawerExpandedStep(2);
+                                }}
+                                className="w-full text-left p-2.5 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition uppercase tracking-wider border-b border-slate-100 last:border-b-0"
+                              >
+                                {getMacroTitle(macro)}
+                              </button>
+                            ))}
+                            {filteredMacros.length === 0 && (
+                              <p className="p-3 text-xs text-slate-400 italic text-center font-bold">Nenhuma macroatividade encontrada.</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>}
                 {drawerSourceMode !== 'unfinished' && <div className="space-y-2 group rounded-xl border border-indigo-100 bg-white p-3">
                   <div className="flex justify-between items-center">
