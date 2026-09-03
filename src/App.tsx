@@ -846,6 +846,22 @@ const roundDown25 = (value) => {
   return 75;
 };
 
+const getActivityProgressFromFloors = (activity, floorsData) => {
+  if (!activity) return 0;
+  const macroKey = slugify(activity.macro);
+  const items = floorsData?.[activity.floor]?.[macroKey]?.items;
+  if (!Array.isArray(items)) return clampPercent(activity.progress ?? 0);
+
+  const item = items.find(candidate => (
+    candidate && (
+      candidate.id === activity.id ||
+      String(candidate.name || '').toUpperCase() === String(activity.service || '').toUpperCase()
+    )
+  ));
+
+  return clampPercent(item?.actualPercent ?? activity.progress ?? 0);
+};
+
 const formatPercentBR = (value) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return '0%';
@@ -865,10 +881,15 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
     }
     const key = `${task.floor}||${task.sectionId}||${task.itemId}`;
     if (cumulativeProgress[key] === undefined) {
-      cumulativeProgress[key] = roundDown25(task.executedBefore || 0);
+      cumulativeProgress[key] = clampPercent(task.executedBeforeRaw ?? task.executedBefore ?? 0);
     }
-    const updatedTask = { ...task, executedBefore: cumulativeProgress[key] };
-    cumulativeProgress[key] = Math.min(100, cumulativeProgress[key] + (task.progressThisWeek || 0));
+    const exactExecutedBefore = cumulativeProgress[key];
+    const updatedTask = {
+      ...task,
+      executedBefore: roundDown25(exactExecutedBefore),
+      executedBeforeRaw: exactExecutedBefore
+    };
+    cumulativeProgress[key] = clampPercent(exactExecutedBefore + (Number(task.progressThisWeek) || 0));
     return updatedTask;
   });
 
@@ -912,8 +933,8 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
             // Use O(1) lookup
             const cronoItem = (item.id && cronoById[item.id]) || cronoByKey[`${floor}||${sectionId}||${String(item.name || '').toUpperCase()}`];
             const cronoProgress = cronoItem ? (cronoItem.progress || 0) : 0;
-            const realizedProgress = item._realized !== undefined ? item._realized : 0;
-            item.actualPercent = clampPercent(Math.max(cronoProgress, realizedProgress));
+            const hasPlanningProgress = item._realized !== undefined;
+            item.actualPercent = clampPercent(hasPlanningProgress ? item._realized : cronoProgress);
             delete item._realized;
           });
         }
@@ -927,8 +948,9 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
 const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
   const baseCrono = Array.isArray(currentCrono) ? currentCrono : [];
   
-  // 1. Build a map of valid items currently in floorsData
-  const validKeys = new Set();
+  // Build lookup maps so the physical progress is persisted in every data view.
+  const physicalById = new Map();
+  const physicalByName = new Map();
   (floorsList || []).forEach(floor => {
     const floorData = floorsData[floor] || {};
     Object.keys(floorData).forEach(macroKey => {
@@ -937,18 +959,24 @@ const syncCronogramaWithFloorsData = (currentCrono, floorsList, floorsData) => {
       const items = section.items || [];
       items.forEach(item => {
         if (item) {
-          const key = `${floor}||${macroKey}||${String(item.name || '').toUpperCase()}`;
-          validKeys.add(key);
+          const contextKey = `${floor}||${macroKey}`;
+          if (item.id) physicalById.set(`${contextKey}||${item.id}`, item);
+          physicalByName.set(`${contextKey}||${String(item.name || '').toUpperCase()}`, item);
         }
       });
     });
   });
   
-  // 2. Filter out any crono items that are no longer valid (deleted in config)
-  const filteredCrono = baseCrono.filter(c => {
-    if (!c) return false;
-    const key = `${c.floor}||${slugify(c.macro)}||${String(c.service || '').toUpperCase()}`;
-    return validKeys.has(key);
+  const filteredCrono = baseCrono.flatMap(c => {
+    if (!c) return [];
+    const contextKey = `${c.floor}||${slugify(c.macro)}`;
+    const physicalItem = (c.id && physicalById.get(`${contextKey}||${c.id}`)) ||
+      physicalByName.get(`${contextKey}||${String(c.service || '').toUpperCase()}`);
+    if (!physicalItem) return [];
+    return [{
+      ...c,
+      progress: clampPercent(physicalItem.actualPercent ?? c.progress ?? 0)
+    }];
   });
   
   // 3. Add any items from floorsData that are missing in crono
@@ -1678,11 +1706,38 @@ const App = () => {
     let hasLoadedCrono = false;
     let hasLoadedFloors = false;
     let hasLoadedPlanning = false;
+    let hasReceivedCrono = false;
+    let hasReceivedFloors = false;
+    let hasReceivedPlanning = false;
+    let loadedFloorNames: any[] = [];
+    let loadedCronoSnapshot: any[] = [];
+    let loadedFloorsSnapshot: any = {};
+    let loadedPlanningSnapshot: any[] = [];
+
+    const reconcileLoadedProgress = () => {
+      if (!hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning) return;
+
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
+        loadedPlanningSnapshot,
+        loadedFloorsSnapshot,
+        loadedCronoSnapshot
+      );
+      const syncedCrono = syncCronogramaWithFloorsData(
+        loadedCronoSnapshot,
+        loadedFloorNames.length > 0 ? loadedFloorNames : Object.keys(updatedFloorsData),
+        updatedFloorsData
+      );
+
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      setCronogramaInicial(syncedCrono);
+    };
 
     const unsubMeta = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
         const loadedFloors = Array.isArray(d.floors) ? d.floors : [];
+        loadedFloorNames = loadedFloors;
         setFloors(loadedFloors);
         if (loadedFloors.length > 0) {
           if (!activeFloor || !loadedFloors.includes(activeFloor)) setActiveFloor(loadedFloors[0]);
@@ -1762,7 +1817,8 @@ const App = () => {
               loadedCrono = [];
             }
           }
-          setCronogramaInicial(deserializeCrono(loadedCrono));
+          loadedCronoSnapshot = deserializeCrono(loadedCrono);
+          setCronogramaInicial(loadedCronoSnapshot);
         }
 
         if (!hasLoadedFloors && d.data) {
@@ -1776,6 +1832,7 @@ const App = () => {
             }
           }
           const finalData = loadedData && Object.keys(loadedData).length > 0 ? loadedData : {};
+          loadedFloorsSnapshot = finalData;
           setAllFloorsData(finalData);
           if (loadedFloors.length > 0 && (!loadedMatrices || loadedMatrices.length === 0)) {
             setMatrices([{ id: 'default_matrix', name: 'Matriz Principal', floors: loadedFloors, macros: Object.keys(finalData?.[loadedFloors[0]] || {}) }]);
@@ -1792,6 +1849,7 @@ const App = () => {
               loadedPlanning = [];
             }
           }
+          loadedPlanningSnapshot = loadedPlanning;
           setPlanning(loadedPlanning);
         }
       } else {
@@ -1799,6 +1857,7 @@ const App = () => {
         setActiveFloor('');
         setSelectedDashboardFloor('');
       }
+      reconcileLoadedProgress();
       setLoading(false);
     }, (err) => {
       console.error("Firestore error:", err);
@@ -1818,8 +1877,11 @@ const App = () => {
             loadedCrono = [];
           }
         }
-        setCronogramaInicial(deserializeCrono(loadedCrono));
+        loadedCronoSnapshot = deserializeCrono(loadedCrono);
+        setCronogramaInicial(loadedCronoSnapshot);
       }
+      hasReceivedCrono = true;
+      reconcileLoadedProgress();
     });
 
     const unsubFloors = onSnapshot(floorsRef, (snap) => {
@@ -1835,8 +1897,11 @@ const App = () => {
             loadedData = {};
           }
         }
-        setAllFloorsData(loadedData && Object.keys(loadedData).length > 0 ? loadedData : {});
+        loadedFloorsSnapshot = loadedData && Object.keys(loadedData).length > 0 ? loadedData : {};
+        setAllFloorsData(loadedFloorsSnapshot);
       }
+      hasReceivedFloors = true;
+      reconcileLoadedProgress();
     });
 
     const unsubPlanning = onSnapshot(planningRef, (snap) => {
@@ -1852,8 +1917,11 @@ const App = () => {
             loadedPlanning = [];
           }
         }
+        loadedPlanningSnapshot = loadedPlanning;
         setPlanning(loadedPlanning);
       }
+      hasReceivedPlanning = true;
+      reconcileLoadedProgress();
     });
 
     return () => {
@@ -2036,6 +2104,7 @@ const App = () => {
         })
       ]);
 
+      setCronogramaInicial(syncedCrono);
       setDbSavingStatus('saved');
     } catch (e: any) {
       console.error("Save error:", e);
@@ -2156,11 +2225,10 @@ const App = () => {
         .filter(item => item && !isParentCronoItem(item))
         .map(item => familyKey(item))
     );
-    const openCronoItems = cronogramaInicial.filter(item => (
-      item &&
-      (item.progress ?? 0) < 100 &&
-      (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item)))
-    ));
+    const openCronoItems = cronogramaInicial
+      .filter(item => item && (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item))))
+      .map(item => ({ ...item, progress: getActivityProgressFromFloors(item, allFloorsData) }))
+      .filter(item => item.progress < 100);
     if (drawerSourceMode === 'unfinished') {
       return openCronoItems.filter(item => (item.progress ?? 0) > 0 && (item.progress ?? 0) < 100);
     }
@@ -2202,7 +2270,7 @@ const App = () => {
       const candidates = [item.id, item.originalId].filter(Boolean).map(String);
       return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
     });
-  }, [cronogramaInicial, drawerSourceMode, planning, previousWeekIdForDrawer]);
+  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer]);
 
   const drawerMacroOptions = useMemo(() => (
     Array.from(new Set(drawerCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
@@ -2222,19 +2290,7 @@ const App = () => {
   }, [allPossibleMacros, floors]);
 
   const getActivityActualProgress = (c: any) => {
-    if (!c) return 0;
-    const floorData = allFloorsData[c.floor];
-    if (floorData) {
-      const macroKey = slugify(c.macro);
-      const section = floorData[macroKey];
-      if (section && Array.isArray(section.items)) {
-        const item = section.items.find(i => i.id === c.id || (String(i.name || '').toUpperCase() === String(c.service || '').toUpperCase()));
-        if (item) {
-          return item.actualPercent ?? 0;
-        }
-      }
-    }
-    return c.progress ?? 0;
+    return getActivityProgressFromFloors(c, allFloorsData);
   };
 
   const getActivityProgressAtDate = (c: any, maxDate: Date) => {
@@ -4123,6 +4179,9 @@ const App = () => {
   };
 
   const handleAcceptPreFill = async (taskId: string) => {
+    const acceptedTask = planning.find(t => t.id === taskId);
+    if (!acceptedTask || acceptedTask.finalized) return;
+
     const updatedPlanning = planning.map(t => {
       if (t.id === taskId) {
         return {
@@ -4140,8 +4199,42 @@ const App = () => {
       return t;
     });
 
-    setPlanning(updatedPlanning);
-    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    if (acceptedTask.isManual) {
+      setPlanning(updatedPlanning);
+      await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
+      setNotification({ message: 'Apontamento de campo aceito com sucesso!', type: 'success' });
+      return;
+    }
+
+    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+    const sectionKey = acceptedTask.sectionId || 'estrutura';
+    const itemBefore = allFloorsData[acceptedTask.floor]?.[sectionKey]?.items?.find(i => i.id === acceptedTask.itemId);
+    const itemAfter = updatedFloorsData[acceptedTask.floor]?.[sectionKey]?.items?.find(i => i.id === acceptedTask.itemId);
+    const updatedHistory = [...history];
+
+    if (itemBefore && itemAfter) {
+      const oldVal = Number(itemBefore.actualPercent) || 0;
+      const newVal = Number(itemAfter.actualPercent) || 0;
+      if (newVal !== oldVal) {
+        updatedHistory.push({
+          timestamp: new Date().toISOString(),
+          floor: acceptedTask.floor,
+          sectionId: sectionKey,
+          sectionTitle: getMacroTitle(sectionKey),
+          itemId: acceptedTask.itemId,
+          itemName: itemAfter.name,
+          progressAchieved: newVal - oldVal,
+          oldPercent: oldVal,
+          newPercent: newVal,
+          userId
+        });
+      }
+    }
+
+    setPlanning(recalculatedPlanning);
+    setAllFloorsData(updatedFloorsData);
+    setHistory(updatedHistory);
+    await saveToDB(floors, updatedFloorsData, updatedHistory, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
     setNotification({ message: 'Apontamento de campo aceito com sucesso!', type: 'success' });
   };
 
@@ -7610,7 +7703,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           return t;
         });
 
-        await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId);
+        await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, weatherApiKey, weatherCache, true);
         
         setTeamSubmitSuccess(true);
         setNotification({ message: 'Avanço enviado com sucesso!', type: 'success' });
