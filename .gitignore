@@ -112,3 +112,8 @@ dist
 *.xlsx
 *.xls
 *.csv
+.vercel
+
+# Dados locais / cache Firebase
+local_db/
+.firebase/

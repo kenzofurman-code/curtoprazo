@@ -1,7 +1,37 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { 
+  getFirestore as fbGetFirestore, 
+  doc as fbDoc, 
+  setDoc as fbSetDoc, 
+  updateDoc as fbUpdateDoc, 
+  onSnapshot as fbOnSnapshot, 
+  getDoc as fbGetDoc, 
+  writeBatch as fbWriteBatch, 
+  runTransaction as fbRunTransaction 
+} from 'firebase/firestore';
+import {
+  isLocalDbMode,
+  setLocalDbMode,
+  getLocalDocData,
+  setLocalDocData,
+  subscribeLocalDoc,
+  exportAllLocalData,
+  resetLocalDataToFirestoreSnapshot
+} from './localDatabase';
+import { preparePayload, resolvePayload, MAX_SAVE_BYTES } from './chunkedPayload';
+import { GENERAL_DELAY_REASONS, DELAY_REASON_REGISTRY_ID, normalizeDelayReason, mergeDelayReasons, projectOnlyDelayReasons, normalizeDelayReasonFields } from './delayReasons';
+import DelayReasonSelect from './DelayReasonSelect';
+import { cleanCarriedTask } from './planningCarryOver';
+import TeamMultiSelect from './TeamMultiSelect';
+import { ppcPeriodWeeks, calculatePpcDetail, getPpcSignal, teamsWithPlannedActivities } from './ppcDetail';
+import PpcVisualBoard from './PpcVisualBoard';
+import type { PpcPeriod } from './ppcDetail';
+import { LongTermPlanner } from './LongTermPlanner';
+import { ScheduleVersionsView } from './ScheduleVersionsView';
+import { CalendarView } from './CalendarView';
+import { compileLobToCronograma, hydrateLobFromCronograma } from './longTermSchedule';
 
 declare global {
   interface Window {
@@ -12,6 +42,125 @@ declare global {
     __initial_auth_token?: string;
   }
 }
+
+// --- Ponte de Banco Local Seguro (Isolamento total do Firestore em nuvem) ---
+const isLocalModeActive = (): boolean => isLocalDbMode();
+
+const getFirestore = (app?: any): any => {
+  if (isLocalModeActive()) {
+    return { isLocal: true };
+  }
+  return fbGetFirestore(app);
+};
+
+const doc = (dbOrParent: any, ...pathSegments: string[]): any => {
+  if (isLocalModeActive() || (dbOrParent && dbOrParent.isLocal)) {
+    const parentPath = dbOrParent?.path ? String(dbOrParent.path) : '';
+    const id = pathSegments[pathSegments.length - 1] || '';
+    const fullPath = parentPath ? `${parentPath}/${pathSegments.join('/')}` : pathSegments.join('/');
+    const docParentPath = parentPath || pathSegments.slice(0, -1).join('/');
+    return {
+      id,
+      path: fullPath,
+      parent: { path: docParentPath, isLocal: true },
+      isLocal: true
+    };
+  }
+  return (fbDoc as any)(dbOrParent, ...pathSegments);
+};
+
+const setDoc = async (ref: any, data: any, options?: any): Promise<void> => {
+  if (isLocalModeActive() || ref?.isLocal) {
+    const docId = ref.id;
+    if (options?.merge) {
+      const existing = getLocalDocData(docId) || {};
+      setLocalDocData(docId, { ...existing, ...data });
+    } else {
+      setLocalDocData(docId, data);
+    }
+    return Promise.resolve();
+  }
+  return fbSetDoc(ref, data, options);
+};
+
+const updateDoc = async (ref: any, data: any): Promise<void> => {
+  if (isLocalModeActive() || ref?.isLocal) {
+    const docId = ref.id;
+    const existing = getLocalDocData(docId) || {};
+    setLocalDocData(docId, { ...existing, ...data });
+    return Promise.resolve();
+  }
+  return fbUpdateDoc(ref, data);
+};
+
+const getDoc = async (ref: any): Promise<any> => {
+  if (isLocalModeActive() || ref?.isLocal) {
+    const docId = ref.id;
+    const data = getLocalDocData(docId);
+    return Promise.resolve({
+      id: docId,
+      exists: () => data !== null && data !== undefined,
+      data: () => (data ? JSON.parse(JSON.stringify(data)) : {})
+    });
+  }
+  return fbGetDoc(ref);
+};
+
+const onSnapshot = (ref: any, onNext: (snap: any) => void, onError?: (err: any) => void): (() => void) => {
+  if (isLocalModeActive() || ref?.isLocal) {
+    const docId = ref.id;
+    return subscribeLocalDoc(docId, snap => {
+      try {
+        onNext(snap);
+      } catch (err) {
+        if (onError) onError(err);
+      }
+    });
+  }
+  return fbOnSnapshot(ref, onNext, onError);
+};
+
+const writeBatch = (db: any): any => {
+  if (isLocalModeActive() || (db && db.isLocal)) {
+    const operations: Array<() => Promise<void>> = [];
+    return {
+      set: (ref: any, data: any, options?: any) => {
+        operations.push(() => setDoc(ref, data, options));
+      },
+      update: (ref: any, data: any) => {
+        operations.push(() => updateDoc(ref, data));
+      },
+      delete: (ref: any) => {
+        operations.push(() => {
+          setLocalDocData(ref.id, null);
+          return Promise.resolve();
+        });
+      },
+      commit: async () => {
+        for (const op of operations) {
+          await op();
+        }
+      }
+    };
+  }
+  return fbWriteBatch(db);
+};
+
+const runTransaction = async (db: any, updateFunction: (transaction: any) => Promise<any>): Promise<any> => {
+  if (isLocalModeActive() || (db && db.isLocal)) {
+    const transaction = {
+      get: async (ref: any) => getDoc(ref),
+      set: (ref: any, data: any, options?: any) => setDoc(ref, data, options),
+      update: (ref: any, data: any) => updateDoc(ref, data),
+      delete: (ref: any) => {
+        setLocalDocData(ref.id, null);
+      }
+    };
+    return updateFunction(transaction);
+  }
+  return fbRunTransaction(db, updateFunction);
+};
+
 
 // --- Utilitários de Data e Dados ---
 const compressString = (str: string): string => {
@@ -311,6 +460,13 @@ const roundPercentValue = (value) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.round(clampPercent(n) * 1000) / 1000;
+};
+
+const getTaskAccumulatedProgress = (task) => {
+  if (!task) return 0;
+  const previousProgress = clampPercent(task.executedBeforeRaw ?? task.executedBefore ?? 0);
+  const measuredProgress = clampPercent(task.progressThisWeek ?? 0);
+  return Math.max(previousProgress, measuredProgress);
 };
 
 const getBudgetFamilyKey = (item) => `${item?.floor || ''}||${slugify(item?.macro || item?.sectionId || '')}`;
@@ -889,7 +1045,10 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
       executedBefore: roundDown25(exactExecutedBefore),
       executedBeforeRaw: exactExecutedBefore
     };
-    cumulativeProgress[key] = clampPercent(exactExecutedBefore + (Number(task.progressThisWeek) || 0));
+    cumulativeProgress[key] = Math.max(
+      exactExecutedBefore,
+      clampPercent(task.progressThisWeek ?? 0)
+    );
     return updatedTask;
   });
 
@@ -1088,8 +1247,9 @@ const INITIAL_STRUCTURE = {
   'instalacoes': { title: 'INSTALAÇÕES', items: [{ id: 'hidraulica', name: 'HIDRÁULICA', actualPercent: 0 }, { id: 'eletrica', name: 'ELÉTRICA', actualPercent: 0 }] }
 };
 const INITIAL_CRONOGRAMA = [];
+const MAX_IMPORTED_CRONOGRAMA_ITEMS = 15000;
 const INITIAL_TEAMS = ['EQUIPE CIVIL', 'EQUIPE ARMADURA', 'EQUIPE HIDRÁULICA', 'EQUIPE ELÉTRICA', 'EQUIPE ACABAMENTO'];
-const INITIAL_DELAYS = ['Chuva / Clima Impróprio', 'Falta de Material em Obra', 'Falta de Mão de Obra / Absenteísmo', 'Atraso de Projeto ou Detalhe', 'Quebra de Equipamento / Ferramenta', 'Serviço Anterior não Concluído'];
+const INITIAL_DELAYS = GENERAL_DELAY_REASONS;
 
 const App = () => {
   const [db, setDb] = useState<any>(null);
@@ -1106,6 +1266,8 @@ const App = () => {
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [dashboardSubView, setDashboardSubView] = useState<'overview' | 'matrix' | 'ppc' | 'history'>('overview');
+  const [isWeeklyConfigModalOpen, setIsWeeklyConfigModalOpen] = useState<boolean>(false);
   const [notification, setNotification] = useState<any>({ message: '', type: '' });
 
   useEffect(() => {
@@ -1134,7 +1296,12 @@ const App = () => {
   const [planning, setPlanning] = useState<any[]>([]);
   const [cronogramaInicial, setCronogramaInicial] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
-  const [delayReasons, setDelayReasons] = useState<any[]>([]);
+  const [generalDelayReasons, setGeneralDelayReasons] = useState<string[]>(GENERAL_DELAY_REASONS);
+  const [projectDelayReasons, setProjectDelayReasons] = useState<string[]>([]);
+  const [delayRegistryReady, setDelayRegistryReady] = useState(false);
+  const generalDelayReasonsRef = useRef(generalDelayReasons);
+  const delayReasons = useMemo(() => mergeDelayReasons(generalDelayReasons, projectDelayReasons), [generalDelayReasons, projectDelayReasons]);
+  const localDelayReasons = useMemo(() => projectOnlyDelayReasons(projectDelayReasons, generalDelayReasons), [projectDelayReasons, generalDelayReasons]);
   const [ppcHistory, setPpcHistory] = useState<any[]>([]);
   const [matrices, setMatrices] = useState<any[]>([]); 
   const [budgetDiffs, setBudgetDiffs] = useState<any[]>([]);
@@ -1218,9 +1385,11 @@ const App = () => {
   const [manualFloor, setManualFloor] = useState<string>('');
 
   // Estados para Detalhamento PPC
-  const [ppcSelectedContractor, setPpcSelectedContractor] = useState<string>('');
-  const [ppcStartWeek, setPpcStartWeek] = useState<string>('');
-  const [ppcEndWeek, setPpcEndWeek] = useState<string>('');
+  const [ppcSelectedContractors, setPpcSelectedContractors] = useState<string[]>([]);
+  const [ppcPeriod, setPpcPeriod] = useState<PpcPeriod>('last-week');
+  const [ppcVisualBoard, setPpcVisualBoard] = useState(false);
+  const [ppcOnlyWithActivities, setPpcOnlyWithActivities] = useState(false);
+  const [ppcSelectedWeek, setPpcSelectedWeek] = useState('');
 
   // Estados para Múltiplos Projetos
   const [selectedProjectId, setSelectedProjectId] = useState<string>(() => {
@@ -1228,6 +1397,7 @@ const App = () => {
   });
   const [projects, setProjects] = useState<any[]>([]);
   const [showAddProjectModal, setShowAddProjectModal] = useState<boolean>(false);
+  const [isAddingProject, setIsAddingProject] = useState(false);
   const [newProjName, setNewProjName] = useState<string>('');
   const [newProjArea, setNewProjArea] = useState<string>('');
   const [newProjAddress, setNewProjAddress] = useState<string>('');
@@ -1293,12 +1463,28 @@ const App = () => {
   const [drawerResponsible, setDrawerResponsible] = useState<any>('');
   const [drawerWarning, setDrawerWarning] = useState<any>('');
 
+  // Floating Mini-Drawer: Planejar Próxima Semana a partir de 100% no Curto Prazo
+  const [nextWeekPopover, setNextWeekPopover] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [nextWeekMacro, setNextWeekMacro] = useState<string>('');
+  const [nextWeekFloors, setNextWeekFloors] = useState<string[]>([]);
+  const [nextWeekSelectedServices, setNextWeekSelectedServices] = useState<string[]>([]);
+  const [nextWeekResponsible, setNextWeekResponsible] = useState<string>('');
+  const [nextWeekWarning, setNextWeekWarning] = useState<string>('');
+  const nextWeekDragRef = useRef<{ isDragging: boolean; startX: number; startY: number; origX: number; origY: number }>({
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    origX: 0,
+    origY: 0
+  });
+
   // Config Modals
   const [newFloorName, setNewFloorName] = useState<string>('');
   const [newItemName, setNewItemName] = useState<string>('');
   const [newPackageName, setNewPackageName] = useState<string>('');
   const [newTeamName, setNewTeamName] = useState<string>('');
   const [newDelayReason, setNewDelayReason] = useState<string>('');
+  const [isSavingDelayReason, setIsSavingDelayReason] = useState(false);
   const [listeningTaskId, setListeningTaskId] = useState<any>(null);
   const [listeningComplementTaskId, setListeningComplementTaskId] = useState<any>(null);
   const [editingComplementTaskId, setEditingComplementTaskId] = useState<string | null>(null);
@@ -1306,12 +1492,17 @@ const App = () => {
   const [micConnectingTaskId, setMicConnectingTaskId] = useState<string | null>(null);
   const [micConnectingComplementTaskId, setMicConnectingComplementTaskId] = useState<string | null>(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [editingFinalizedWeekId, setEditingFinalizedWeekId] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedTaskIds([]);
+    const nextWeekId = toLocalDateString(currentWeekStart);
+    setEditingFinalizedWeekId(previous => previous && previous !== nextWeekId ? null : previous);
   }, [currentWeekStart]);
 
   const [dbSavingStatus, setDbSavingStatus] = useState<'saved' | 'saving' | 'pending'>('saved');
+  const [isProjectHydrated, setIsProjectHydrated] = useState<boolean>(false);
+  const hydratedProjectIdsRef = useRef<Set<string>>(new Set());
   const saveTimeoutRef = useRef<any>(null);
   const pendingSaveArgsRef = useRef<any>(null);
 
@@ -1370,6 +1561,13 @@ const App = () => {
   useEffect(() => {
     let unsubscribe = () => {};
     try {
+      if (isLocalModeActive()) {
+        const dbInst = getFirestore();
+        setDb(dbInst);
+        setUserId('local_user');
+        setLoading(false);
+        return;
+      }
       if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
         throw new Error('Configuração do Firebase não encontrada.');
       }
@@ -1413,6 +1611,22 @@ const App = () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [dbSavingStatus]);
+
+  // Motivos gerais são lidos também nos links de apontamento de campo.
+  useEffect(() => {
+    if (!db || !userId) return;
+    setDelayRegistryReady(false);
+    return onSnapshot(doc(db, `artifacts/${appId}/public/data/project_measurements`, DELAY_REASON_REGISTRY_ID), snapshot => {
+      const reasons = snapshot.exists() ? mergeDelayReasons(snapshot.data().reasons) : GENERAL_DELAY_REASONS;
+      generalDelayReasonsRef.current = reasons;
+      setGeneralDelayReasons(reasons);
+      setDelayRegistryReady(true);
+    }, error => {
+      console.error('Erro ao carregar motivos gerais:', error);
+      setDelayRegistryReady(false);
+      setNotification({ message: 'Não foi possível carregar os motivos gerais de atraso.', type: 'error' });
+    });
+  }, [db, userId]);
 
   // Carrega a lista de projetos do Firestore
   useEffect(() => {
@@ -1694,9 +1908,13 @@ const App = () => {
     if (!db || !userId) return;
     const targetId = urlUserId ? urlUserId : selectedProjectId;
     if (!targetId) {
+      setIsProjectHydrated(false);
       setLoading(false);
       return;
-    }
+        }
+    hydratedProjectIdsRef.current.delete(targetId);
+    setIsProjectHydrated(false);
+    setProjectDelayReasons([]);
     setLoading(true);
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
     const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_crono`);
@@ -1706,6 +1924,7 @@ const App = () => {
     let hasLoadedCrono = false;
     let hasLoadedFloors = false;
     let hasLoadedPlanning = false;
+    let hasReceivedMeta = false;
     let hasReceivedCrono = false;
     let hasReceivedFloors = false;
     let hasReceivedPlanning = false;
@@ -1713,9 +1932,50 @@ const App = () => {
     let loadedCronoSnapshot: any[] = [];
     let loadedFloorsSnapshot: any = {};
     let loadedPlanningSnapshot: any[] = [];
+    let disposed = false;
+    let metaRevision: string | undefined;
+    const payloadRevisions: Record<string, string | undefined> = {};
+    const failedPayloads = new Set<string>();
+
+    const handlePayloadError = (err: unknown) => {
+      console.error('Erro ao carregar dados do projeto:', err);
+      hydratedProjectIdsRef.current.delete(targetId);
+      setIsProjectHydrated(false);
+      setLoading(false);
+      setNotification({ message: 'Não foi possível carregar todos os dados do projeto. Recarregue a página antes de editar.', type: 'error' });
+    };
+
+    const subscribePayload = (ref: typeof cronoRef, field: string, apply: (snapshot: any) => void) => {
+      let generation = 0;
+      const unsubscribe = onSnapshot(ref, async (snap) => {
+        const currentGeneration = ++generation;
+        try {
+          const snapshotData = snap.exists() ? snap.data() : {};
+          const value = await resolvePayload(snapshotData[field], async (id) => {
+            const part = await getDoc(doc(ref.parent, id));
+            return part.exists() ? part.data().payload : undefined;
+          });
+          if (disposed || currentGeneration !== generation) return;
+          failedPayloads.delete(field);
+          payloadRevisions[field] = snapshotData.payloadRevision;
+          apply({ exists: () => snap.exists(), data: () => ({ ...snapshotData, [field]: value }) });
+        } catch (err) {
+          if (!disposed && currentGeneration === generation) {
+            failedPayloads.add(field);
+            handlePayloadError(err);
+          }
+        }
+      }, (err) => {
+        failedPayloads.add(field);
+        handlePayloadError(err);
+      });
+      return () => { generation++; unsubscribe(); };
+    };
 
     const reconcileLoadedProgress = () => {
-      if (!hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning) return;
+      if (!hasReceivedMeta || !hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning) return;
+      if (failedPayloads.size > 0) return;
+      if (['cronogramaInicial', 'data', 'planning'].some(field => payloadRevisions[field] !== metaRevision)) return;
 
       const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
         loadedPlanningSnapshot,
@@ -1731,11 +1991,15 @@ const App = () => {
       setPlanning(recalculatedPlanning);
       setAllFloorsData(updatedFloorsData);
       setCronogramaInicial(syncedCrono);
+      hydratedProjectIdsRef.current.add(targetId);
+      setIsProjectHydrated(true);
+      setLoading(false);
     };
 
     const unsubMeta = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const d = snap.data();
+        metaRevision = d.payloadRevision;
         const loadedFloors = Array.isArray(d.floors) ? d.floors : [];
         loadedFloorNames = loadedFloors;
         setFloors(loadedFloors);
@@ -1753,7 +2017,7 @@ const App = () => {
         if (typeof loadedHistory === 'string') {
           try { loadedHistory = JSON.parse(decompressIfNeeded(loadedHistory)); } catch { loadedHistory = []; }
         }
-        setHistory(loadedHistory);
+        setHistory(normalizeDelayReasonFields(loadedHistory));
 
         let loadedWeights = d.weights || {};
         if (typeof loadedWeights === 'string') {
@@ -1763,7 +2027,7 @@ const App = () => {
 
         setTeams(d.teams || []);
         setTeamPhones(d.teamPhones || {});
-        setDelayReasons(d.delayReasons || []);
+        setProjectDelayReasons(mergeDelayReasons(d.projectDelayReasons ?? d.delayReasons ?? []));
         setProjectCity(d.projectCity || "Curitiba, PR");
         setWeatherApiKey(d.weatherApiKey || "");
         setWeatherCache(d.weatherCache || {});
@@ -1849,22 +2113,22 @@ const App = () => {
               loadedPlanning = [];
             }
           }
-          loadedPlanningSnapshot = loadedPlanning;
-          setPlanning(loadedPlanning);
+          loadedPlanningSnapshot = normalizeDelayReasonFields(loadedPlanning).map(cleanCarriedTask);
+          setPlanning(loadedPlanningSnapshot);
         }
       } else {
-        saveToDB([], {}, [], {}, [], [], [], [], [], [], {}, targetId);
         setActiveFloor('');
         setSelectedDashboardFloor('');
       }
+      hasReceivedMeta = true;
       reconcileLoadedProgress();
-      setLoading(false);
     }, (err) => {
       console.error("Firestore error:", err);
+      setIsProjectHydrated(false);
       setLoading(false);
     });
 
-    const unsubCrono = onSnapshot(cronoRef, (snap) => {
+    const unsubCrono = subscribePayload(cronoRef, 'cronogramaInicial', (snap) => {
       if (snap.exists()) {
         hasLoadedCrono = true;
         const d = snap.data();
@@ -1884,7 +2148,7 @@ const App = () => {
       reconcileLoadedProgress();
     });
 
-    const unsubFloors = onSnapshot(floorsRef, (snap) => {
+    const unsubFloors = subscribePayload(floorsRef, 'data', (snap) => {
       if (snap.exists()) {
         hasLoadedFloors = true;
         const d = snap.data();
@@ -1904,7 +2168,7 @@ const App = () => {
       reconcileLoadedProgress();
     });
 
-    const unsubPlanning = onSnapshot(planningRef, (snap) => {
+    const unsubPlanning = subscribePayload(planningRef, 'planning', (snap) => {
       if (snap.exists()) {
         hasLoadedPlanning = true;
         const d = snap.data();
@@ -1917,14 +2181,15 @@ const App = () => {
             loadedPlanning = [];
           }
         }
-        loadedPlanningSnapshot = loadedPlanning;
-        setPlanning(loadedPlanning);
+        loadedPlanningSnapshot = normalizeDelayReasonFields(loadedPlanning).map(cleanCarriedTask);
+        setPlanning(loadedPlanningSnapshot);
       }
       hasReceivedPlanning = true;
       reconcileLoadedProgress();
     });
 
     return () => {
+      disposed = true;
       unsubMeta();
       unsubCrono();
       unsubFloors();
@@ -1932,9 +2197,21 @@ const App = () => {
     };
   }, [db, userId, isTeamMode, urlUserId, selectedProjectId]);
 
+  const saveWeatherCacheOnly = async (updatedCache: typeof weatherCache) => {
+    const targetId = urlUserId || selectedProjectId;
+    if (!db || !targetId || !hydratedProjectIdsRef.current.has(targetId)) return;
+
+    const projectRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
+    await setDoc(projectRef, {
+      weatherCache: updatedCache,
+      lastUpdatedBy: plannerUsername || 'Sistema',
+      lastUpdated: new Date()
+    }, { merge: true });
+  };
+
   useEffect(() => {
     const loadWeather = async () => {
-      if (isTeamMode) return;
+      if (isTeamMode || !isProjectHydrated) return;
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -1969,7 +2246,7 @@ const App = () => {
         }
         if (changed) {
           setWeatherCache(newCache);
-          saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, weatherApiKey, newCache);
+          await saveWeatherCacheOnly(newCache);
         }
         return;
       }
@@ -2003,7 +2280,7 @@ const App = () => {
         
         if (changed) {
           setWeatherCache(newCache);
-          saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, urlUserId, projectCity, weatherApiKey, newCache);
+          await saveWeatherCacheOnly(newCache);
         }
       } catch (err) {
         console.error("Error fetching weather:", err);
@@ -2026,7 +2303,7 @@ const App = () => {
     };
 
     loadWeather();
-  }, [projectCity, weatherApiKey, isTeamMode]);
+  }, [projectCity, weatherApiKey, isTeamMode, isProjectHydrated]);
 
 
 
@@ -2053,6 +2330,11 @@ const App = () => {
 
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
     if (!db || !resolvedTargetId) return;
+    if (!hydratedProjectIdsRef.current.has(resolvedTargetId)) {
+      console.warn(`Blocked save before project hydration completed: ${resolvedTargetId}`);
+      setDbSavingStatus('saved');
+      return;
+    }
 
     setDbSavingStatus('saving');
 
@@ -2061,28 +2343,34 @@ const App = () => {
     const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_floors`);
     const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_planning`);
 
-    const trimmedHistory = (hist || []).slice(-100);
+    const trimmedHistory = normalizeDelayReasonFields((hist || []).slice(-100));
     const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
     const serializedCrono = serializeCrono(syncedCrono);
 
     try {
       const dataStr = typeof data === 'string' ? data : JSON.stringify(data || {});
-      const planningStr = typeof plans === 'string' ? plans : JSON.stringify(plans || []);
-      const cronoStr = JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, 6000) : []);
+      const planningStr = typeof plans === 'string' ? plans : JSON.stringify(normalizeDelayReasonFields(plans || []));
+      const cronoStr = JSON.stringify(Array.isArray(serializedCrono) ? serializedCrono.slice(0, MAX_IMPORTED_CRONOGRAMA_ITEMS) : []);
       const weightsStr = typeof wts === 'string' ? wts : JSON.stringify(wts || {});
       const historyStr = JSON.stringify(trimmedHistory);
       const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
       const budgetDiffsStr = typeof bDiffs === 'string' ? bDiffs : JSON.stringify(Array.isArray(bDiffs) ? bDiffs.slice(-1200) : []);
       const budgetImportVersionsStr = typeof bImportVersions === 'string' ? bImportVersions : JSON.stringify(Array.isArray(bImportVersions) ? bImportVersions.slice(-2) : []);
 
-      await Promise.all([
-        setDoc(docRef, {
+      const payloads = await Promise.all([
+        preparePayload(compressStringUnicode(cronoStr), cronoRef.id),
+        preparePayload(compressStringUnicode(dataStr), floorsRef.id),
+        preparePayload(compressStringUnicode(planningStr), planningRef.id)
+      ]);
+      const payloadRevision = crypto.randomUUID();
+      const batch = writeBatch(db);
+      const metadata = {
           floors: Array.isArray(fls) ? fls : [],
           history: compressStringUnicode(historyStr),
           weights: compressStringUnicode(weightsStr),
           teams: Array.isArray(tms) ? tms : INITIAL_TEAMS,
           teamPhones: tPhones || {},
-          delayReasons: Array.isArray(delays) ? delays : INITIAL_DELAYS,
+          delayReasons: mergeDelayReasons(generalDelayReasonsRef.current, Array.isArray(delays) ? delays : INITIAL_DELAYS),
           ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
           matrices: compressStringUnicode(matricesStr),
           projectCity: pCity || "Curitiba, PR",
@@ -2091,18 +2379,26 @@ const App = () => {
           budgetDiffs: compressStringUnicode(budgetDiffsStr),
           budgetImportVersions: compressStringUnicode(budgetImportVersionsStr),
           lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
-          lastUpdated: new Date()
-        }),
-        setDoc(cronoRef, {
-          cronogramaInicial: compressStringUnicode(cronoStr)
-        }),
-        setDoc(floorsRef, {
-          data: compressStringUnicode(dataStr)
-        }),
-        setDoc(planningRef, {
-          planning: compressStringUnicode(planningStr)
-        })
-      ]);
+          lastUpdated: new Date(),
+          payloadRevision
+      };
+      const totalBytes = new TextEncoder().encode(JSON.stringify(metadata)).length +
+        payloads.reduce((sum, payload) => sum + (typeof payload.value === 'string'
+          ? payload.value.length : payload.chunks.reduce((bytes, part) => bytes + part.payload.length, 0)), 0);
+      if (totalBytes > MAX_SAVE_BYTES) throw new Error('O conjunto de dados excede o tamanho seguro de gravação.');
+      // Catalog edits use their own transaction; an older pending save must not erase them.
+      batch.set(docRef, metadata, { merge: true });
+      const destinations = [
+        { ref: cronoRef, field: 'cronogramaInicial' },
+        { ref: floorsRef, field: 'data' },
+        { ref: planningRef, field: 'planning' }
+      ];
+      payloads.forEach((payload, index) => {
+        const { ref, field } = destinations[index];
+        payload.chunks.forEach(part => batch.set(doc(ref.parent, part.id), { payload: part.payload }));
+        batch.set(ref, { [field]: payload.value, payloadRevision });
+      });
+      await batch.commit();
 
       setCronogramaInicial(syncedCrono);
       setDbSavingStatus('saved');
@@ -2110,7 +2406,7 @@ const App = () => {
       console.error("Save error:", e);
       setDbSavingStatus('saved');
       if (e?.message && e.message.includes('exceeds the maximum allowed size')) {
-        setNotification({ message: 'Limite de armazenamento excedido. Tente Limpar o BD e reimportar.', type: 'error' });
+        setNotification({ message: 'Os dados excedem o limite de armazenamento. A gravação não foi concluída.', type: 'error' });
       }
       throw e;
     }
@@ -2184,13 +2480,43 @@ const App = () => {
   };
 
 
-  const getMacroTitle = (sId) => {
-    for (const floor of Object.keys(allFloorsData)) {
-      if (allFloorsData[floor]?.[sId]?.title) return allFloorsData[floor][sId].title;
+  const [showRawCronoTable, setShowRawCronoTable] = useState(true);
+  const [rawCronoLimit, setRawCronoLimit] = useState(200);
+
+  const cronoLookupMaps = useMemo(() => {
+    const costById = new Map<string, number>();
+    const macroTitleBySlug = new Map<string, string>();
+    const itemById = new Map<string, any>();
+
+    for (const floor of Object.keys(allFloorsData || {})) {
+      const floorData = allFloorsData[floor];
+      if (!floorData) continue;
+      for (const sId of Object.keys(floorData)) {
+        if (!macroTitleBySlug.has(sId) && floorData[sId]?.title) {
+          macroTitleBySlug.set(sId, floorData[sId].title);
+        }
+      }
     }
-    const match = cronogramaInicial.find(item => slugify(item.macro) === sId);
-    if (match) return match.macro.toUpperCase();
-    return sId;
+
+    (cronogramaInicial || []).forEach(item => {
+      if (!item) return;
+      if (item.id) {
+        itemById.set(item.id, item);
+        if (typeof item.cost === 'number') costById.set(item.id, item.cost);
+      }
+      if (item.macro) {
+        const sId = slugify(item.macro);
+        if (sId && !macroTitleBySlug.has(sId)) {
+          macroTitleBySlug.set(sId, item.macro.toUpperCase());
+        }
+      }
+    });
+
+    return { costById, macroTitleBySlug, itemById };
+  }, [allFloorsData, cronogramaInicial]);
+
+  const getMacroTitle = (sId) => {
+    return cronoLookupMaps.macroTitleBySlug.get(sId) || sId;
   };
 
   const allPossibleMacros = useMemo(() => {
@@ -2213,7 +2539,27 @@ const App = () => {
   ), [cronogramaInicial]);
 
   const previousWeekIdForDrawer = toLocalDateString(addDays(currentWeekStart, -7));
+  const currentWeekIdForDrawer = toLocalDateString(currentWeekStart);
   const drawerCandidateActivities = useMemo(() => {
+    const normalizeMacroBase = (raw: string) => {
+      const cleaned = String(raw || '').replace(/^[A-Za-zÀ-ÿ0-9]{2,10}\s*[-–—]\s*/, '').trim();
+      const s = slugify(cleaned);
+      return s.replace(/^[a-z0-9]{2,10}___/, '');
+    };
+    const getImplicitActivityRefs = (item: any) => {
+      const refs = [item?.id, item?.originalId, item?.inheritedDependenciesFrom].filter(Boolean).map(String);
+      const idStr = String(item?.id || '');
+      if (idStr.startsWith('job_')) {
+        const m = idStr.match(/^job_(.+?)_(?:tpl_|j_)/);
+        if (m && m[1]) refs.push(`act_${m[1]}`);
+      }
+      if (item?.floor && item?.macro) {
+        refs.push(`lob_act_${slugify(item.floor)}_${slugify(item.macro)}`);
+        refs.push(`act_${slugify(item.floor)}_${slugify(item.macro)}`);
+      }
+      return Array.from(new Set(refs));
+    };
+
     const isParentCronoItem = (item) => {
       if (!item) return false;
       if (item.isParent !== undefined) return !!item.isParent;
@@ -2225,52 +2571,164 @@ const App = () => {
         .filter(item => item && !isParentCronoItem(item))
         .map(item => familyKey(item))
     );
+
+    // Map real-time progress from planning (including unfinalized 100% tasks in the current week)
+    const planningProgressById = new Map<string, number>();
+    const planningProgressByFloorService = new Map<string, number>();
+    (planning || []).forEach(t => {
+      if (!t) return;
+      const prog = Math.max(getTaskAccumulatedProgress(t), clampPercent(t.progressThisWeek ?? 0));
+      if (t.itemId) {
+        planningProgressById.set(String(t.itemId), Math.max(planningProgressById.get(String(t.itemId)) || 0, prog));
+      }
+      if (t.floor && t.activityName) {
+        const fsKey = `${t.floor}||${slugify(t.activityName)}`;
+        planningProgressByFloorService.set(fsKey, Math.max(planningProgressByFloorService.get(fsKey) || 0, prog));
+      }
+    });
+
+    const getEffectiveItemProgress = (item: any) => {
+      const floorProg = getActivityProgressFromFloors(item, allFloorsData);
+      const byId = item?.id ? (planningProgressById.get(String(item.id)) || 0) : 0;
+      const byFs = item?.floor && item?.service
+        ? (planningProgressByFloorService.get(`${item.floor}||${slugify(item.service)}`) || 0)
+        : 0;
+      return Math.max(floorProg, byId, byFs);
+    };
+
     const openCronoItems = cronogramaInicial
       .filter(item => item && (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item))))
       .map(item => ({ ...item, progress: getActivityProgressFromFloors(item, allFloorsData) }))
       .filter(item => item.progress < 100);
     if (drawerSourceMode === 'unfinished') {
-      return openCronoItems.filter(item => (item.progress ?? 0) > 0 && (item.progress ?? 0) < 100);
+      return openCronoItems.filter(item => (item.progress ?? 0) >= 0 && (item.progress ?? 0) < 100);
     }
     if (drawerSourceMode !== 'previous-successors') return openCronoItems;
 
     const parentByFamily = new Map<string, any>();
     cronogramaInicial.forEach(item => {
-      if (isParentCronoItem(item)) parentByFamily.set(familyKey(item), item);
+      if (isParentCronoItem(item)) {
+        parentByFamily.set(familyKey(item), item);
+        parentByFamily.set(`${item?.floor || ''}||${normalizeMacroBase(item?.macro || '')}`, item);
+      }
     });
 
     const successorIds = new Set<string>();
+    const sourceRefIds = new Set<string>();
+    const finishedFamilyKeys = new Set<string>();
+    const releasedNormalizedMacros = new Map<string, Set<string>>();
+
+    // Consider tasks completed (>= 100%) in EITHER the current week (even before finalizing!) OR the previous week
     planning
       .filter(task => {
-        if (!task || task.weekId !== previousWeekIdForDrawer) return false;
-        const cumulativeProgress = Number(task.executedBefore || 0) + Number(task.progressThisWeek || 0);
-        return task.finalized || cumulativeProgress >= 100;
+        if (!task) return false;
+        if (task.weekId !== currentWeekIdForDrawer && task.weekId !== previousWeekIdForDrawer) return false;
+        const cumulativeProgress = Math.max(getTaskAccumulatedProgress(task), clampPercent(task.progressThisWeek ?? 0));
+        return cumulativeProgress >= 100;
       })
       .forEach(task => {
-        const cronoItem = cronogramaInicial.find(item => item.id === task.itemId);
-        const parentItem = parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
+        let cronoItem = cronoLookupMaps.itemById.get(task.itemId);
+        const taskNormMacro = normalizeMacroBase(task.sectionId || cronoItem?.macro || '');
+        if (!cronoItem) {
+          const taskNameNorm = slugify(task.activityName || '');
+          cronoItem = cronogramaInicial.find(it =>
+            it && it.floor === task.floor && (
+              slugify(it.service || '') === taskNameNorm ||
+              normalizeMacroBase(it.macro || '') === taskNormMacro
+            )
+          );
+        }
+        if (taskNormMacro) {
+          if (!releasedNormalizedMacros.has(taskNormMacro)) {
+            releasedNormalizedMacros.set(taskNormMacro, new Set());
+          }
+          releasedNormalizedMacros.get(taskNormMacro)!.add(task.floor);
+          finishedFamilyKeys.add(`${task.floor}||${taskNormMacro}`);
+        }
+        finishedFamilyKeys.add(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
+
+        const parentItem =
+          parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`) ||
+          parentByFamily.get(`${task.floor}||${taskNormMacro}`);
+        const familyItems = cronogramaInicial.filter(it =>
+          it && it.floor === task.floor && (
+            slugify(it.macro || '') === slugify(task.sectionId || cronoItem?.macro || '') ||
+            normalizeMacroBase(it.macro || '') === taskNormMacro
+          )
+        );
+        [
+          task.itemId,
+          ...(cronoItem ? getImplicitActivityRefs(cronoItem) : []),
+          ...(parentItem ? getImplicitActivityRefs(parentItem) : []),
+          ...familyItems.flatMap(it => getImplicitActivityRefs(it))
+        ].forEach(ref => {
+          const v = String(ref || '').trim();
+          if (v) sourceRefIds.add(v);
+        });
+
         const successors = [
           ...(task.successors || []),
           ...(cronoItem?.successors || []),
-          ...(parentItem?.successors || [])
+          ...(parentItem?.successors || []),
+          ...familyItems.flatMap(it => it?.successors || [])
         ];
-        successors.forEach(id => {
-          const value = String(id || '').trim();
-          if (value) successorIds.add(value);
+        successors.forEach(entry => {
+          const rawVal = typeof entry === 'object' && entry !== null ? (entry.id || entry.targetId || entry.code || '') : entry;
+          const value = String(rawVal || '').trim();
+          if (!value) return;
+          successorIds.add(value);
+          const matchPrefix = value.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
+          if (matchPrefix && matchPrefix[1]) successorIds.add(matchPrefix[1]);
         });
       });
 
-    if (successorIds.size === 0) return [];
+    // Reverse predecessors check
+    cronogramaInicial.forEach(item => {
+      if (!item || !Array.isArray(item.predecessors)) return;
+      const pointsToSource = item.predecessors.some((pred: any) => {
+        const rawPred = typeof pred === 'object' && pred !== null ? (pred.id || pred.sourceId || pred.code || '') : pred;
+        const clean = String(rawPred || '').trim();
+        if (!clean) return false;
+        if (sourceRefIds.has(clean)) return true;
+        const matchPrefix = clean.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
+        return Boolean(matchPrefix && matchPrefix[1] && sourceRefIds.has(matchPrefix[1]));
+      });
+      if (pointsToSource) {
+        getImplicitActivityRefs(item).forEach(ref => successorIds.add(ref));
+      }
+    });
+
     const directSuccessorRefs = cronogramaInicial.filter(item => {
-      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
+      const candidates = getImplicitActivityRefs(item);
       return candidates.some(id => successorIds.has(id));
     });
-    const successorMacroKeys = new Set(directSuccessorRefs.map(item => `${item.floor}||${slugify(item.macro)}`));
-    return openCronoItems.filter(item => {
-      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
-      return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
+    const successorMacroKeys = new Set(
+      directSuccessorRefs
+        .flatMap(item => [
+          `${item.floor}||${slugify(item.macro)}`,
+          `${item.floor}||${normalizeMacroBase(item.macro || '')}`
+        ])
+        .filter(k => !finishedFamilyKeys.has(k))
+    );
+    const matchedExplicit = openCronoItems.filter(item => {
+      const k1 = `${item.floor}||${slugify(item.macro)}`;
+      const k2 = `${item.floor}||${normalizeMacroBase(item.macro || '')}`;
+      if (finishedFamilyKeys.has(k1) || finishedFamilyKeys.has(k2)) return false;
+      const candidates = getImplicitActivityRefs(item);
+      return (
+        candidates.some(id => successorIds.has(id)) ||
+        successorMacroKeys.has(k1) ||
+        successorMacroKeys.has(k2)
+      );
     });
-  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer]);
+    if (matchedExplicit.length > 0) return matchedExplicit;
+
+    return openCronoItems.filter(item => {
+      const itemNormMacro = normalizeMacroBase(item.macro || '');
+      const finishedFloors = releasedNormalizedMacros.get(itemNormMacro);
+      return Boolean(finishedFloors && !finishedFloors.has(item.floor));
+    });
+  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer, currentWeekIdForDrawer, cronoLookupMaps]);
 
   const drawerMacroOptions = useMemo(() => (
     Array.from(new Set(drawerCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
@@ -2513,9 +2971,332 @@ const App = () => {
     if (drawerMacro && !drawerMacroOptions.includes(drawerMacro)) setDrawerMacro('');
   }, [drawerSourceMode, drawerMacroOptions]);
 
+  const nextWeekIdForPopover = toLocalDateString(addDays(currentWeekStart, 7));
+
+  const getReleasedFrontsForTask = (sourceTask: any) => {
+    if (!sourceTask) return [];
+    const normalizeMacroBase = (raw: string) => {
+      const cleaned = String(raw || '').replace(/^[A-Za-zÀ-ÿ0-9]{2,10}\s*[-–—]\s*/, '').trim();
+      const s = slugify(cleaned);
+      return s.replace(/^[a-z0-9]{2,10}___/, '');
+    };
+    const getImplicitActivityRefs = (item: any) => {
+      const refs = [item?.id, item?.originalId, item?.inheritedDependenciesFrom].filter(Boolean).map(String);
+      const idStr = String(item?.id || '');
+      if (idStr.startsWith('job_')) {
+        const m = idStr.match(/^job_(.+?)_(?:tpl_|j_)/);
+        if (m && m[1]) refs.push(`act_${m[1]}`);
+      }
+      if (item?.floor && item?.macro) {
+        refs.push(`lob_act_${slugify(item.floor)}_${slugify(item.macro)}`);
+        refs.push(`act_${slugify(item.floor)}_${slugify(item.macro)}`);
+      }
+      return Array.from(new Set(refs));
+    };
+
+    const isParentCronoItem = (item: any) => {
+      if (!item) return false;
+      if (item.isParent !== undefined) return !!item.isParent;
+      return slugify(item.service || '') === slugify(item.macro || '');
+    };
+    const familyKey = (item: any) => `${item?.floor || ''}||${slugify(item?.macro || '')}`;
+    const normFamilyKey = (item: any) => `${item?.floor || ''}||${normalizeMacroBase(item?.macro || '')}`;
+    const familiesWithChildren = new Set(
+      (cronogramaInicial || [])
+        .filter(item => item && !isParentCronoItem(item))
+        .flatMap(item => [familyKey(item), normFamilyKey(item)])
+    );
+    // Real-time progress from planning (including unfinalized 100% tasks in the current week)
+    const planningProgressById = new Map<string, number>();
+    const planningProgressByFloorService = new Map<string, number>();
+    (planning || []).forEach(t => {
+      if (!t) return;
+      const prog = Math.max(getTaskAccumulatedProgress(t), clampPercent(t.progressThisWeek ?? 0));
+      if (t.itemId) {
+        planningProgressById.set(String(t.itemId), Math.max(planningProgressById.get(String(t.itemId)) || 0, prog));
+      }
+      if (t.floor && t.activityName) {
+        const fsKey = `${t.floor}||${slugify(t.activityName)}`;
+        planningProgressByFloorService.set(fsKey, Math.max(planningProgressByFloorService.get(fsKey) || 0, prog));
+      }
+    });
+
+    const getEffectiveItemProgress = (item: any) => {
+      const floorProg = getActivityProgressFromFloors(item, allFloorsData);
+      const byId = item?.id ? (planningProgressById.get(String(item.id)) || 0) : 0;
+      const byFs = item?.floor && item?.service
+        ? (planningProgressByFloorService.get(`${item.floor}||${slugify(item.service)}`) || 0)
+        : 0;
+      return Math.max(floorProg, byId, byFs);
+    };
+
+    const openCronoItems = (cronogramaInicial || [])
+      .filter(item => item && (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item))))
+      .map(item => ({ ...item, progress: getEffectiveItemProgress(item) }))
+      .filter(item => (item.progress ?? 0) < 100);
+
+    let cronoItem = cronoLookupMaps.itemById.get(sourceTask.itemId);
+    const sourceMacroRaw = sourceTask.sectionId || cronoItem?.macro || '';
+    const sourceMacroSlug = slugify(sourceMacroRaw);
+    const sourceMacroNorm = normalizeMacroBase(sourceMacroRaw);
+    const sourceServiceSlug = slugify(sourceTask.activityName || '');
+
+    if (!cronoItem) {
+      cronoItem = (cronogramaInicial || []).find(it =>
+        it &&
+        it.floor === sourceTask.floor &&
+        !isParentCronoItem(it) &&
+        (slugify(it.service || '') === sourceServiceSlug || normalizeMacroBase(it.macro || '') === sourceMacroNorm)
+      ) || (cronogramaInicial || []).find(it =>
+        it &&
+        it.floor === sourceTask.floor &&
+        (slugify(it.macro || '') === sourceMacroSlug || normalizeMacroBase(it.macro || '') === sourceMacroNorm)
+      );
+    }
+
+    const matchesSourceMacro = (macroVal: string) => {
+      const mSlug = slugify(macroVal || '');
+      const mNorm = normalizeMacroBase(macroVal || '');
+      return Boolean(
+        (sourceMacroSlug && mSlug === sourceMacroSlug) ||
+        (sourceMacroNorm && mNorm === sourceMacroNorm)
+      );
+    };
+
+    // Collect all items belonging to the source task or its mother macroactivity on the same floor
+    const sourceFamilyItems = (cronogramaInicial || []).filter(
+      item => item && item.floor === sourceTask.floor && matchesSourceMacro(item.macro || '')
+    );
+    const parentItem = sourceFamilyItems.find(item => isParentCronoItem(item));
+
+    const sourceRefIds = new Set<string>();
+    [
+      sourceTask.itemId,
+      ...(cronoItem ? getImplicitActivityRefs(cronoItem) : []),
+      ...(parentItem ? getImplicitActivityRefs(parentItem) : []),
+      ...sourceFamilyItems.flatMap(it => getImplicitActivityRefs(it))
+    ].forEach(ref => {
+      const v = String(ref || '').trim();
+      if (v) sourceRefIds.add(v);
+    });
+
+    const successorIds = new Set<string>();
+    const rawSuccessors = [
+      ...(sourceTask.successors || []),
+      ...(cronoItem?.successors || []),
+      ...(parentItem?.successors || []),
+      ...sourceFamilyItems.flatMap(it => it?.successors || [])
+    ];
+    rawSuccessors.forEach(entry => {
+      const rawVal = typeof entry === 'object' && entry !== null ? (entry.id || entry.targetId || entry.code || '') : entry;
+      const clean = String(rawVal || '').trim();
+      if (!clean) return;
+      successorIds.add(clean);
+      const matchPrefix = clean.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
+      if (matchPrefix && matchPrefix[1]) successorIds.add(matchPrefix[1]);
+    });
+
+    // Also check reverse predecessors pointing to this task or its mother macroactivity
+    (cronogramaInicial || []).forEach(item => {
+      if (!item || !Array.isArray(item.predecessors)) return;
+      const pointsToSource = item.predecessors.some((pred: any) => {
+        const rawPred = typeof pred === 'object' && pred !== null ? (pred.id || pred.sourceId || pred.code || '') : pred;
+        const clean = String(rawPred || '').trim();
+        if (!clean) return false;
+        if (sourceRefIds.has(clean)) return true;
+        const matchPrefix = clean.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
+        return Boolean(matchPrefix && matchPrefix[1] && sourceRefIds.has(matchPrefix[1]));
+      });
+      if (pointsToSource) {
+        getImplicitActivityRefs(item).forEach(ref => successorIds.add(ref));
+      }
+    });
+
+    const directSuccessorRefs = (cronogramaInicial || []).filter(item => {
+      if (!item) return false;
+      const candidates = getImplicitActivityRefs(item);
+      return candidates.some(id => successorIds.has(id));
+    });
+
+    const successorMacroKeys = new Set(
+      directSuccessorRefs
+        .filter(item => !(item.floor === sourceTask.floor && matchesSourceMacro(item.macro || '')))
+        .flatMap(item => [
+          `${item.floor}||${slugify(item.macro)}`,
+          `${item.floor}||${normalizeMacroBase(item.macro || '')}`
+        ])
+    );
+
+    // 1. Explicit schedule successors (horizontal on same floor for downstream macros + vertical/inter-lane)
+    const explicitSuccessorItems = openCronoItems.filter(item => {
+      if (item.floor === sourceTask.floor && matchesSourceMacro(item.macro || '')) return false;
+      const candidates = getImplicitActivityRefs(item);
+      return (
+        candidates.some(id => successorIds.has(id)) ||
+        successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`) ||
+        successorMacroKeys.has(`${item.floor}||${normalizeMacroBase(item.macro || '')}`)
+      );
+    });
+
+    // 2. Vertical continuity (escadinha): open floors of the same macroactivity on other floors,
+    // ordered so floors immediately after sourceTask.floor appear first.
+    const sameMacroOtherFloors = openCronoItems.filter(item =>
+      item.floor !== sourceTask.floor && matchesSourceMacro(item.macro || '')
+    );
+
+    const floorOrderList = floors && floors.length > 0
+      ? floors
+      : Array.from(new Set((cronogramaInicial || []).map(it => it?.floor).filter(Boolean)));
+    const sourceFloorIdx = floorOrderList.indexOf(sourceTask.floor);
+
+    const sortFloorsAfterSource = (items: any[]) => {
+      if (sourceFloorIdx < 0) return items;
+      return [...items].sort((a, b) => {
+        const idxA = floorOrderList.indexOf(a.floor);
+        const idxB = floorOrderList.indexOf(b.floor);
+        const relA = idxA > sourceFloorIdx ? idxA - sourceFloorIdx : (idxA >= 0 ? idxA + floorOrderList.length : 9999);
+        const relB = idxB > sourceFloorIdx ? idxB - sourceFloorIdx : (idxB >= 0 ? idxB + floorOrderList.length : 9999);
+        return relA - relB;
+      });
+    };
+
+    const sortedExplicitSuccessors = sortFloorsAfterSource(explicitSuccessorItems);
+    const hasExplicitVerticalSameMacro = sortedExplicitSuccessors.some(item => matchesSourceMacro(item.macro || ''));
+    const sortedSameMacroOtherFloors = hasExplicitVerticalSameMacro
+      ? sortedExplicitSuccessors.filter(item => matchesSourceMacro(item.macro || ''))
+      : sortFloorsAfterSource(sameMacroOtherFloors);
+
+    const combined: any[] = [];
+    const seenIds = new Set<string>();
+    [...sortedSameMacroOtherFloors, ...sortedExplicitSuccessors].forEach(item => {
+      const key = String(item.id || `${item.floor}||${item.macro}||${item.service}`);
+      if (!seenIds.has(key)) {
+        seenIds.add(key);
+        combined.push(item);
+      }
+    });
+
+    return combined;
+  };
+
+  const nextWeekSourceTask = useMemo(() => {
+    if (!nextWeekPopover?.taskId) return null;
+    return planning.find(t => t.id === nextWeekPopover.taskId) || null;
+  }, [nextWeekPopover, planning]);
+
+  const nextWeekCandidateActivities = useMemo(() => {
+    if (!nextWeekSourceTask) return [];
+    return getReleasedFrontsForTask(nextWeekSourceTask);
+  }, [nextWeekSourceTask, cronogramaInicial, allFloorsData, cronoLookupMaps, floors, planning]);
+
+  const nextWeekMacroOptions = useMemo(() => (
+    Array.from(new Set(nextWeekCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
+  ), [nextWeekCandidateActivities]);
+
+  const nextWeekAvailableFloors = useMemo(() => {
+    if (!nextWeekMacro) return [];
+    return Array.from(new Set(
+      nextWeekCandidateActivities
+        .filter(item => slugify(item.macro) === nextWeekMacro && (item.progress ?? 0) < 100)
+        .map(item => item.floor)
+    )).filter(Boolean);
+  }, [nextWeekCandidateActivities, nextWeekMacro]);
+
+  const nextWeekAvailableServices = useMemo(() => {
+    if (!nextWeekMacro || nextWeekFloors.length === 0) return [];
+    return nextWeekCandidateActivities.filter(item =>
+      slugify(item.macro) === nextWeekMacro &&
+      nextWeekFloors.includes(item.floor) &&
+      (item.progress ?? 0) < 100
+    );
+  }, [nextWeekCandidateActivities, nextWeekMacro, nextWeekFloors]);
+
+  const handleOpenNextWeekPopover = (e: React.MouseEvent, task: any) => {
+    e.stopPropagation();
+    if (nextWeekPopover?.taskId === task.id) {
+      setNextWeekPopover(null);
+      return;
+    }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const panelWidth = 380;
+    const estimatedHeight = Math.min(580, window.innerHeight - 32);
+    // Centralizado verticalmente na tela
+    const y = Math.max(16, Math.round((window.innerHeight - estimatedHeight) / 2));
+    // Posicionamento horizontal inteligente: próximo ao botão clicado, ou centralizado se couber melhor
+    let x = rect.right + 12;
+    if (x + panelWidth > window.innerWidth - 16) {
+      x = Math.max(16, rect.left - panelWidth - 12);
+    }
+    if (x + panelWidth > window.innerWidth - 16 || x < 16) {
+      x = Math.max(16, Math.round((window.innerWidth - panelWidth) / 2));
+    }
+
+    const normalizeMacroBase = (raw: string) => {
+      const cleaned = String(raw || '').replace(/^[A-Za-zÀ-ÿ0-9]{2,10}\s*[-–—]\s*/, '').trim();
+      const s = slugify(cleaned);
+      return s.replace(/^[a-z0-9]{2,10}___/, '');
+    };
+
+    const candidates = getReleasedFrontsForTask(task);
+    const macros = Array.from(new Set(candidates.map(item => slugify(item.macro)).filter(Boolean)));
+    const sourceMacroSlug = slugify(task.sectionId || '');
+    const sourceMacroNorm = normalizeMacroBase(task.sectionId || '');
+    const matchingMacroOption = macros.find(
+      m => m === sourceMacroSlug || normalizeMacroBase(m) === sourceMacroNorm
+    );
+    const initialMacro = matchingMacroOption || macros[0] || '';
+    const floorsForMacro = Array.from(new Set(
+      candidates
+        .filter(item => slugify(item.macro) === initialMacro && (item.progress ?? 0) < 100)
+        .map(item => item.floor)
+    )).filter(Boolean);
+    const initialFloors = floorsForMacro.length > 0 ? [floorsForMacro[0]] : [];
+    const servicesForInitialFloor = candidates
+      .filter(item => slugify(item.macro) === initialMacro && initialFloors.includes(item.floor) && (item.progress ?? 0) < 100);
+    // Prefer pre-selecting the service with the same name as the finished task, or all services in that floor
+    const sameNameServices = servicesForInitialFloor.filter(
+      item => String(item.service || '').trim().toUpperCase() === String(task.activityName || '').trim().toUpperCase()
+    );
+    const initialServices = sameNameServices.length > 0
+      ? sameNameServices.map(s => s.id)
+      : servicesForInitialFloor.map(s => s.id);
+
+    setNextWeekMacro(initialMacro);
+    setNextWeekFloors(initialFloors);
+    setNextWeekSelectedServices(initialServices);
+    setNextWeekResponsible(task.responsible || '');
+    setNextWeekWarning('');
+    setNextWeekPopover({ taskId: task.id, x, y });
+  };
+
+  useEffect(() => {
+    if (!nextWeekPopover) return;
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!nextWeekDragRef.current.isDragging) return;
+      const dx = ev.clientX - nextWeekDragRef.current.startX;
+      const dy = ev.clientY - nextWeekDragRef.current.startY;
+      const nextX = Math.max(8, Math.min(window.innerWidth - 380, nextWeekDragRef.current.origX + dx));
+      const nextY = Math.max(8, Math.min(window.innerHeight - 200, nextWeekDragRef.current.origY + dy));
+      setNextWeekPopover(prev => prev ? { ...prev, x: nextX, y: nextY } : null);
+    };
+    const handleMouseUp = () => {
+      nextWeekDragRef.current.isDragging = false;
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [nextWeekPopover]);
+
 
   const currentWeekId = toLocalDateString(currentWeekStart);
   const weeklyTasks = planning.filter(t => t.weekId === currentWeekId);
+  const isWeekBeingEdited = editingFinalizedWeekId === currentWeekId;
+  const hasFinalizedTasks = weeklyTasks.some(t => t.finalized);
+  const isWeekFinalized = weeklyTasks.length > 0 && weeklyTasks.every(t => t.finalized);
+  const isTaskLocked = (task) => Boolean(task?.finalized && !isWeekBeingEdited);
   const pendingBudgetDiffs = useMemo(() => {
     const cronoFamiliesWithChildren = getFamiliesWithBudgetChildren(cronogramaInicial);
     return budgetDiffs.filter(diff => (
@@ -2566,8 +3347,7 @@ const App = () => {
   }, [matrixSelection, matrices, allPossibleMacros, floors]);
 
   const getItemCost = (itemId: string) => {
-    const match = cronogramaInicial.find(c => c && c.id === itemId);
-    return match && typeof match.cost === 'number' ? match.cost : 0;
+    return cronoLookupMaps.costById.get(itemId) || 0;
   };
 
   const getPackageProgress = (floor: string, macroId: string, itemsList: any[]) => {
@@ -2757,147 +3537,23 @@ const App = () => {
     return Array.from(set).sort();
   }, [teams, planning]);
 
-  const availableWeeks = useMemo(() => {
-    const set = new Set<string>();
-    planning.forEach(t => {
-      if (t && t.weekId) set.add(t.weekId);
-    });
-    if (set.size === 0) {
-      set.add(toLocalDateString(currentWeekStart));
-    }
-    return Array.from(set).sort();
-  }, [planning, currentWeekStart]);
-
-  const contractorsInPeriod = useMemo(() => {
-    const set = new Set<string>();
-    if (ppcStartWeek && ppcEndWeek) {
-      planning.forEach(t => {
-        if (t && t.weekId >= ppcStartWeek && t.weekId <= ppcEndWeek && t.responsible) {
-          set.add(t.responsible);
-        }
-      });
-    } else {
-      planning.forEach(t => {
-        if (t && t.responsible) set.add(t.responsible);
-      });
-    }
-    if (set.size === 0) {
-      return uniqueContractors;
-    }
-    return Array.from(set).sort();
-  }, [planning, ppcStartWeek, ppcEndWeek, uniqueContractors]);
-
-  // Sync state once lists are computed
-  useEffect(() => {
-    if (contractorsInPeriod.length > 0) {
-      if (!ppcSelectedContractor || !contractorsInPeriod.includes(ppcSelectedContractor)) {
-        setPpcSelectedContractor(contractorsInPeriod[0]);
-      }
-    }
-  }, [contractorsInPeriod, ppcSelectedContractor]);
-
-  useEffect(() => {
-    if (availableWeeks.length > 0) {
-      if (!ppcStartWeek) {
-        setPpcStartWeek(availableWeeks[0]);
-      }
-      if (!ppcEndWeek) {
-        setPpcEndWeek(availableWeeks[availableWeeks.length - 1]);
-      }
-    }
-  }, [availableWeeks, ppcStartWeek, ppcEndWeek]);
-
-  // Helper: format weekId "YYYY-MM-DD" to "DD/MM/YYYY"
-  const formatWeekId = (wId: string) => {
-    if (!wId) return '';
-    const parts = wId.split('-');
-    if (parts.length !== 3) return wId;
-    const [y, m, d] = parts;
-    return `${d}/${m}/${y}`;
-  };
-
-  // Calculate Weekly PPC for contractor
-  const contractorWeeklyPpcData = useMemo(() => {
-    if (!ppcSelectedContractor || !ppcStartWeek || !ppcEndWeek) return [];
-    
-    const selectedWeeks = availableWeeks.filter(w => w >= ppcStartWeek && w <= ppcEndWeek);
-    
-    return selectedWeeks.map(wId => {
-      const weekTasks = planning.filter(t => t.weekId === wId && t.responsible === ppcSelectedContractor);
-      const plannedTasks = weekTasks.filter(t => (t.plannedThisWeek ?? 100) > 0);
-      const completedTasks = plannedTasks.filter(t => (t.progressThisWeek ?? 0) >= (t.plannedThisWeek ?? 100));
-      
-      const weekStart = new Date(wId + 'T00:00:00');
-      const weekEnd = new Date(weekStart.getTime() + 6 * 86400000); // Sunday
-      
-      if (plannedTasks.length === 0) {
-        return {
-          weekId: wId,
-          startDateStr: formatWeekId(wId),
-          endDateStr: weekEnd.toLocaleDateString('pt-BR'),
-          ppc: null,
-          plannedCount: 0,
-          completedCount: 0
-        };
-      }
-      
-      const ppcVal = (completedTasks.length / plannedTasks.length) * 100;
-      return {
-        weekId: wId,
-        startDateStr: formatWeekId(wId),
-        endDateStr: weekEnd.toLocaleDateString('pt-BR'),
-        ppc: Math.round(ppcVal),
-        plannedCount: plannedTasks.length,
-        completedCount: completedTasks.length
-      };
-    });
-  }, [ppcSelectedContractor, ppcStartWeek, ppcEndWeek, availableWeeks, planning]);
-
-  // Calculate overall average PPC for the period
-  const averagePpc = useMemo(() => {
-    const validWeeks = contractorWeeklyPpcData.filter(d => d.ppc !== null);
-    if (validWeeks.length === 0) return 0;
-    const sum = validWeeks.reduce((acc, d) => acc + d.ppc!, 0);
-    return Math.round(sum / validWeeks.length);
-  }, [contractorWeeklyPpcData]);
-
-  // Calculate Delay Causes (7 largest) for selected period
-  const delayCausesData = useMemo(() => {
-    if (!ppcSelectedContractor || !ppcStartWeek || !ppcEndWeek) return [];
-    
-    const reasonsMap: Record<string, number> = {};
-    
-    planning.forEach(t => {
-      if (t && t.weekId >= ppcStartWeek && t.weekId <= ppcEndWeek && t.responsible === ppcSelectedContractor) {
-        const planned = t.plannedThisWeek ?? 100;
-        const progress = t.progressThisWeek ?? 0;
-        if (progress < planned) {
-          const reason = t.delayReason ? t.delayReason.trim() : 'Sem motivo definido';
-          reasonsMap[reason] = (reasonsMap[reason] || 0) + 1;
-        }
-      }
-    });
-    
-    const totalDelays = Object.values(reasonsMap).reduce((a, b) => a + b, 0);
-    if (totalDelays === 0) return [];
-    
-    const list = Object.entries(reasonsMap).map(([reason, count]) => {
-      const percent = Math.round((count / totalDelays) * 100);
-      return { reason, count, percent };
-    }).sort((a, b) => b.count - a.count);
-    
-    // Limit to 7 categories
-    if (list.length > 7) {
-      const top6 = list.slice(0, 6);
-      const rest = list.slice(6);
-      const restCount = rest.reduce((acc, item) => acc + item.count, 0);
-      const restPercent = Math.round((restCount / totalDelays) * 100);
-      top6.push({ reason: 'Outros motivos', count: restCount, percent: restPercent });
-      return top6;
-    }
-    
-    return list;
-  }, [ppcSelectedContractor, ppcStartWeek, ppcEndWeek, planning]);
+  const ppcReferenceWeek = toLocalDateString(getWeekStartDate(new Date()));
+  const availableWeeks = useMemo(() => ppcPeriodWeeks(ppcPeriod, new Date(ppcReferenceWeek + 'T00:00:00'),
+    [...planning.map(task => task.weekId), ...ppcHistory.map(record => record.weekId || record.weekStart)].filter(Boolean)),
+    [ppcPeriod, ppcReferenceWeek, planning, ppcHistory]);
+  useEffect(() => { setPpcSelectedWeek(''); }, [ppcPeriod, ppcSelectedContractors, selectedProjectId]);
+  useEffect(() => { setPpcSelectedContractors([]); }, [selectedProjectId]);
+  const formatWeekId = (weekId: string) => weekId ? weekId.split('-').reverse().join('/') : '';
+  const ppcDetail = useMemo(() => calculatePpcDetail(planning, availableWeeks, ppcSelectedContractors, ppcSelectedWeek),
+    [planning, availableWeeks, ppcSelectedContractors, ppcSelectedWeek]);
+  const contractorWeeklyPpcData = ppcDetail.rows;
+  const ppcVisibleContractors = useMemo(() => {
+    const selected = ppcSelectedContractors.length ? ppcSelectedContractors : uniqueContractors;
+    return ppcOnlyWithActivities ? teamsWithPlannedActivities(planning, availableWeeks, selected) : selected;
+  }, [ppcOnlyWithActivities, ppcSelectedContractors, uniqueContractors, planning, availableWeeks]);
+  const ppcDetailChartData = ppcDetail.chartRows;
+  const averagePpc = ppcDetail.average;
+  const delayCausesData = ppcDetail.causes;
 
   // SVG Line Chart Generation (PPC Evolution)
   const ppcEvolutionChart = useMemo(() => {
@@ -2912,14 +3568,14 @@ const App = () => {
     const chartH = height - mTop - mBottom;
     
     // Filter valid points (weeks with active tasks)
-    const validPoints = contractorWeeklyPpcData
+    const validPoints = ppcDetailChartData
       .map((d, index) => ({ ...d, index }))
       .filter(d => d.ppc !== null);
       
-    if (contractorWeeklyPpcData.length === 0) return null;
+    if (ppcDetailChartData.length === 0) return null;
     
     const getX = (index: number) => {
-      const total = contractorWeeklyPpcData.length;
+      const total = ppcDetailChartData.length;
       if (total <= 1) return mLeft + chartW / 2;
       return mLeft + (index / (total - 1)) * chartW;
     };
@@ -2942,9 +3598,9 @@ const App = () => {
     const yMeta = getY(80);
     
     // Build vertical grid lines & X-axis labels
-    const xLabels = contractorWeeklyPpcData.map((d, index) => {
+    const xLabels = ppcDetailChartData.map((d, index) => {
       const x = getX(index);
-      const total = contractorWeeklyPpcData.length;
+      const total = ppcDetailChartData.length;
       const interval = Math.max(1, Math.ceil(total / 8));
       const shouldShow = index % interval === 0 || index === total - 1;
       
@@ -2973,7 +3629,7 @@ const App = () => {
       getX,
       getY
     };
-  }, [contractorWeeklyPpcData]);
+  }, [ppcDetailChartData]);
 
   // Render coordinates for Pie Chart SVG
   const pieChartSlices = useMemo(() => {
@@ -3057,8 +3713,8 @@ const App = () => {
       else if (key === 'plannedThisWeek') { aVal = a.plannedThisWeek ?? 0; bVal = b.plannedThisWeek ?? 0; }
       else if (key === 'progressThisWeek') { aVal = a.progressThisWeek ?? 0; bVal = b.progressThisWeek ?? 0; }
       else if (key === 'accumulated') {
-        aVal = Math.min(100, (Number(a.executedBefore) || 0) + (Number(a.progressThisWeek) || 0));
-        bVal = Math.min(100, (Number(b.executedBefore) || 0) + (Number(b.progressThisWeek) || 0));
+        aVal = getTaskAccumulatedProgress(a);
+        bVal = getTaskAccumulatedProgress(b);
       }
       else { aVal = a.weekId || ''; bVal = b.weekId || ''; }
       if (typeof aVal === 'number') return (aVal - bVal) * dir;
@@ -3068,6 +3724,7 @@ const App = () => {
   }, [planning, giantSearch, giantFloorFilter, giantMacroFilter, giantStatusFilter, giantSortKey, giantSortDir]);
 
   const filteredCronograma = useMemo(() => {
+    if (!showRawCronoTable) return [];
     let items = (cronogramaInicial || []).filter(item => {
       if (!item) return false;
       const matchesSearch = !cronoSearch ||
@@ -3099,8 +3756,8 @@ const App = () => {
         return String(aVal).localeCompare(String(bVal)) * dir;
       });
     }
-    return items;
-  }, [cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
+    return items.slice(0, rawCronoLimit);
+  }, [showRawCronoTable, rawCronoLimit, cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
 
   const cronogramaOrderMap = useMemo(() => {
     const groupOrder = new Map<string, number>();
@@ -3208,6 +3865,8 @@ const App = () => {
     return tasks.map(({ task }) => task);
   }, [weeklyTasks, planningSearch, planningTeamFilter, planningStatusFilter, planningSortKey, planningSortDir, cronogramaOrderMap]);
 
+  const selectableFilteredWeeklyTasks = filteredWeeklyTasks.filter(task => !isTaskLocked(task));
+
   // --- Handlers de Ações ---
   const handleGeneratePlanningFromBudgetDiffs = async () => {
     if (pendingBudgetDiffs.length === 0) {
@@ -3242,10 +3901,9 @@ const App = () => {
       if (existingIndex !== -1) {
         const task = updatedPlanning[existingIndex];
         const executedBefore = roundPercentValue(task.executedBefore || 0);
-        const progressFromImport = Math.max(0, importedProgress - executedBefore);
         const nextProgressThisWeek = importedProgress > 0
-          ? Math.round(progressFromImport * 1000) / 1000
-          : Math.min(100, Math.round(((Number(task.progressThisWeek) || 0) + delta) * 1000) / 1000);
+          ? importedProgress
+          : Math.max(roundPercentValue(task.progressThisWeek || 0), roundPercentValue(executedBefore + delta));
         updatedPlanning[existingIndex] = {
           ...task,
           progressThisWeek: Math.min(100, nextProgressThisWeek),
@@ -3259,7 +3917,6 @@ const App = () => {
 
       const cronoMatch = cronogramaInicial.find(item => item.id === diff.itemId);
       const previousProgress = roundPercentValue(diff.previousProgress ?? Math.max(0, (Number(diff.newProgress) || 0) - delta));
-      const unplannedProgressThisWeek = Math.max(0, importedProgress - previousProgress);
       updatedPlanning.push({
         id: crypto.randomUUID(),
         weekId: currentWeekId,
@@ -3271,7 +3928,7 @@ const App = () => {
         weight: 100,
         executedBefore: previousProgress,
         plannedThisWeek: 0,
-        progressThisWeek: Math.round(unplannedProgressThisWeek * 1000) / 1000,
+        progressThisWeek: importedProgress,
         finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
         dailyWork: [0, 0, 0, 0, 0],
         observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
@@ -3383,9 +4040,80 @@ const App = () => {
     if (newTasks.length > 0) {
       const updatedPlanning = [...planning, ...newTasks];
       const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
       if (duplicates.length === 0) { setDrawerSelectedServices([]); setIsDrawerOpen(false); }
       setNotification({ message: `${newTasks.length} Novas atividades adicionadas à semana!`, type: 'success' });
+    }
+  };
+
+  const handleLaunchNextWeekActivities = async () => {
+    if (!nextWeekMacro || nextWeekFloors.length === 0) {
+      setNotification({ message: 'Selecione a Macroatividade, os Pavimentos e pelo menos um Serviço!', type: 'error' });
+      return;
+    }
+    if (nextWeekSelectedServices.length === 0) {
+      setNotification({ message: 'Selecione pelo menos um Serviço para lançar na próxima semana!', type: 'error' });
+      return;
+    }
+    const targetWeekId = nextWeekIdForPopover;
+    const nextWeekExistingTasks = planning.filter(t => t.weekId === targetWeekId && !t.finalized);
+    const newTasks: any[] = [];
+    const duplicates: string[] = [];
+
+    nextWeekSelectedServices.forEach(serviceId => {
+      const match = nextWeekCandidateActivities.find(item => item.id === serviceId);
+      if (match) {
+        const exists = nextWeekExistingTasks.some(t => t.itemId === match.id && t.floor === match.floor);
+        if (exists) {
+          duplicates.push(`${match.service} (${match.floor})`);
+        } else {
+          newTasks.push({
+            id: crypto.randomUUID(),
+            weekId: targetWeekId,
+            floor: match.floor,
+            sectionId: slugify(match.macro),
+            itemId: match.id,
+            activityName: match.service,
+            responsible: nextWeekResponsible || nextWeekSourceTask?.responsible || match.responsible || (teams[0] || 'Equipe Geral'),
+            isParent: !!match.isParent,
+            weight: 100,
+            executedBefore: roundDown25(match.progress || 0),
+            executedBeforeRaw: roundPercentValue(match.progress || 0),
+            plannedThisWeek: 100,
+            progressThisWeek: 0,
+            finishDate: match.end,
+            dailyWork: [0, 0, 0, 0, 0],
+            observations: '',
+            delayReason: '',
+            finalized: false,
+            launchedFromTaskId: nextWeekSourceTask?.id
+          });
+        }
+      }
+    });
+
+    if (duplicates.length > 0) {
+      setNextWeekWarning(`⚠️ Já lançadas na próxima semana (${formatDateBR(targetWeekId)}): ${duplicates.join('; ')}`);
+    } else {
+      setNextWeekWarning('');
+    }
+
+    if (newTasks.length > 0) {
+      const updatedPlanning = [...planning, ...newTasks];
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
+      if (duplicates.length === 0) {
+        setNextWeekSelectedServices([]);
+        setNextWeekPopover(null);
+      }
+      setNotification({
+        message: `${newTasks.length} atividade(s) lançada(s) para a próxima semana (${formatDateBR(targetWeekId)})!`,
+        type: 'success'
+      });
     }
   };
 
@@ -3428,7 +4156,8 @@ const App = () => {
     };
 
     const updatedPlanning = [...planning, newTask];
-    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+    setPlanning(updatedPlanning);
+    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
     
     setManualServiceName('');
     setManualFloor('');
@@ -3437,6 +4166,8 @@ const App = () => {
   };
 
   const handleDailyWorkChange = (taskId, newDW) => {
+    const currentTask = planning.find(t => t.id === taskId);
+    if (!currentTask || isTaskLocked(currentTask)) return;
     const updatedPlanning = planning.map(p => p.id === taskId ? { ...p, dailyWork: newDW } : p);
     setPlanning(updatedPlanning);
     saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
@@ -3444,7 +4175,7 @@ const App = () => {
 
   const handlePlannedChange = (taskId, value) => {
     const currentTask = planning.find(t => t.id === taskId);
-    if (!currentTask || currentTask.finalized) return;
+    if (!currentTask || isTaskLocked(currentTask)) return;
     const isCurrentActive = (currentTask.plannedThisWeek ?? 100) === value;
     const numericVal = isCurrentActive ? 0 : value;
     const updatedPlanning = planning.map(t => t.id === taskId ? { ...t, plannedThisWeek: numericVal } : t);
@@ -3465,7 +4196,7 @@ const App = () => {
 
   const handleWeeklyProgressChange = (taskId, value) => {
     const task = planning.find(t => t.id === taskId);
-    if (!task || task.finalized) return;
+    if (!task || isTaskLocked(task)) return;
     
     const isCurrentActive = (task.progressThisWeek ?? 0) === value;
     const newWeeklyProgress = isCurrentActive ? 0 : value; 
@@ -3505,7 +4236,10 @@ const App = () => {
           updatedHistory.push({
             timestamp: timestampVal, floor: task.floor, sectionId: sectionKey, sectionTitle: getMacroTitle(sectionKey),
             itemId: task.itemId, itemName: itemAfter.name, progressAchieved: newVal - oldVal, 
-            oldPercent: oldVal, newPercent: newVal, userId
+            oldPercent: oldVal, newPercent: newVal, userId,
+            weekId: task.weekId, taskId: task.id,
+            isCorrection: editingFinalizedWeekId === task.weekId,
+            correctedBy: editingFinalizedWeekId === task.weekId ? (plannerUsername || 'Sistema') : undefined
           });
         }
       }
@@ -3516,6 +4250,7 @@ const App = () => {
   };
 
   const handleFinalizeWeek = async (carryOver) => {
+    if (isWeekFinalized) return;
     const nextWeekDate = new Date(currentWeekStart);
     nextWeekDate.setDate(nextWeekDate.getDate() + 7);
     const nextWeekId = toLocalDateString(nextWeekDate);
@@ -3533,14 +4268,16 @@ const App = () => {
     const carryOverTasks = [];
     const updatedPlanning = planning.map(t => {
       if (t.weekId === currentWeekId) {
-        const finalProgress = Math.min(100, (t.executedBefore || 0) + (t.progressThisWeek || 0));
+        const finalProgress = getTaskAccumulatedProgress(t);
         if (carryOver && finalProgress < 100) {
           const existsNextWeek = planning.some(p => p.weekId === nextWeekId && p.itemId === t.itemId && p.floor === t.floor);
           if (!existsNextWeek) {
             carryOverTasks.push({
-              ...t, id: crypto.randomUUID(), weekId: nextWeekId, executedBefore: finalProgress,
+              ...t, id: crypto.randomUUID(), weekId: nextWeekId,
+              carriedFromWeekId: currentWeekId, carriedFromTaskId: t.id, isCarryOver: true,
+              executedBefore: finalProgress,
               plannedThisWeek: Math.max(0, 100 - finalProgress), progressThisWeek: 0,
-              observations: 'Saldo de avanço físico reprogramado', delayReason: '', finalized: false
+              observations: '', isUnplannedDetected: false, delayReason: '', finalized: false
             });
           }
         }
@@ -3559,9 +4296,121 @@ const App = () => {
   };
 
   const handleUpdateTaskField = (taskId, field, value) => {
+    const currentTask = planning.find(t => t.id === taskId);
+    if (!currentTask || isTaskLocked(currentTask)) return;
     const updatedPlanning = planning.map(t => t.id === taskId ? { ...t, [field]: value, lastUpdatedBy: plannerUsername || 'Sistema' } : t);
     setPlanning(updatedPlanning);
     saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+  };
+
+  const handleOpenWeekForEditing = (weekId) => {
+    const parsedWeek = parseISODateLocal(weekId);
+    if (Number.isNaN(parsedWeek.getTime())) return;
+    setCurrentWeekStart(getWeekStartDate(parsedWeek));
+    setEditingFinalizedWeekId(weekId);
+    setSelectedTaskIds([]);
+    setActiveTab('planning');
+  };
+
+  const handleEditFinalizedWeek = () => {
+    if (!hasFinalizedTasks) return;
+    triggerConfirm(
+      'Corrigir semana finalizada',
+      'A semana ficará editável para corrigir medições, metas e observações. Ao salvar, o avanço físico e o PPC serão recalculados.',
+      () => {
+        setEditingFinalizedWeekId(currentWeekId);
+        setSelectedTaskIds([]);
+        setNotification({ message: 'Semana aberta para correção.', type: 'warning' });
+      }
+    );
+  };
+
+  const handleSaveFinalizedWeekEdits = async () => {
+    if (!isWeekBeingEdited) return;
+
+    const weekTasksToSave = planning.filter(task => task.weekId === currentWeekId);
+    const activePlanned = weekTasksToSave.filter(task => (task.plannedThisWeek ?? 100) > 0);
+    const activeCompleted = activePlanned.filter(task => (task.progressThisWeek ?? 0) >= (task.plannedThisWeek ?? 100));
+    const updatedPpcHistory = [
+      ...ppcHistory.filter(record => record.weekId !== currentWeekId),
+      {
+        weekId: currentWeekId,
+        weekStart: currentWeekId,
+        ppc: activePlanned.length > 0 ? (activeCompleted.length / activePlanned.length) * 100 : 0,
+        totalPlanned: activePlanned.length,
+        completed: activeCompleted.length,
+        timestamp: new Date().toISOString(),
+        lastUpdatedBy: plannerUsername || 'Sistema'
+      }
+    ];
+
+    const nextWeekId = toLocalDateString(addDays(currentWeekStart, 7));
+    const sourceTasksById = new Map(weekTasksToSave.map(task => [task.id, task]));
+    const isCarryOverFromEditedWeek = (task) => (
+      task.weekId === nextWeekId && (
+        task.carriedFromWeekId === currentWeekId ||
+        (task.isCarryOver && !task.carriedFromWeekId) ||
+        String(task.observations || '').startsWith('Saldo de')
+      )
+    );
+    const getCarryOverSource = (task) => (
+      (task.carriedFromTaskId && sourceTasksById.get(task.carriedFromTaskId)) ||
+      weekTasksToSave.find(source => (
+        source.floor === task.floor &&
+        source.sectionId === task.sectionId &&
+        source.itemId === task.itemId
+      ))
+    );
+
+    const adjustedPlanning = planning
+      .filter(task => {
+        if (!isCarryOverFromEditedWeek(task)) return true;
+        const sourceTask = getCarryOverSource(task);
+        return !!sourceTask && getTaskAccumulatedProgress(sourceTask) < 100;
+      })
+      .map(task => {
+        if (!isCarryOverFromEditedWeek(task)) return task;
+        const sourceTask = getCarryOverSource(task);
+        const finalProgress = getTaskAccumulatedProgress(sourceTask);
+        return {
+          ...task,
+          executedBefore: finalProgress,
+          executedBeforeRaw: finalProgress,
+          plannedThisWeek: Math.max(0, 100 - finalProgress),
+          finalized: false,
+          lastUpdatedBy: plannerUsername || 'Sistema'
+        };
+      });
+
+    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
+      adjustedPlanning,
+      cloneDeep(allFloorsData),
+      cronogramaInicial
+    );
+
+    setPlanning(recalculatedPlanning);
+    setAllFloorsData(updatedFloorsData);
+    await saveToDB(
+      floors,
+      updatedFloorsData,
+      history,
+      weights,
+      recalculatedPlanning,
+      cronogramaInicial,
+      teams,
+      delayReasons,
+      updatedPpcHistory,
+      matrices,
+      teamPhones,
+      undefined,
+      projectCity,
+      weatherApiKey,
+      weatherCache,
+      true
+    );
+    setEditingFinalizedWeekId(null);
+    setSelectedTaskIds([]);
+    setNotification({ message: 'Correções salvas e histórico atualizado.', type: 'success' });
   };
 
   const reopenBudgetDiffsFromTasks = (tasks) => {
@@ -3582,6 +4431,7 @@ const App = () => {
 
   const handleRemoveTask = (taskId) => {
     const targetTask = planning.find(t => t.id === taskId);
+    if (!targetTask || isTaskLocked(targetTask)) return;
     const updatedPlanning = planning.filter(t => t.id !== taskId);
     const updatedBudgetDiffs = reopenBudgetDiffsFromTasks(targetTask);
     setPlanning(updatedPlanning);
@@ -3606,8 +4456,9 @@ const App = () => {
       'Excluir Atividades', 
       `Deseja remover as ${selectedTaskIds.length} atividades selecionadas desta semana?`, 
       async () => {
-        const removedTasks = planning.filter(t => selectedTaskIds.includes(t.id));
-        const updatedPlanning = planning.filter(t => !selectedTaskIds.includes(t.id));
+        const removedTasks = planning.filter(t => selectedTaskIds.includes(t.id) && !isTaskLocked(t));
+        const removedTaskIds = new Set(removedTasks.map(task => task.id));
+        const updatedPlanning = planning.filter(t => !removedTaskIds.has(t.id));
         const updatedBudgetDiffs = reopenBudgetDiffsFromTasks(removedTasks);
         setPlanning(updatedPlanning);
         setBudgetDiffs(updatedBudgetDiffs);
@@ -3624,6 +4475,8 @@ const App = () => {
   };
 
   const handleVoiceInput = (taskId) => {
+    const currentTask = planning.find(t => t.id === taskId);
+    if (!currentTask || isTaskLocked(currentTask)) return;
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setNotification({ message: "Reconhecimento de voz não suportado pelo seu navegador.", type: "error" });
@@ -3668,6 +4521,8 @@ const App = () => {
   };
 
   const handleServiceComplementVoiceInput = (taskId) => {
+    const currentTask = planning.find(t => t.id === taskId);
+    if (!currentTask || isTaskLocked(currentTask)) return;
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setNotification({ message: "Reconhecimento de voz não suportado pelo seu navegador.", type: "error" });
@@ -3906,7 +4761,13 @@ const App = () => {
             });
           };
 
-          for (let i = headerIndex + 1; i < data.length; i++) processRow(data[i]);
+          for (let i = headerIndex + 1; i < data.length; i++) {
+            processRow(data[i]);
+            if ((i - headerIndex) % 500 === 0) {
+              setImportStatus(`Analisando planilha: ${i - headerIndex} de ${data.length - headerIndex - 1} linhas...`);
+              await new Promise(resolve => setTimeout(resolve, 0));
+            }
+          }
 
           const parentDependenciesByKey = new Map<string, any>();
           rawParsedRows.forEach(item => {
@@ -3942,9 +4803,11 @@ const App = () => {
             return;
           }
           
-          if (parsedItems.length > 6000) {
-            setNotification({ message: `Limite de segurança: Importados apenas os primeiros 6000 serviços.`, type: "error" });
-            parsedItems = parsedItems.slice(0, 6000);
+          if (parsedItems.length > MAX_IMPORTED_CRONOGRAMA_ITEMS) {
+            setNotification({ message: `A planilha contém ${parsedItems.length} atividades. O limite é ${MAX_IMPORTED_CRONOGRAMA_ITEMS}; nenhum dado foi importado.`, type: "error" });
+            setIsImporting(false);
+            setImportStatus('');
+            return;
           }
 
           const importedBudgetDiffs = buildBudgetDiffs(cronogramaInicial, parsedItems, file.name);
@@ -4180,7 +5043,7 @@ const App = () => {
 
   const handleAcceptPreFill = async (taskId: string) => {
     const acceptedTask = planning.find(t => t.id === taskId);
-    if (!acceptedTask || acceptedTask.finalized) return;
+    if (!acceptedTask || isTaskLocked(acceptedTask)) return;
 
     const updatedPlanning = planning.map(t => {
       if (t.id === taskId) {
@@ -4226,7 +5089,11 @@ const App = () => {
           progressAchieved: newVal - oldVal,
           oldPercent: oldVal,
           newPercent: newVal,
-          userId
+          userId,
+          weekId: acceptedTask.weekId,
+          taskId: acceptedTask.id,
+          isCorrection: editingFinalizedWeekId === acceptedTask.weekId,
+          correctedBy: editingFinalizedWeekId === acceptedTask.weekId ? (plannerUsername || 'Sistema') : undefined
         });
       }
     }
@@ -4359,7 +5226,6 @@ const App = () => {
   td{padding:5px 8px;vertical-align:middle;border-right:1px solid #e2e8f0;font-size:10px}
   td:last-child{border-right:none}
   .act-name{font-weight:800;text-transform:uppercase;font-size:10px;line-height:1.3}
-  .act-comp{font-size:8px;color:#64748b;margin-top:1px}
   .floor-cell{font-size:9px;font-weight:800;color:#4f46e5;text-transform:uppercase;white-space:normal;word-break:break-word}
   .badge{display:inline-block;padding:2px 6px;border-radius:999px;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
   .badge-green{background:#dcfce7;color:#15803d}
@@ -4606,15 +5472,15 @@ function rt(){var sorted=allRows.slice();
     var bb=t.executedBefore>0?'<span class="badge badge-gray">'+t.executedBefore+'%</span>':'<span style="color:#94a3b8">-</span>';
     var dh='<div class="days-cell">'+t.dailyWork.map(function(w,idx){return'<div class="day-chip '+(w?'worked':'off')+'" title="'+DL[idx]+' '+DD[idx]+'"><span>'+DL[idx].charAt(0)+'</span><span>'+DD[idx]+'</span></div>';}).join('')+'</div>';
     var sb=t.finalized?'<span class="badge badge-gray">Finalizado</span>':isOk?'<span class="badge badge-green">Conforme</span>':isDel?'<span class="badge badge-red">Atrasado</span>':'<span class="badge badge-gray">Pendente</span>';
-    var comp=t.serviceComplement?'<div class="act-comp">'+t.serviceComplement+'</div>':'';
     var mb=t.isManual?' <span class="badge badge-amber">Extra</span>':'';
-    var serviceText=serviceTextMode==='whatsapp'?t.serviceInstruction:(t.activityName+' · '+(t.floor||'-')+' · meta '+planned+'%');
+    var complement=t.serviceComplement?' ('+t.serviceComplement+')':'';
+    var serviceText=serviceTextMode==='whatsapp'?t.serviceInstruction:(t.activityName+complement+' · '+(t.floor||'-')+' · meta '+planned+'%');
     var team=t.responsible||'-';
     var teamBg=tc(team);
     return '<tr class="'+rc+'">'+
       '<td class="ct team-cell" style="--team-bg:'+teamBg+';--team-fg:'+fg(teamBg)+';font-weight:900;white-space:nowrap;text-align:center">'+esc(team)+'</td>'+
       '<td class="cn" style="color:#94a3b8;font-weight:900;font-size:9px;text-align:center">'+(i+1)+'</td>'+
-      '<td class="cs"><div class="act-name">'+esc(serviceText)+mb+'</div>'+comp+'</td>'+
+      '<td class="cs"><div class="act-name">'+esc(serviceText)+mb+'</div></td>'+
       '<td class="cf"><span class="floor-cell">'+(t.floor||'-')+'</span></td>'+
       '<td class="ce" style="text-align:center;font-weight:700">'+(t.efetivo !== undefined && t.efetivo !== null && t.efetivo !== '' ? t.efetivo : '-')+'</td>'+
       '<td class="cb" style="text-align:center">'+bb+'</td>'+
@@ -4697,19 +5563,73 @@ rt();
     setWhatsappModal(prev => ({ ...prev, isOpen: false }));
   };
 
-  const handleAddDelayReason = async () => {
-    if (!newDelayReason.trim()) return;
-    const text = newDelayReason.trim();
-    if (delayReasons.includes(text)) return;
-    const updatedDelays = [...delayReasons, text];
-    await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, updatedDelays, ppcHistory, matrices);
-    setNewDelayReason(''); setNotification({ message: 'Motivo registrado!', type: 'success' });
+  const handleAddDelayReason = async (scope: 'general' | 'project') => {
+    if (!newDelayReason.trim() || isSavingDelayReason) return;
+    const targetId = urlUserId || selectedProjectId;
+    if (!db || !userId || !delayRegistryReady || (scope === 'project' && !isProjectHydrated)) {
+      setNotification({ message: 'Aguarde o carregamento dos motivos antes de registrar.', type: 'warning' });
+      return;
+    }
+    const text = normalizeDelayReason(newDelayReason);
+    setIsSavingDelayReason(true);
+    try {
+      const added = await runTransaction(db, async transaction => {
+        const registryRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, DELAY_REASON_REGISTRY_ID);
+        const registry = await transaction.get(registryRef);
+        const general = registry.exists() ? mergeDelayReasons(registry.data().reasons) : GENERAL_DELAY_REASONS;
+        if (scope === 'general') {
+          const updated = mergeDelayReasons(general, [text]);
+          if (updated.length === general.length) return false;
+          transaction.set(registryRef, { reasons: updated, updatedAt: new Date(), updatedBy: plannerUsername || 'Sistema' }, { merge: true });
+        } else {
+          if (!targetId) throw new Error('Selecione uma obra.');
+          const projectRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
+          const snapshot = await transaction.get(projectRef);
+          const data = snapshot.exists() ? snapshot.data() : {};
+          const local = projectOnlyDelayReasons(data.projectDelayReasons ?? data.delayReasons, general);
+          const effective = mergeDelayReasons(general, local);
+          if (mergeDelayReasons(effective, [text]).length === effective.length) return false;
+          const updatedLocal = mergeDelayReasons(local, [text]);
+          transaction.set(projectRef, { projectDelayReasons: updatedLocal, delayReasons: mergeDelayReasons(general, updatedLocal) }, { merge: true });
+        }
+        return true;
+      });
+      if (!added) {
+        setNotification({ message: 'Esse motivo já está disponível.', type: 'warning' });
+        return;
+      }
+      setNewDelayReason('');
+      setNotification({ message: scope === 'general' ? 'Motivo geral registrado para todas as obras.' : 'Motivo registrado nesta obra.', type: 'success' });
+    } catch (error) {
+      console.error('Erro ao registrar motivo:', error);
+      setNotification({ message: 'Não foi possível registrar o motivo. Tente novamente.', type: 'error' });
+    } finally {
+      setIsSavingDelayReason(false);
+    }
   };
 
   const handleDeleteDelayReason = async (reasonToDelete) => {
-    const updatedDelays = delayReasons.filter(r => r !== reasonToDelete);
-    await saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, updatedDelays, ppcHistory, matrices);
-    setNotification({ message: 'Motivo removido.', type: 'success' });
+    const targetId = urlUserId || selectedProjectId;
+    if (!db || !targetId || !isProjectHydrated || isSavingDelayReason || !delayRegistryReady) return;
+    setIsSavingDelayReason(true);
+    try {
+      await runTransaction(db, async transaction => {
+        const registryRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, DELAY_REASON_REGISTRY_ID);
+        const registry = await transaction.get(registryRef);
+        const general = registry.exists() ? mergeDelayReasons(registry.data().reasons) : GENERAL_DELAY_REASONS;
+        const projectRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
+        const snapshot = await transaction.get(projectRef);
+        const data = snapshot.exists() ? snapshot.data() : {};
+        const local = projectOnlyDelayReasons(data.projectDelayReasons ?? data.delayReasons, general).filter(reason => reason !== reasonToDelete);
+        transaction.set(projectRef, { projectDelayReasons: local, delayReasons: mergeDelayReasons(general, local) }, { merge: true });
+      });
+      setNotification({ message: 'Motivo removido da lista desta obra. Os registros anteriores foram preservados.', type: 'success' });
+    } catch (error) {
+      console.error('Erro ao remover motivo:', error);
+      setNotification({ message: 'Não foi possível remover o motivo.', type: 'error' });
+    } finally {
+      setIsSavingDelayReason(false);
+    }
   };
 
   const handleCreateMatrix = async (replicationGroup = '') => {
@@ -4842,7 +5762,7 @@ rt();
       t?.weekId || '', t?.floor || '', (t?.sectionId || '').toUpperCase(), t?.activityName || '', t?.responsible || '',
       `${t?.plannedThisWeek ?? 100}%`,
       (t?.dailyWork || [0,0,0,0,0]).map((dw, i) => dw ? ['Seg', 'Ter', 'Qua', 'Qui', 'Sex'][i] : '').filter(Boolean).join('/'),
-      `${t?.progressThisWeek ?? 0}%`, `${Math.min(100, Number(t?.executedBefore || 0) + Number(t?.progressThisWeek || 0))}%`,
+      `${t?.progressThisWeek ?? 0}%`, `${getTaskAccumulatedProgress(t)}%`,
       t?.delayReason || 'N/A', t?.observations || '', t?.finalized ? 'Finalizado' : 'Ativo'
     ]);
     let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; 
@@ -5225,218 +6145,352 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   };
 
-  const renderCronograma = () => (
+  const renderCronograma = (subViewOverride?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'raw_crono' | 'import') => (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
-          <div>
-            <h2 className="text-lg font-black text-indigo-900 uppercase tracking-tight mb-1">Importação Directa de Planilha</h2>
-            <p className="text-xs text-slate-500">Envie o arquivo de planejamento gerado pelo seu software (Excel ou CSV).</p>
-          </div>
-          <button 
-            onClick={() => triggerConfirm(
-              'Limpar Banco de Dados', 
-              'Deseja limpar o cronograma importado, planejamento aberto, pesos, paineis e diferencas de orcamento? O historico semanal e o PPC serao preservados.', 
-              handleClearProjectData
-            )}
-            className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-black rounded-xl text-xs uppercase tracking-wider transition active:scale-95 whitespace-nowrap"
-          >
-            🗑️ Limpar BD
-          </button>
-        </div>
-        <p className="text-xs text-slate-500 mb-6">O sistema localiza automaticamente os cabeçalhos (ex: Linha 4) e mapeia colunas como "Pacote de trabalho", "Lote" e "Serviço".</p>
-        <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 bg-slate-50 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500 transition relative">
-          <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-          <span className="text-4xl mb-2">📊</span>
-          <p className="text-xs font-black text-slate-700">CLIQUE OU ARRASTE O SEU EXCEL AQUI</p>
-          <p className="text-[10px] text-slate-400 mt-1 uppercase">Aceita formatos .xlsx, .xls ou .csv</p>
-        </div>
-      </div>
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-          <h3 className="text-sm font-black text-slate-800 uppercase">
-            Atividades do Cronograma Ativo
-            <span className="ml-2 text-indigo-600">({filteredCronograma.length}/{cronogramaInicial.length})</span>
-          </h3>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={!previousBudgetImport}
-              title={getBudgetImportTooltip(previousBudgetImport)}
-              className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 disabled:opacity-45 disabled:cursor-not-allowed"
-            >
-              Orcamento anterior
-            </button>
-            <button
-              type="button"
-              disabled={!currentBudgetImport}
-              title={getBudgetImportTooltip(currentBudgetImport)}
-              className="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-[10px] font-black uppercase tracking-wider text-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed"
-            >
-              Orcamento atual
-            </button>
-          </div>
-        </div>
-
-        {/* Filter Bar */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
-          <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
-            <input
-              type="text"
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
-              placeholder="Serviço, macro, equipe..."
-              value={cronoSearch}
-              onChange={e => setCronoSearch(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label>
-            <select
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
-              value={cronoFloorFilter}
-              onChange={e => setCronoFloorFilter(e.target.value)}
-            >
-              <option value="">-- Todos --</option>
-              {(floors || []).map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label>
-            <select
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
-              value={cronoMacroFilter}
-              onChange={e => setCronoMacroFilter(e.target.value)}
-            >
-              <option value="">-- Todas --</option>
-              {(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Progresso</label>
-            <select
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
-              value={cronoProgressFilter}
-              onChange={e => setCronoProgressFilter(e.target.value)}
-            >
-              <option value="">-- Todos --</option>
-              <option value="notstarted">⬜ Não iniciado (0%)</option>
-              <option value="inprogress">🔵 Em andamento</option>
-              <option value="done">✅ Concluído (100%)</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-auto rounded-xl border border-slate-200 max-h-[520px]">
-          <table className="min-w-[1520px] w-full text-xs text-left">
-            <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
-              <tr>
-                {[
-                  { label: 'Etapa (Macro)', key: 'macro' },
-                  { label: 'Pavimento (Lote)', key: 'floor' },
-                  { label: 'Serviço', key: 'service' },
-                  { label: 'Dias', key: 'duration', center: true },
-                  { label: 'Fim Planeado', key: 'end', center: true },
-                  { label: 'Realizado', key: 'progress', center: true },
-                  { label: 'Equipe', key: null, center: true },
-                  { label: 'Custo Estimado', key: 'cost', right: true },
-                  { label: 'Grupo Replicacao', key: null },
-                  { label: 'Predecessoras', key: null },
-                  { label: 'Sucessoras', key: null },
-                  { label: 'Depend. herdada de', key: null },
-                ].map(({ label, key, center, right }) => (
-                  <th
-                    key={label}
-                    className={`p-3 select-none ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''} ${center ? 'text-center' : right ? 'text-right' : ''}`}
-                    onClick={() => {
-                      if (!key) return;
-                      if (cronoSortKey === key) {
-                        setCronoSortDir(d => d === 'asc' ? 'desc' : 'asc');
-                      } else {
-                        setCronoSortKey(key);
-                        setCronoSortDir('asc');
-                      }
-                    }}
+      <LongTermPlanner
+        activeSubView={subViewOverride}
+        hideSubNav={Boolean(subViewOverride)}
+        selectedProjectId={selectedProjectId}
+        cronogramaInicial={cronogramaInicial}
+        floors={floors}
+        allFloorsData={allFloorsData}
+        weights={weights}
+        teams={teams}
+        matrices={matrices}
+        previousBudgetImport={previousBudgetImport}
+        currentBudgetImport={currentBudgetImport}
+        getBudgetImportTooltip={getBudgetImportTooltip}
+        handleFileUpload={handleFileUpload}
+        onTriggerClearDB={() =>
+          triggerConfirm(
+            'Limpar Banco de Dados',
+            'Deseja limpar o cronograma importado, planejamento aberto, pesos, paineis e diferencas de orcamento? O historico semanal e o PPC serao preservados.',
+            handleClearProjectData
+          )
+        }
+        onApplySchedule={async (compiled, message) => {
+          const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
+            planning,
+            compiled.allFloorsData,
+            compiled.cronogramaInicial
+          );
+          setFloors(compiled.floors);
+          setAllFloorsData(updatedFloorsData);
+          setWeights(compiled.weights);
+          setCronogramaInicial(compiled.cronogramaInicial);
+          setTeams(compiled.teams);
+          setMatrices(compiled.matrices);
+          setPlanning(recalculatedPlanning);
+          await saveToDB(
+            compiled.floors,
+            updatedFloorsData,
+            history,
+            compiled.weights,
+            recalculatedPlanning,
+            compiled.cronogramaInicial,
+            compiled.teams,
+            delayReasons,
+            ppcHistory,
+            compiled.matrices
+          );
+          setNotification({
+            message: message || 'Planejamento de Longo Prazo sincronizado com sucesso!',
+            type: 'success',
+          });
+        }}
+        onUpdateSingleItemProgress={async (item, rawVal) => {
+          const newProgress = roundPercentValue(rawVal);
+          const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
+          const updatedFloorsData = cloneDeep(allFloorsData);
+          const macroKey = slugify(item.macro);
+          if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
+            const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
+            const existingItem = itemsList.find(it => it && it.id === item.id);
+            if (existingItem) {
+              existingItem.actualPercent = newProgress;
+            }
+          }
+          setCronogramaInicial(updatedCrono);
+          setAllFloorsData(updatedFloorsData);
+          await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
+          setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
+        }}
+        rawCronoSlot={
+          <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+              <h3 className="text-sm font-black text-slate-800 uppercase">
+                Atividades do Cronograma Ativo
+                <span className="ml-2 text-indigo-600">({filteredCronograma.length}/{cronogramaInicial.length})</span>
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {filteredCronograma.length >= rawCronoLimit && (
+                  <button
+                    type="button"
+                    onClick={() => setRawCronoLimit(prev => prev + 200)}
+                    className="px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-[10px] font-black uppercase tracking-wider text-amber-800 transition-colors"
                   >
-                    <span className="flex items-center gap-1 justify-inherit">
-                      {label}
-                      {key && (
-                        <span className={`text-[10px] transition-opacity ${cronoSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
-                          {cronoSortKey === key ? (cronoSortDir === 'asc' ? '▲' : '▼') : '⇕'}
-                        </span>
-                      )}
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 font-medium">
-              {filteredCronograma.map((item, idx) => (
-                <tr key={idx} className="hover:bg-slate-50">
-                  <td className="p-3 font-bold text-indigo-900">{item.macro}</td>
-                  <td className="p-3 text-slate-600">{item.floor}</td>
-                  <td className="p-3 font-bold text-slate-800">{item.service}</td>
-                  <td className="p-3 text-center text-slate-500">{item.duration}</td>
-                  <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
-                  <td className="p-3 text-center">
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      className="w-20 p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs text-center focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none"
-                      defaultValue={roundPercentValue(item.progress ?? 0)}
-                      onBlur={async (e) => {
-                        const newProgress = roundPercentValue(e.target.value);
-                        e.currentTarget.value = String(newProgress);
-                        const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
-                        const updatedFloorsData = cloneDeep(allFloorsData);
-                        const macroKey = slugify(item.macro);
-                        if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
-                          const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
-                          const existingItem = itemsList.find(it => it && it.id === item.id);
-                          if (existingItem) {
-                            existingItem.actualPercent = newProgress;
+                    Carregar +200 linhas ({rawCronoLimit})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={!previousBudgetImport}
+                  title={getBudgetImportTooltip(previousBudgetImport)}
+                  className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  Orcamento anterior
+                </button>
+                <button
+                  type="button"
+                  disabled={!currentBudgetImport}
+                  title={getBudgetImportTooltip(currentBudgetImport)}
+                  className="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-[10px] font-black uppercase tracking-wider text-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  Orcamento atual
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
+                <input
+                  type="text"
+                  className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
+                  placeholder="Serviço, macro, equipe..."
+                  value={cronoSearch}
+                  onChange={e => setCronoSearch(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label>
+                <select
+                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+                  value={cronoFloorFilter}
+                  onChange={e => setCronoFloorFilter(e.target.value)}
+                >
+                  <option value="">-- Todos --</option>
+                  {(floors || []).map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label>
+                <select
+                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+                  value={cronoMacroFilter}
+                  onChange={e => setCronoMacroFilter(e.target.value)}
+                >
+                  <option value="">-- Todas --</option>
+                  {(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Progresso</label>
+                <select
+                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+                  value={cronoProgressFilter}
+                  onChange={e => setCronoProgressFilter(e.target.value)}
+                >
+                  <option value="">-- Todos --</option>
+                  <option value="notstarted">⬜ Não iniciado (0%)</option>
+                  <option value="inprogress">🔵 Em andamento</option>
+                  <option value="done">✅ Concluído (100%)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="overflow-auto rounded-xl border border-slate-200 max-h-[640px]">
+              <table className="min-w-[1520px] w-full text-xs text-left">
+                <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
+                  <tr>
+                    {[
+                      { label: 'Etapa (Macro)', key: 'macro' },
+                      { label: 'Pavimento (Lote)', key: 'floor' },
+                      { label: 'Serviço', key: 'service' },
+                      { label: 'Dias', key: 'duration', center: true },
+                      { label: 'Fim Planeado', key: 'end', center: true },
+                      { label: 'Realizado', key: 'progress', center: true },
+                      { label: 'Equipe', key: null, center: true },
+                      { label: 'Custo Estimado', key: 'cost', right: true },
+                      { label: 'Grupo Replicacao', key: null },
+                      { label: 'Predecessoras', key: null },
+                      { label: 'Sucessoras', key: null },
+                      { label: 'Depend. herdada de', key: null },
+                    ].map(({ label, key, center, right }) => (
+                      <th
+                        key={label}
+                        className={`p-3 select-none ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''} ${center ? 'text-center' : right ? 'text-right' : ''}`}
+                        onClick={() => {
+                          if (!key) return;
+                          if (cronoSortKey === key) {
+                            setCronoSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                          } else {
+                            setCronoSortKey(key);
+                            setCronoSortDir('asc');
                           }
-                        }
-                        setCronogramaInicial(updatedCrono);
-                        setAllFloorsData(updatedFloorsData);
-                        await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
-                        setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') e.currentTarget.blur();
-                      }}
-                    />
-                  </td>
-                  <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
-                  <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                  <td className="p-3 text-slate-700 font-bold text-[10px] uppercase">{item.replicationGroup || '-'}</td>
-                  <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.predecessors || []).join(', ')}>
-                    {(item.predecessors || []).length > 0 ? item.predecessors.join(', ') : '-'}
-                  </td>
-                  <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.successors || []).join(', ')}>
-                    {(item.successors || []).length > 0 ? item.successors.join(', ') : '-'}
-                  </td>
-                  <td className="p-3 text-slate-500 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={item.inheritedDependenciesFrom || ''}>
-                    {item.inheritedDependenciesFrom || '-'}
-                  </td>
-                </tr>
-              ))}
-              {filteredCronograma.length === 0 && (
-                <tr>
-                  <td colSpan={12} className="p-10 text-center text-slate-400 italic font-medium">
-                    Nenhuma atividade encontrada com os filtros aplicados.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                        }}
+                      >
+                        <span className="flex items-center gap-1 justify-inherit">
+                          {label}
+                          {key && (
+                            <span className={`text-[10px] transition-opacity ${cronoSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
+                              {cronoSortKey === key ? (cronoSortDir === 'asc' ? '▲' : '▼') : '⇕'}
+                            </span>
+                          )}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {filteredCronograma.map((item) => {
+                    const progressValue = roundPercentValue(item.progress ?? 0);
+                    const activityKey = `${selectedProjectId}||${item.floor}||${item.id}`;
+                    return (
+                    <tr key={activityKey} className="hover:bg-slate-50">
+                      <td className="p-3 font-bold text-indigo-900">{item.macro}</td>
+                      <td className="p-3 text-slate-600">{item.floor}</td>
+                      <td className="p-3 font-bold text-slate-800">{item.service}</td>
+                      <td className="p-3 text-center text-slate-500">{item.duration}</td>
+                      <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
+                      <td className="p-3 text-center">
+                        <input
+                          key={`${activityKey}||${progressValue}`}
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          className="w-20 p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs text-center focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none"
+                          defaultValue={progressValue}
+                          onBlur={async (e) => {
+                            const newProgress = roundPercentValue(e.target.value);
+                            e.currentTarget.value = String(newProgress);
+                            const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
+                            const updatedFloorsData = cloneDeep(allFloorsData);
+                            const macroKey = slugify(item.macro);
+                            if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
+                              const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
+                              const existingItem = itemsList.find(it => it && it.id === item.id);
+                              if (existingItem) {
+                                existingItem.actualPercent = newProgress;
+                              }
+                            }
+                            setCronogramaInicial(updatedCrono);
+                            setAllFloorsData(updatedFloorsData);
+                            await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
+                            setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                          }}
+                        />
+                      </td>
+                      <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
+                      <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                      <td className="p-3 text-slate-700 font-bold text-[10px] uppercase">{item.replicationGroup || '-'}</td>
+                      <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.predecessors || []).join(', ')}>
+                        {(item.predecessors || []).length > 0 ? item.predecessors.join(', ') : '-'}
+                      </td>
+                      <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.successors || []).join(', ')}>
+                        {(item.successors || []).length > 0 ? item.successors.join(', ') : '-'}
+                      </td>
+                      <td className="p-3 text-slate-500 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={item.inheritedDependenciesFrom || ''}>
+                        {item.inheritedDependenciesFrom || '-'}
+                      </td>
+                    </tr>
+                    );
+                  })}
+                  {filteredCronograma.length === 0 && (
+                    <tr>
+                      <td colSpan={12} className="p-10 text-center text-slate-400 italic font-medium">
+                        Nenhuma atividade encontrada com os filtros aplicados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        }
+      />
     </div>
   );
 
+  const renderScheduleVersions = () => {
+    const activeProject = projects.find(p => p.id === selectedProjectId);
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300">
+        <ScheduleVersionsView
+          projectId={selectedProjectId || 'global'}
+          projectName={activeProject?.name || 'Obra Principal'}
+          currentSnapshot={{
+            cronogramaInicial,
+            floors,
+            allFloorsData,
+            weights,
+            teams,
+            matrices,
+          }}
+          onApplyVersion={async (snap, versionName) => {
+            const compiled = compileLobToCronograma(
+              hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
+              snap.allFloorsData,
+              snap.weights || weights,
+              snap.teams || teams,
+              snap.matrices || matrices
+            );
+            const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
+              planning,
+              compiled.allFloorsData,
+              compiled.cronogramaInicial
+            );
+            setFloors(compiled.floors);
+            setAllFloorsData(updatedFloorsData);
+            setWeights(compiled.weights);
+            setCronogramaInicial(compiled.cronogramaInicial);
+            setTeams(compiled.teams);
+            setMatrices(compiled.matrices);
+            setPlanning(recalculatedPlanning);
+            await saveToDB(
+              compiled.floors,
+              updatedFloorsData,
+              history,
+              compiled.weights,
+              recalculatedPlanning,
+              compiled.cronogramaInicial,
+              compiled.teams,
+              delayReasons,
+              ppcHistory,
+              compiled.matrices
+            );
+            setNotification({
+              message: `Versão "${versionName}" ativada e sincronizada com sucesso!`,
+              type: 'success',
+            });
+          }}
+        />
+      </div>
+    );
+  };
+
+  const renderCalendar = () => {
+    const activeProject = projects.find(p => p.id === selectedProjectId);
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300">
+        <CalendarView
+          projectId={selectedProjectId || 'global'}
+          projectName={activeProject?.name || 'Obra Principal'}
+          onSaveCalendar={async () => {
+            setNotification({
+              message: 'Configurações de calendário atualizadas com sucesso!',
+              type: 'success',
+            });
+          }}
+        />
+      </div>
+    );
+  };
 
   const renderPlanning = () => (
     <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300 pb-6">
@@ -5446,11 +6500,20 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <h2 className="text-xl font-black">PPC - Percentual de Planos Concluídos</h2>
           <p className="text-xs text-indigo-200">Percentual de serviços planejados executados integralmente conforme a meta semanal ativa.</p>
         </div>
-        <div className="flex items-center space-x-6">
+        <div className="flex items-center space-x-4">
           <div className="text-center bg-indigo-950/50 p-4 rounded-xl border border-indigo-800">
             <div className="text-3xl font-black text-emerald-400">{currentWeekPpcStats.percent.toFixed(1)}%</div>
             <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-tight mt-1">{currentWeekPpcStats.completedCount} de {currentWeekPpcStats.totalPlannedCount} Concluídos</div>
           </div>
+          <button
+            type="button"
+            onClick={() => setIsWeeklyConfigModalOpen(true)}
+            className="p-3 bg-indigo-800/80 hover:bg-indigo-700 border border-indigo-600/50 rounded-2xl text-white transition shadow-md flex items-center gap-2 cursor-pointer group hover:scale-105 active:scale-95"
+            title="Configurações do Planejamento Semanal (Pavimentos, Pacotes, Equipes, Motivos, Clima)"
+          >
+            <span className="text-xl group-hover:rotate-90 transition-transform duration-300">⚙️</span>
+            <span className="text-xs font-black uppercase tracking-wider hidden sm:inline">Configurações</span>
+          </button>
         </div>
       </div>
 
@@ -5490,10 +6553,33 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             >
               <span>Delta</span> Gerar por Dif. {pendingBudgetDiffs.length > 0 ? `(${pendingBudgetDiffs.length})` : ''}
             </button>
-            <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
+            {isWeekBeingEdited ? (
+              <button
+                onClick={handleSaveFinalizedWeekEdits}
+                className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+              >
+                <span>Editar</span> Salvar Correções
+              </button>
+            ) : hasFinalizedTasks ? (
+              <button
+                onClick={handleEditFinalizedWeek}
+                className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+              >
+                <span>Editar</span> Editar Semana
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setIsWeeklyConfigModalOpen(true)}
+              className="flex-1 md:flex-none px-4 py-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-black rounded-xl shadow-sm transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"
+              title="Configurações do Planejamento Semanal (Pavimentos, Pacotes, Equipes, Motivos, Clima)"
+            >
+              <span>⚙️</span> Configurações
+            </button>
+            <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0 || isWeekFinalized} hidden={hasFinalizedTasks} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>🏁</span> Finalizar Semana
             </button>
-            <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
+            <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(drawerMacroOptions[0] || allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>➕</span> Adicionar Atividades
             </button>
           </div>
@@ -5558,12 +6644,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         <div className="flex items-center justify-center gap-2">
                           <input 
                             type="checkbox" 
-                            checked={filteredWeeklyTasks.length > 0 && filteredWeeklyTasks.every(t => selectedTaskIds.includes(t.id))}
+                            checked={selectableFilteredWeeklyTasks.length > 0 && selectableFilteredWeeklyTasks.every(t => selectedTaskIds.includes(t.id))}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                setSelectedTaskIds(prev => Array.from(new Set([...prev, ...filteredWeeklyTasks.map(t => t.id)])));
+                                setSelectedTaskIds(prev => Array.from(new Set([...prev, ...selectableFilteredWeeklyTasks.map(t => t.id)])));
                               } else {
-                                setSelectedTaskIds(prev => prev.filter(id => !filteredWeeklyTasks.map(t => t.id).includes(id)));
+                                setSelectedTaskIds(prev => prev.filter(id => !selectableFilteredWeeklyTasks.map(t => t.id).includes(id)));
                               }
                             }}
                             className="w-3.5 h-3.5 text-indigo-600 rounded border-slate-350 focus:ring-indigo-500 cursor-pointer"
@@ -5643,98 +6729,127 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 const currentPlan = t.plannedThisWeek ?? 100;
                 const progVal = t.progressThisWeek ?? 0;
                 const progressDisplayVal = t.source === 'budget-diff' || t.isUnplannedDetected
-                  ? Math.min(100, roundPercentValue((Number(t.executedBefore) || 0) + (Number(t.progressThisWeek) || 0)))
+                  ? getTaskAccumulatedProgress(t)
                   : progVal;
                 const showDelayAlert = currentPlan > progVal;
                 return (
-                  <tr key={t.id} className={`hover:bg-slate-50 transition ${t.finalized ? 'bg-slate-100/70 opacity-75' : showDelayAlert && (progVal > 0 || currentPlan > 0) ? 'bg-red-50/40' : ''}`}>
+                  <tr key={t.id} className={`hover:bg-slate-50 transition ${isTaskLocked(t) ? 'bg-slate-100/70 opacity-75' : showDelayAlert && (progVal > 0 || currentPlan > 0) ? 'bg-red-50/40' : ''}`}>
                     <td className="p-3 border-r">
-                      <div className="flex items-start space-x-1.5">
-                        {t.finalized && <span className="text-[10px] text-slate-500 mt-0.5" title="Semana Finalizada">🔒</span>}
+                      <div className="flex items-center flex-wrap gap-1.5">
+                        {t.finalized && <span className="text-[10px] text-slate-500" title="Semana Finalizada">🔒</span>}
                         {t.isManual && (
-                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
+                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0">
                             Extra
                           </span>
                         )}
                         {t.isUnplannedDetected && (
-                          <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
+                          <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0">
                             Fora do planejado
                           </span>
                         )}
-                        <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight line-clamp-2 break-words whitespace-normal flex-1" title={t.activityName}>{t.activityName}</div>
-                        {!t.finalized && !t.serviceComplement && editingComplementTaskId !== t.id && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingComplementTaskId(t.id);
-                            }}
-                            className="w-4 h-4 rounded-full border border-slate-350 hover:border-indigo-650 hover:bg-indigo-50 text-slate-500 hover:text-indigo-650 flex items-center justify-center font-bold text-[10px] cursor-pointer shrink-0 mt-0.5"
-                            title="Adicionar complemento"
-                          >
-                            +
-                          </button>
+                        <span className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight" title={t.activityName}>
+                          {t.activityName}
+                        </span>
+
+                        {(t.serviceComplement || editingComplementTaskId === t.id) && (
+                          <div className="inline-flex items-center gap-1">
+                            <span className="text-indigo-400 font-bold text-[10px]">-</span>
+                            <input
+                              type="text"
+                              disabled={isTaskLocked(t)}
+                              placeholder="Complemento..."
+                              className="py-0.5 px-1.5 bg-slate-50 border border-slate-300 rounded text-[10px] font-bold text-slate-800 uppercase tracking-tight leading-tight w-32 focus:bg-white focus:border-indigo-500"
+                              value={t.serviceComplement || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setPlanning(planning.map(p => p.id === t.id ? { ...p, serviceComplement: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
+                              }}
+                              onBlur={() => {
+                                saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+                                if (!t.serviceComplement) setEditingComplementTaskId(null);
+                              }}
+                              autoFocus={editingComplementTaskId === t.id}
+                            />
+                            {!isTaskLocked(t) && (
+                              <button
+                                disabled={isTaskLocked(t)}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleServiceComplementVoiceInput(t.id);
+                                }}
+                                className={`p-1 rounded-full transition active:scale-95 text-[10px] shrink-0 cursor-pointer ${
+                                  listeningComplementTaskId === t.id 
+                                    ? 'bg-red-600 text-white animate-pulse p-1' 
+                                    : micConnectingComplementTaskId === t.id
+                                    ? 'bg-amber-500 text-white animate-pulse p-1'
+                                    : 'bg-indigo-550/10 text-indigo-700 hover:bg-indigo-200'
+                                }`}
+                                title={
+                                  listeningComplementTaskId === t.id 
+                                    ? "Microfone ativo (Pode falar)" 
+                                    : micConnectingComplementTaskId === t.id
+                                    ? "Inicializando microfone..."
+                                    : "Ditar complemento"
+                                }
+                              >
+                                🎙️
+                              </button>
+                            )}
+                            {!isTaskLocked(t) && t.serviceComplement && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleUpdateTaskField(t.id, 'serviceComplement', '');
+                                  setEditingComplementTaskId(null);
+                                }}
+                                className="text-slate-400 hover:text-red-500 font-bold text-xs cursor-pointer ml-0.5"
+                                title="Limpar complemento"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
                         )}
-                      </div>
-                      {(t.serviceComplement || editingComplementTaskId === t.id) && (
-                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mt-1.5 flex items-center gap-1">
-                          <span className="text-indigo-550 font-black">↳</span>
-                          <input
-                            type="text"
-                            disabled={t.finalized}
-                            placeholder="Complemento..."
-                            className="p-1 bg-slate-50 border border-slate-200 rounded text-[9px] font-bold text-slate-700 w-32 focus:bg-white focus:border-indigo-500"
-                            value={t.serviceComplement || ''}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setPlanning(planning.map(p => p.id === t.id ? { ...p, serviceComplement: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
-                            }}
-                            onBlur={() => {
-                              saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-                              if (!t.serviceComplement) setEditingComplementTaskId(null);
-                            }}
-                            autoFocus={editingComplementTaskId === t.id}
-                          />
-                          {!t.finalized && (
+
+                        <div className="inline-flex items-center gap-1 shrink-0">
+                          {!isTaskLocked(t) && !t.serviceComplement && editingComplementTaskId !== t.id && (
                             <button
-                              disabled={t.finalized}
-                              onMouseDown={(e) => e.preventDefault()}
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleServiceComplementVoiceInput(t.id);
+                                setEditingComplementTaskId(t.id);
                               }}
-                              className={`p-1 rounded-full transition active:scale-95 text-[10px] shrink-0 cursor-pointer ${
-                                listeningComplementTaskId === t.id 
-                                  ? 'bg-red-600 text-white animate-pulse p-1' 
-                                  : micConnectingComplementTaskId === t.id
-                                  ? 'bg-amber-500 text-white animate-pulse p-1'
-                                  : 'bg-indigo-550/10 text-indigo-700 hover:bg-indigo-200'
-                              }`}
-                              title={
-                                listeningComplementTaskId === t.id 
-                                  ? "Microfone ativo (Pode falar)" 
-                                  : micConnectingComplementTaskId === t.id
-                                  ? "Inicializando microfone..."
-                                  : "Ditar complemento"
-                              }
+                              className="w-5 h-5 rounded-md border border-indigo-300 bg-indigo-50/90 hover:border-indigo-600 hover:bg-indigo-600 text-indigo-700 hover:text-white flex items-center justify-center font-black text-xs cursor-pointer shrink-0 shadow-2xs transition active:scale-95"
+                              title="Adicionar complemento"
                             >
-                              🎙️
+                              +
                             </button>
                           )}
-                          {!t.finalized && t.serviceComplement && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleUpdateTaskField(t.id, 'serviceComplement', '');
-                                setEditingComplementTaskId(null);
-                              }}
-                              className="text-slate-400 hover:text-red-500 font-bold text-xs cursor-pointer ml-0.5"
-                              title="Limpar complemento"
-                            >
-                              &times;
-                            </button>
-                          )}
+                          {!isTaskLocked(t) && (progressDisplayVal >= 100 || getTaskAccumulatedProgress(t) >= 100) && (() => {
+                            const isPopoverOpen = nextWeekPopover?.taskId === t.id;
+                            const hasLaunchedNextWeek = planning.some(
+                              nt => nt.weekId === nextWeekIdForPopover && !nt.finalized && nt.launchedFromTaskId === t.id
+                            );
+                            return (
+                              <button
+                                type="button"
+                                onClick={(e) => handleOpenNextWeekPopover(e, t)}
+                                className={`w-5 h-5 rounded-md border flex items-center justify-center font-black text-xs cursor-pointer shrink-0 shadow-2xs transition active:scale-95 ${
+                                  isPopoverOpen
+                                    ? 'bg-emerald-600 border-emerald-600 text-white ring-2 ring-emerald-200'
+                                    : hasLaunchedNextWeek
+                                    ? 'bg-emerald-100 border-emerald-400 text-emerald-800 hover:bg-emerald-600 hover:text-white'
+                                    : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-600 hover:border-emerald-600 hover:text-white'
+                                }`}
+                                title={`Planejar próxima semana (${formatDateBR(nextWeekIdForPopover)}) a partir das frentes liberadas desta atividade`}
+                              >
+                                →
+                              </button>
+                            );
+                          })()}
                         </div>
-                      )}
+                      </div>
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
                     </td>
                     <td className="p-3 border-r text-center align-middle">
@@ -5744,7 +6859,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         </div>
                         <div className="absolute right-1 text-[8px] text-slate-500 pointer-events-none">▼</div>
                         <select
-                          disabled={t.finalized}
+                          disabled={isTaskLocked(t)}
                           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                           value={t.responsible || ''}
                           onChange={e => handleUpdateTaskField(t.id, 'responsible', e.target.value)}
@@ -5758,7 +6873,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <input
                         type="number"
                         min="0"
-                        disabled={t.finalized}
+                        disabled={isTaskLocked(t)}
                         className="w-9 p-1 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-center focus:bg-white focus:border-indigo-500 outline-none"
                         value={t.efetivo === undefined || t.efetivo === null ? '' : t.efetivo}
                         onChange={e => {
@@ -5787,7 +6902,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                           return (
                             <button
                               key={val}
-                              disabled={t.finalized}
+                              disabled={isTaskLocked(t)}
                               onClick={() => handlePlannedChange(t.id, val)}
                               title={isExecuted && !isPlanned ? `${formatPercentBR(execBeforeReal)} já medido` : `Planejar ${val}%`}
                               className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${btnClass} ${ring} disabled:opacity-50 disabled:cursor-default`}
@@ -5797,7 +6912,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       </div>
                     </td>
                     <td className="p-3 border-r align-middle bg-slate-50/50">
-                      <DaysSelector dailyWork={t.dailyWork} disabled={t.finalized} onChange={(newDW) => handleDailyWorkChange(t.id, newDW)} />
+                      <DaysSelector dailyWork={t.dailyWork} disabled={isTaskLocked(t)} onChange={(newDW) => handleDailyWorkChange(t.id, newDW)} />
                     </td>
                     <td className="p-3 border-r">
                       <div className="flex flex-col items-center gap-1">
@@ -5817,7 +6932,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                             return (
                               <button
                                 key={val}
-                                disabled={t.finalized}
+                                disabled={isTaskLocked(t)}
                                 onClick={() => handleWeeklyProgressChange(t.id, val)}
                                 title={isActive ? `${formatPercentBR(progressDisplayVal)} realizado acumulado` : `Registrar ${val}% realizado`}
                                 className={`w-7 h-7 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${isActive ? `${btnColor} text-white scale-110 shadow-md ring-2` : prefillClass ? prefillClass : 'bg-slate-100 text-slate-500 hover:bg-slate-200'} disabled:opacity-50 disabled:cursor-default`}
@@ -5837,21 +6952,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <td className="p-3 border-r text-center align-middle">
                       {showDelayAlert ? (
                         <div className="space-y-1">
-                          <div className="relative w-full min-h-[32px] flex items-center justify-center bg-red-100/80 border border-red-200 rounded-lg py-1 px-1.5 hover:bg-red-200/80 transition-colors">
-                            <div className="text-[9px] font-black uppercase text-red-800 leading-tight whitespace-normal break-words text-center pr-3">
-                              {t.delayReason || '⚠️ MOTIVO...'}
-                            </div>
-                            <div className="absolute right-1 text-[7px] text-red-600 pointer-events-none">▼</div>
-                            <select
-                              disabled={t.finalized}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                              value={t.delayReason || ''}
-                              onChange={e => handleUpdateTaskField(t.id, 'delayReason', e.target.value)}
-                            >
-                              <option value="">⚠️ Motivo...</option>
-                              {delayReasons.map(r => <option key={r} value={r}>{r}</option>)}
-                            </select>
-                          </div>
+                          <DelayReasonSelect
+                            disabled={isTaskLocked(t)} options={delayReasons} value={t.delayReason || ''}
+                            onChange={value => handleUpdateTaskField(t.id, 'delayReason', value)}
+                            className="min-h-[32px] bg-red-100/80 border border-red-200 rounded-lg py-1 px-1.5 hover:bg-red-200/80 text-[9px] font-black uppercase text-red-800 leading-tight" />
                           {t.preFilledDelayReason && (
                             <div className="text-[8px] text-purple-600 font-bold italic leading-tight text-left pl-1">
                               📲 Sugerido: "{t.preFilledDelayReason}"
@@ -5866,7 +6970,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <div className="space-y-1">
                         <div className="flex items-start space-x-1.5">
                           <textarea
-                            disabled={t.finalized}
+                            disabled={isTaskLocked(t)}
                             className="flex-1 bg-slate-50 border border-slate-200 py-1 px-1.5 rounded-lg text-[10px] font-medium disabled:opacity-80 focus:bg-white focus:border-indigo-500 resize-y min-h-[32px] h-[32px] leading-tight overflow-y-auto"
                             placeholder="Notas..."
                             value={t.observations || ''}
@@ -5876,9 +6980,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                             }}
                             onBlur={() => saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices)}
                           />
-                          {!t.finalized && (
+                          {!isTaskLocked(t) && (
                             <button
-                              disabled={t.finalized}
+                              disabled={isTaskLocked(t)}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => handleVoiceInput(t.id)}
                               className={`p-2 rounded-full transition active:scale-95 text-sm shrink-0 cursor-pointer ${
@@ -5911,7 +7015,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <div className="flex items-center justify-center gap-2">
                         {t.preFilledProgress !== undefined && (
                           <button
-                            disabled={t.finalized}
+                            disabled={isTaskLocked(t)}
                             onClick={() => handleAcceptPreFill(t.id)}
                             className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-lg border border-emerald-200 hover:border-emerald-300 font-bold text-xs disabled:opacity-30 cursor-pointer shadow-xs active:scale-95 flex items-center justify-center animate-bounce"
                             title={`Aceitar apontamento da equipe (sugerido em ${t.preFilledAt || ''})`}
@@ -5921,7 +7025,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         )}
                         <input
                           type="checkbox"
-                          disabled={t.finalized}
+                          disabled={isTaskLocked(t)}
                           checked={selectedTaskIds.includes(t.id)}
                           onChange={(e) => {
                             if (e.target.checked) {
@@ -6000,6 +7104,50 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           )}
         </div>
       </div>
+
+      {/* Modal de Configurações do Planejamento Semanal */}
+      {isWeeklyConfigModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-slate-100 border border-slate-300 rounded-3xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="bg-slate-900 text-white p-4 sm:p-5 flex justify-between items-center border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl p-2 bg-indigo-600/40 rounded-xl border border-indigo-500/40">⚙️</span>
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-white">
+                    Configurações do Planejamento Semanal
+                  </h3>
+                  <p className="text-[10px] text-indigo-300 font-bold uppercase tracking-wider">
+                    Pavimentos, Pacotes & Serviços, Equipes, Motivos de Atraso e Clima
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsWeeklyConfigModalOpen(false)}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow cursor-pointer"
+                >
+                  Concluir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsWeeklyConfigModalOpen(false)}
+                  className="text-slate-400 hover:text-white text-2xl font-bold px-2 cursor-pointer leading-none"
+                  title="Fechar"
+                >
+                  &times;
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-50">
+              {renderWeeklyConfigCards()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -6114,88 +7262,44 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <div className="flex items-center space-x-3 mb-4">
             <h2 className="text-sm font-black text-indigo-900 uppercase tracking-tight">Filtros de Detalhamento</h2>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
+          <div className="flex flex-col lg:flex-row lg:items-start gap-4">
+            <div className="flex-1 min-w-0">
               <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Empreiteiro / Equipe</label>
-              <select
-                className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none cursor-pointer focus:bg-white transition"
-                value={ppcSelectedContractor}
-                onChange={e => setPpcSelectedContractor(e.target.value)}
-              >
-                {contractorsInPeriod.map(c => (
-                  <option key={c} value={c}>{c}</option>
+              <TeamMultiSelect options={uniqueContractors} value={ppcSelectedContractors} onChange={setPpcSelectedContractors} />
+            </div>
+            <label className="flex items-center gap-2 lg:mt-6 text-[10px] text-slate-600 cursor-pointer lg:shrink-0" title="Mostra apenas empresas com atividades planejadas no período selecionado.">
+              <input type="checkbox" checked={ppcOnlyWithActivities} onChange={event => setPpcOnlyWithActivities(event.target.checked)} className="w-4 h-4 accent-indigo-600" />
+              Somente semanas com atividade
+            </label>
+            <div className="lg:ml-auto lg:shrink-0">
+              <span className="block text-[9px] font-black uppercase text-slate-400 mb-1">Período</span>
+              <div className="flex flex-wrap lg:justify-end gap-2">
+                {([['last-week', 'Última semana'], ['four-weeks', 'Últimas 4 semanas'], ['history', 'Todo o histórico']] as const).map(([period, label]) => (
+                  <button key={period} type="button" aria-pressed={ppcPeriod === period} onClick={() => { setPpcPeriod(period); setPpcSelectedWeek(''); }}
+                    className={`px-4 py-2.5 rounded-lg text-xs font-bold transition ${ppcPeriod === period ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-indigo-50'}`}>{label}</button>
                 ))}
-                {contractorsInPeriod.length === 0 && (
-                  <option value="">Nenhum empreiteiro no período</option>
-                )}
-              </select>
+              </div>
+              <p className="mt-2 text-[10px] text-slate-500 lg:text-right">Semanas anteriores à atual. Sem dados de PPC: 0%.</p>
             </div>
-            <div>
-              <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Semana Inicial</label>
-              <select
-                className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none cursor-pointer focus:bg-white transition"
-                value={ppcStartWeek}
-                onChange={e => {
-                  const val = e.target.value;
-                  setPpcStartWeek(val);
-                  if (ppcEndWeek && val > ppcEndWeek) {
-                    setPpcEndWeek(val);
-                  }
-                }}
-              >
-                {availableWeeks.map(wId => (
-                  <option key={wId} value={wId}>{formatWeekId(wId)}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Semana Final</label>
-              <select
-                className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none cursor-pointer focus:bg-white transition"
-                value={ppcEndWeek}
-                onChange={e => {
-                  const val = e.target.value;
-                  setPpcEndWeek(val);
-                  if (ppcStartWeek && val < ppcStartWeek) {
-                    setPpcStartWeek(val);
-                  }
-                }}
-              >
-                {availableWeeks.map(wId => (
-                  <option key={wId} value={wId}>{formatWeekId(wId)}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Info Panel matching the photo */}
-        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 font-sans text-slate-900">
-          <div className="space-y-2 text-sm md:text-base font-bold">
-            <div className="flex">
-              <span className="w-32 inline-block">EMPRESA:</span>
-              <span className="text-slate-800 font-black uppercase">{ppcSelectedContractor || '-'}</span>
-            </div>
-            <div className="flex">
-              <span className="w-32 inline-block">Semana inicial:</span>
-              <span className="text-slate-800">{formatWeekId(ppcStartWeek) || '-'}</span>
-            </div>
-            <div className="flex">
-              <span className="w-32 inline-block">Semana final:</span>
-              <span className="text-slate-800">{formatWeekId(ppcEndWeek) || '-'}</span>
+            <div className="lg:shrink-0">
+              <span className="block text-[9px] font-black uppercase text-slate-400 mb-1">Visualização</span>
+              <button type="button" aria-pressed={ppcVisualBoard} onClick={() => { setPpcVisualBoard(previous => !previous); setPpcSelectedWeek(''); }}
+                className={`px-4 py-2.5 rounded-lg text-xs font-bold transition ${ppcVisualBoard ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-indigo-50'}`}>Gestão à vista</button>
             </div>
           </div>
         </div>
 
         {/* Dashboard Content Layout */}
-        {ppcSelectedContractor ? (
+        {availableWeeks.length > 0 ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             
             {/* Left Column: Variable-height PPC Table */}
+            {ppcVisualBoard ? <PpcVisualBoard planning={planning} weeks={availableWeeks}
+              teams={ppcVisibleContractors} /> : (
             <div className="lg:col-span-5 bg-white p-5 rounded-2xl shadow-md border border-slate-200">
               <div className="border-b border-slate-100 pb-3 mb-4 flex justify-between items-center">
                 <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider">Histórico Semanal</h3>
-                <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">Período Selecionado</span>
+                <span className="text-[10px] font-bold text-slate-500">Clique numa semana para analisar. Clique novamente para ver o período.</span>
               </div>
               
               <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -6211,24 +7315,20 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   </thead>
                   <tbody className="divide-y divide-slate-200 font-medium">
                     {contractorWeeklyPpcData.map(row => {
-                      let farolLabel = '';
-                      if (row.ppc !== null) {
-                        if (row.ppc >= 80) {
-                          farolLabel = 'ICONE ROSTO FELIZ';
-                        } else if (row.ppc >= 50) {
-                          farolLabel = 'CONE ROSTO NORMAL';
-                        }
-                      }
+                      const farol = row.ppc === null ? null : getPpcSignal(row.ppc);
 
                       return (
-                        <tr key={row.weekId} className="hover:bg-slate-50 transition">
+                        <tr key={row.weekId} tabIndex={0} aria-selected={ppcSelectedWeek === row.weekId}
+                          onClick={() => setPpcSelectedWeek(previous => previous === row.weekId ? '' : row.weekId)}
+                          onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPpcSelectedWeek(previous => previous === row.weekId ? '' : row.weekId); } }}
+                          className={`cursor-pointer transition ${ppcSelectedWeek === row.weekId ? 'bg-indigo-100 ring-2 ring-inset ring-indigo-400' : 'hover:bg-slate-50'}`}>
                           <td className="p-2 border border-slate-300 text-center font-mono text-[10px] text-slate-800">{row.startDateStr}</td>
                           <td className="p-2 border border-slate-300 text-center font-mono text-[10px] text-slate-800">{row.endDateStr}</td>
                           <td className="p-2 border border-slate-300 text-center font-bold text-slate-800">
                             {row.ppc !== null ? `${row.ppc}%` : ''}
                           </td>
                           <td className="p-2 border border-slate-300 text-center font-black text-[9px] text-slate-800 uppercase tracking-tighter">
-                            {farolLabel}
+                            {farol && <img src={`/ppc/${farol.image}.png`} alt={farol.label} title={farol.label} width={32} height={32} className="w-8 h-8 object-contain mx-auto" />}
                           </td>
                           <td className="p-2 border border-slate-300 text-center text-slate-800 font-bold">80%</td>
                         </tr>
@@ -6256,14 +7356,15 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 </table>
               </div>
             </div>
+            )}
 
             {/* Right Column: Graphs */}
-            <div className="lg:col-span-7 space-y-6">
+            {!ppcVisualBoard && <div className="lg:col-span-7 space-y-6">
               
               {/* PPC Evolution Line Chart */}
               <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col">
                 <h3 className="text-xs font-black uppercase text-indigo-900 tracking-wider mb-2">Evolução do PPC</h3>
-                <p className="text-[10px] text-slate-500 mb-4">Comportamento semanal de cumprimento de metas no período selecionado.</p>
+                <p className="text-[10px] text-slate-500 mb-4">{ppcSelectedWeek ? `Semana selecionada: ${formatWeekId(ppcSelectedWeek)}` : 'Comportamento semanal de cumprimento de metas no período selecionado.'}</p>
                 
                 {ppcEvolutionChart && ppcEvolutionChart.validPoints.length > 0 ? (
                   <div className="w-full overflow-hidden flex justify-center py-2">
@@ -6485,7 +7586,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 )}
               </div>
 
-            </div>
+            </div>}
 
           </div>
         ) : (
@@ -6498,12 +7599,19 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
   };
 
   const handleSelectProject = (projId: string) => {
+    hydratedProjectIdsRef.current.delete(projId);
+    setIsProjectHydrated(false);
     localStorage.setItem('selected_project_id', projId);
     setSelectedProjectId(projId);
   };
 
   const handleAddNewProject = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAddingProject) return;
+    if (!db || !userId) {
+      setNotification({ message: 'A conexão com o banco ainda não está pronta. Aguarde e tente salvar novamente.', type: 'error' });
+      return;
+    }
     if (!newProjName.trim() || !newProjArea.trim() || !newProjAddress.trim()) {
       setNotification({ message: 'Por favor, preencha o nome, a área e o endereço.', type: 'error' });
       return;
@@ -6525,6 +7633,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     };
     
     try {
+      setIsAddingProject(true);
       const updatedList = [...projects, newProj];
       const projectsDocRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, 'all_projects_metadata');
       await setDoc(projectsDocRef, { list: updatedList });
@@ -6537,9 +7646,16 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       setNewProjBadges('');
       setNewProjImageUrl('');
       setNotification({ message: 'Projeto adicionado com sucesso!', type: 'success' });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error adding project:', err);
-      setNotification({ message: 'Erro ao adicionar projeto.', type: 'error' });
+      const message = err?.code === 'permission-denied'
+        ? 'O banco de dados recusou a criação do projeto. Verifique a permissão de acesso.'
+        : err?.message?.includes('exceeds the maximum allowed size')
+          ? 'A lista de projetos excedeu o limite de armazenamento. Tente uma foto de capa menor.'
+          : 'Não foi possível salvar o projeto. Confira a conexão e tente novamente.';
+      setNotification({ message, type: 'error' });
+    } finally {
+      setIsAddingProject(false);
     }
   };
 
@@ -6875,7 +7991,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Insira os dados da nova obra abaixo</p>
               </div>
 
-              <form onSubmit={handleAddNewProject} className="space-y-4">
+              <form onSubmit={handleAddNewProject} onInvalidCapture={(e) => {
+                const input = e.target as HTMLInputElement;
+                setNotification({ message: input.validationMessage || 'Confira os campos obrigatórios do projeto.', type: 'error' });
+              }} className="space-y-4">
                 <div className="space-y-1">
                   <label className="block text-[9px] uppercase tracking-wider text-slate-400 font-black">Nome da Obra</label>
                   <input
@@ -6956,15 +8075,17 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <button
                     type="button"
                     onClick={() => setShowAddProjectModal(false)}
+                    disabled={isAddingProject}
                     className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 font-black uppercase text-[10px] tracking-wider rounded-xl transition active:scale-98 cursor-pointer text-center border border-slate-700"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
+                    disabled={isAddingProject}
                     className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-[10px] tracking-wider rounded-xl shadow-lg transition active:scale-98 cursor-pointer"
                   >
-                    Salvar Projeto
+                    {isAddingProject ? 'Salvando...' : 'Salvar Projeto'}
                   </button>
                 </div>
               </form>
@@ -7297,6 +8418,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </div>
           </div>
         )}
+        <Notification {...notification} onClose={() => setNotification({ message: '', type: '' })} />
       </div>
     );
   };
@@ -7352,6 +8474,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   { label: 'Desvio/Atraso', key: null, cls: 'text-center' },
                   { label: 'Observações', key: null, cls: '' },
                   { label: 'Estado', key: null, cls: 'text-center' },
+                  { label: 'Ação', key: null, cls: 'text-center' },
                 ].map(({ label, key, cls }) => (
                   <th
                     key={label}
@@ -7376,9 +8499,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </thead>
             <tbody className="divide-y divide-slate-200">
               {(filteredGiantPlanningTasks || []).map((t, idx) => {
-                const executedB = Number(t?.executedBefore) || 0;
                 const progressW = Number(t?.progressThisWeek) || 0;
-                const totalAcc = Math.min(100, executedB + progressW);
+                const totalAcc = getTaskAccumulatedProgress(t);
                 const cPlan = t?.plannedThisWeek ?? 100;
                 const isDelayed = cPlan > progressW;
                 return (
@@ -7422,7 +8544,19 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     <td className="p-2.5 border-r text-center font-black"><div className="flex items-center justify-center space-x-1.5"><div className="w-10 bg-slate-200 rounded-full h-1.5 hidden sm:block"><div className="bg-slate-700 h-1.5 rounded-full" style={{ width: `${totalAcc}%` }}></div></div><span>{totalAcc.toFixed(0)}%</span></div></td>
                     <td className="p-2.5 border-r text-center font-bold">{isDelayed ? <span className="text-red-600 text-[10px] leading-tight block">⚠️ {t?.delayReason || 'N/A'}</span> : <span className="text-emerald-600">✓ Concluído</span>}</td>
                     <td className="p-2.5 border-r italic text-[10px] max-w-xs truncate" title={t?.observations}>{t?.observations || 'N/A'}</td>
-                    <td className="p-2.5 text-center font-black whitespace-nowrap">{t?.finalized ? '🔒 Finalizado' : '🔓 Ativo'}</td>
+                    <td className="p-2.5 border-r text-center font-black whitespace-nowrap">{t?.finalized ? '🔒 Finalizado' : '🔓 Ativo'}</td>
+                    <td className="p-2.5 text-center">
+                      {t?.finalized && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWeekForEditing(t.weekId)}
+                          className="px-2 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-700 rounded-lg text-[9px] font-black uppercase whitespace-nowrap"
+                          title="Abrir esta semana para correção"
+                        >
+                          Corrigir
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -7523,9 +8657,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     </div>
   );
 
-  const renderConfig = () => (
-    <div className="space-y-6 animate-in fade-in duration-300 pb-20">
-      {/* 2-Column responsive grid for main config cards, aligning items at the start to allow variable heights */}
+  function renderWeeklyConfigCards() {
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300 pb-20">
+        {/* 2-Column responsive grid for main config cards, aligning items at the start to allow variable heights */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         
         {/* Card 1: Gestão de Pavimentos / Lotes */}
@@ -7625,15 +8760,26 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         {/* Card 4: Padronização de Motivos de Atraso */}
         <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
           <h2 className="text-sm font-black uppercase border-b pb-2 text-slate-800 tracking-wider">4. Padronização de Motivos de Atraso</h2>
-          <div className="flex gap-2 mb-4">
-            <input type="text" placeholder="Descrição do motivo..." className="flex-1 p-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition outline-none font-bold text-slate-800" value={newDelayReason} onChange={(e) => setNewDelayReason(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddDelayReason()} />
-            <button onClick={handleAddDelayReason} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm">REGISTAR</button>
+          <p className="text-xs text-slate-500">O registro geral fica disponível em todas as obras. O registro obra fica disponível apenas nesta obra.</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <input type="text" aria-label="Descrição do motivo de atraso" placeholder="Descrição do motivo..." className="flex-1 min-w-40 p-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white transition outline-none font-bold text-slate-800" value={newDelayReason} onChange={(e) => setNewDelayReason(e.target.value)} />
+            <button disabled={isSavingDelayReason || !delayRegistryReady || !newDelayReason.trim()} onClick={() => handleAddDelayReason('general')} className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-indigo-700 transition shadow-sm disabled:opacity-50">Registro geral</button>
+            <button disabled={isSavingDelayReason || !delayRegistryReady || !isProjectHydrated || !newDelayReason.trim()} onClick={() => handleAddDelayReason('project')} className="bg-slate-700 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-800 transition shadow-sm disabled:opacity-50">Registro obra</button>
           </div>
           <div className="space-y-2">
-            {delayReasons.map(reason => (
+            {generalDelayReasons.map(reason => (
               <div key={reason} className="flex justify-between items-center p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
                 <span>{reason}</span>
-                <button onClick={() => triggerConfirm('Remover Motivo', `Deseja remover "${reason}"?`, () => handleDeleteDelayReason(reason))} className="text-red-500 hover:text-red-700 font-black ml-1 text-sm">&times;</button>
+                <span className="text-[10px] text-indigo-600 uppercase ml-2">Geral</span>
+              </div>
+            ))}
+            {localDelayReasons.map(reason => (
+              <div key={reason} className="flex justify-between items-center p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
+                <span>{reason}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500 uppercase">Obra</span>
+                  <button disabled={isSavingDelayReason} onClick={() => triggerConfirm('Remover motivo da obra', `Deseja remover "${reason}" da lista desta obra?`, () => handleDeleteDelayReason(reason))} className="text-red-500 hover:text-red-700 font-black ml-1 text-sm disabled:opacity-50">&times;</button>
+                </div>
               </div>
             ))}
           </div>
@@ -7671,6 +8817,134 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         <p className="text-xs text-slate-500 leading-relaxed font-medium">
           💡 Nota: Se nenhuma chave for fornecida, o aplicativo usará dados climáticos simulados deterministicamente com base no clima de {projectCity}.
         </p>
+      </div>
+    </div>
+  );
+}
+
+  const renderConfig = () => (
+    <div className="space-y-6 animate-in fade-in duration-300 pb-20">
+      {/* Header das Configurações do Sistema */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <span className="px-3 py-1 bg-indigo-800 text-[10px] font-black tracking-wider uppercase rounded-full border border-indigo-700 text-indigo-300">Sistema & Acessos</span>
+          <h2 className="text-xl font-black mt-2">Configurações Gerais e Controle de Acessos</h2>
+          <p className="text-xs text-slate-300">Gestão de operadores, segurança, backup de dados locais e permissões de acesso por obra.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              setAccessUser('');
+              setAccessPassword('');
+              setShowAccessModal(true);
+            }}
+            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition active:scale-95 flex items-center gap-2 cursor-pointer"
+          >
+            <span>🔐</span> Abrir Painel de Permissões
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        {/* Card: Controle de Operador e Acesso */}
+        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
+          <div className="flex justify-between items-center border-b pb-3">
+            <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">👤 Operador e Identificação</h3>
+            <span className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-[10px] font-mono font-bold">
+              {plannerUsername || 'Não identificado'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-600">
+            A identificação do operador é registrada em cada alteração salva no banco de dados local ou sincronizada na nuvem.
+          </p>
+          <div className="space-y-2">
+            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Alterar Nome do Operador</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Seu nome ou função..."
+                defaultValue={plannerUsername}
+                id="change-planner-input"
+                className="flex-1 p-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white font-bold text-slate-800 outline-none"
+              />
+              <button
+                onClick={() => {
+                  const input = document.getElementById('change-planner-input') as HTMLInputElement;
+                  if (input && input.value.trim()) {
+                    setPlannerUsername(input.value.trim());
+                    localStorage.setItem('planner_username', input.value.trim());
+                    setNotification({ message: 'Identificação do operador atualizada!', type: 'success' });
+                  }
+                }}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-black uppercase tracking-wider rounded-xl transition cursor-pointer shadow-sm"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Card: Backup e Segurança do Banco Local */}
+        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
+          <div className="flex justify-between items-center border-b pb-3">
+            <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">🛡️ Banco Local & Nuvem Protegida</h3>
+            <span className="px-2.5 py-1 bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg text-[10px] font-bold">
+              100% Protegido
+            </span>
+          </div>
+          <p className="text-xs text-slate-600">
+            Todos os dados modificados são gravados de forma isolada no banco de dados local deste navegador. A base Firestore na nuvem permanece blindada contra alterações acidentais.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              onClick={() => {
+                const dataStr = exportAllLocalData();
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `backup_local_curtoprazo_${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                setNotification({ message: 'Backup JSON baixado com sucesso!', type: 'success' });
+              }}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow flex items-center gap-2 cursor-pointer"
+            >
+              <span>💾</span> Baixar Backup Completo (.JSON)
+            </button>
+          </div>
+        </div>
+
+        {/* Card: Atalhos para Configurações Operacionais */}
+        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4 lg:col-span-2">
+          <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider border-b pb-3">⚙️ Configurações Operacionais da Obra</h3>
+          <p className="text-xs text-slate-600">
+            As configurações específicas de pavimentos, pacotes, equipes e motivos de atraso estão integradas diretamente no módulo de Planejamento Semanal (acessível pelo botão ⚙️ no canto superior direito). Você também pode abrir ou gerenciar rapidamente por aqui:
+          </p>
+          <div className="flex flex-wrap gap-3 pt-1">
+            <button
+              onClick={() => {
+                setActiveTab('planning');
+                setIsWeeklyConfigModalOpen(true);
+              }}
+              className="px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
+            >
+              <span>⚙️</span> Abrir Configurações do Semanal (Pavimentos, Equipes, Motivos)
+            </button>
+            <button
+              onClick={() => setActiveTab('calendar')}
+              className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
+            >
+              <span>🗓️</span> Calendário do Projeto & Feriados
+            </button>
+            <button
+              onClick={() => setActiveTab('versions')}
+              className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
+            >
+              <span>🏷️</span> Versões de Cronograma & Linha de Base
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -7859,16 +9133,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   {hasDelayedTeamTask && (
                     <div className="space-y-1.5">
                       <label className="block text-[9px] font-black uppercase text-amber-600">Motivo de atraso geral</label>
-                      <select
+                      <DelayReasonSelect
                         className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        options={delayReasons} label="Motivo de atraso geral" placeholder="-- Selecione o Motivo --"
                         value={teamGeneralDelayReason}
-                        onChange={(e) => setTeamGeneralDelayReason(e.target.value)}
-                      >
-                        <option value="">-- Selecione o Motivo --</option>
-                        {delayReasons.map(r => (
-                          <option key={r} value={r}>{r}</option>
-                        ))}
-                      </select>
+                        onChange={setTeamGeneralDelayReason} />
                     </div>
                   )}
 
@@ -8010,7 +9279,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       <header className="bg-slate-900 p-4 text-white shadow-xl sticky top-0 z-40">
         <div className="max-w-[1600px] w-full mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center space-x-3">
-            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
+            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-350">
@@ -8066,29 +9335,157 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 Último avanço: {dbLastUpdatedBy}
               </span>
             )}
+            {isLocalModeActive() && (
+              <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-500/60 rounded-full text-[9px] font-bold text-emerald-300 shadow-sm" title="Banco 100% local no navegador. A nuvem Firestore está totalmente segura e protegida contra modificações.">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>🛡️ Banco Local Ativo (Nuvem Protegida)</span>
+                <button
+                  onClick={() => {
+                    const dataStr = exportAllLocalData();
+                    const blob = new Blob([dataStr], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `backup_local_curtoprazo_${new Date().toISOString().slice(0, 10)}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="ml-1 hover:text-white underline text-[9px] cursor-pointer"
+                  title="Exportar backup completo dos dados locais em arquivo JSON"
+                >
+                  Baixar Backup
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
 
-      <main className="max-w-[1600px] w-full mx-auto p-4 md:p-6 pb-24">
-        <nav className="flex gap-1 border-b border-slate-300 mb-6 overflow-x-auto pb-1 no-scrollbar sticky top-[68px] bg-slate-50 z-30 pt-2">
-          <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Painel</button>
-          <button onClick={() => setActiveTab('cronograma-inicial')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'cronograma-inicial' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Cronograma</button>
-          <button onClick={() => setActiveTab('planning')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'planning' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Planejamento Semanal</button>
-          <button onClick={() => setActiveTab('visualization')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'visualization' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Matriz Geral</button>
-          <button onClick={() => setActiveTab('detalhamento-ppc')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'detalhamento-ppc' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Detalhamento PPC</button>
-          <button onClick={() => setActiveTab('historico-andamento')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'historico-andamento' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Histórico andamento</button>
-          <button onClick={() => setActiveTab('config')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'config' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Configurações</button>
-        </nav>
+      {/* Layout Flex com Sidebar Drawer Lateral na Esquerda */}
+      <div className="flex min-h-[calc(100vh-68px)]">
+        {/* Menu Lateral Esquerdo (Drawer com Ícones e Rótulos Compactos) */}
+        <aside className="w-[84px] sm:w-[92px] bg-slate-900 border-r border-slate-800 shrink-0 sticky top-[68px] h-[calc(100vh-68px)] overflow-y-auto no-scrollbar py-3 px-1.5 flex flex-col justify-between z-30 shadow-xl select-none">
+          <div className="space-y-1">
+            {[
+              { id: 'calendar', label: 'Calendário', icon: '🗓️', fullLabel: 'Calendário do Projeto e Dias Úteis' },
+              { id: 'dashboard', label: 'Dashboard', icon: '📊', fullLabel: 'Painel e Indicadores' },
+              { id: 'versions', label: 'Versões Crono', icon: '🏷️', fullLabel: 'Versões de Cronograma e Linha de Base' },
+              { id: 'lob', label: 'Linha de Balanço', icon: '📐', fullLabel: 'Linha de Balanço (Longo Prazo)' },
+              { id: 'table', label: 'Gantt', icon: '📋', fullLabel: 'Cronograma Gantt & EAP' },
+              { id: 'budget', label: 'Orçamento & Vínculos', icon: '💰', fullLabel: 'Orçamento, Contas e Vínculos' },
+              { id: 'physical_financial', label: 'Físico-Financ.', icon: '📈', fullLabel: 'Curva S e Replanejamento Físico-Financeiro' },
+              { id: 'planning', label: 'Semanal', icon: '📅', fullLabel: 'Planejamento Semanal e Metas' },
+              { id: 'config', label: 'Configurações', icon: '⚙️', fullLabel: 'Configurações e Acessos' },
+            ].map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  title={item.fullLabel}
+                  className={`group relative w-full flex flex-col items-center justify-center py-2 px-1 rounded-xl transition-all duration-200 text-center cursor-pointer ${
+                    isActive
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-950/60 font-black'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/80 font-bold'
+                  }`}
+                >
+                  <span className="text-xl leading-none mb-1 group-hover:scale-110 transition-transform">
+                    {item.icon}
+                  </span>
+                  <span className="text-[9px] leading-tight uppercase tracking-tight text-center break-words line-clamp-2 px-0.5">
+                    {item.label}
+                  </span>
+                  {isActive && (
+                    <span className="absolute left-0 top-2 bottom-2 w-1 bg-emerald-400 rounded-r-full" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
-        {activeTab === 'dashboard' && renderDashboard()}
-        {activeTab === 'cronograma-inicial' && renderCronograma()}
-        {activeTab === 'planning' && renderPlanning()}
-        {activeTab === 'visualization' && renderVisualization()}
-        {activeTab === 'detalhamento-ppc' && renderDetalhamentoPpc()}
-        {activeTab === 'historico-andamento' && renderInfographic()}
-        {activeTab === 'config' && renderConfig()}
-      </main>
+          <div className="pt-2 border-t border-slate-800 text-center">
+            <span className="text-[8px] font-mono text-slate-500 block leading-tight">v2.4</span>
+          </div>
+        </aside>
+
+        {/* Área de Conteúdo Principal */}
+        <main className={`flex-1 min-w-0 ${['lob', 'table', 'budget', 'physical_financial', 'cronograma-inicial'].includes(activeTab) ? 'px-2 md:px-4 pt-2 pb-12' : 'max-w-[1600px] p-4 md:p-6 pb-24 mx-auto'}`}>
+          {activeTab === 'calendar' && renderCalendar()}
+          {activeTab === 'dashboard' && (
+            <div className="space-y-6">
+              {/* Abas Integradas do Dashboard: Visão Geral, Matriz Geral, Detalhamento PPC, Histórico */}
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-2.5 rounded-2xl shadow-sm border border-slate-200">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSubView('overview')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      dashboardSubView === 'overview'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>📊</span> Visão Geral
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSubView('matrix')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      dashboardSubView === 'matrix'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>🧩</span> Matriz Geral
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSubView('ppc')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      dashboardSubView === 'ppc'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>🎯</span> Detalhamento PPC
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDashboardSubView('history')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      dashboardSubView === 'history'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <span>📜</span> Histórico & Andamento
+                  </button>
+                </div>
+
+                <div className="text-[11px] font-bold text-slate-400 px-2 hidden sm:block">
+                  Dashboard Integrado
+                </div>
+              </div>
+
+              {dashboardSubView === 'overview' && renderDashboard()}
+              {dashboardSubView === 'matrix' && renderVisualization()}
+              {dashboardSubView === 'ppc' && renderDetalhamentoPpc()}
+              {dashboardSubView === 'history' && renderInfographic()}
+            </div>
+          )}
+          {activeTab === 'versions' && renderScheduleVersions()}
+          {activeTab === 'lob' && renderCronograma('lob')}
+          {activeTab === 'table' && renderCronograma('table')}
+          {activeTab === 'budget' && renderCronograma('budget')}
+          {activeTab === 'physical_financial' && renderCronograma('physical_financial')}
+          {activeTab === 'planning' && renderPlanning()}
+          {activeTab === 'config' && renderConfig()}
+          {activeTab === 'cronograma-inicial' && renderCronograma()}
+          {activeTab === 'visualization' && renderVisualization()}
+          {activeTab === 'detalhamento-ppc' && renderDetalhamentoPpc()}
+          {activeTab === 'historico-andamento' && renderInfographic()}
+        </main>
+      </div>
 
       {/* Drawer */}
       {isDrawerOpen && (
@@ -8146,7 +9543,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   )}
                   {drawerSourceMode === 'unfinished' && (
                     <p className="text-[10px] text-slate-400 font-bold">
-                      Exibindo atividades importadas com andamento maior que 0% e menor que 100%.
+                      Exibindo atividades importadas com andamento de 0% até menor que 100%.
                     </p>
                   )}
                 </div>
@@ -8193,7 +9590,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       </div>
                     )
                   ) : (
-                    <div className={`overflow-visible transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerMacro ? 'max-h-0 opacity-0' : 'max-h-72 opacity-100'}`}>
+                    <div className="overflow-visible">
                       {isDrawerMacroDropdownOpen && (
                         <div className="fixed inset-0 z-40" onClick={() => setIsDrawerMacroDropdownOpen(false)} />
                       )}
@@ -8237,13 +9634,24 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </div>
                   )}
                 </div>}
-                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 group rounded-xl border border-indigo-100 bg-white p-3">
+                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 rounded-xl border border-indigo-100 bg-white p-3">
                   <div className="flex justify-between items-center">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">2. Marque os Pavimentos</label>
                     {drawerFloors.length > 0 && <span className="text-[9px] font-bold text-slate-500">{drawerFloors.length} selecionado(s)</span>}
-                    {availableFloorsForMacro.length > 0 && <button onClick={() => { if(drawerFloors.length === availableFloorsForMacro.length) setDrawerFloors([]); else setDrawerFloors([...availableFloorsForMacro]); }} className="text-[9px] font-bold text-indigo-700 hover:underline uppercase">Todos</button>}
+                    {availableFloorsForMacro.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (drawerFloors.length === availableFloorsForMacro.length) setDrawerFloors([]);
+                          else setDrawerFloors([...availableFloorsForMacro]);
+                        }}
+                        className="text-[9px] font-bold text-indigo-700 hover:underline uppercase"
+                      >
+                        {drawerFloors.length === availableFloorsForMacro.length ? 'Desmarcar' : 'Todos'}
+                      </button>
+                    )}
                   </div>
-                  <div className={`grid grid-cols-2 gap-2 transition-opacity duration-300 ${drawerFloors.length === 0 ? 'opacity-100' : 'opacity-0 hidden group-hover:grid group-hover:opacity-100 group-focus-within:grid group-focus-within:opacity-100'} ${!drawerMacro ? 'pointer-events-none' : ''}`}>
+                  <div className={`grid grid-cols-2 gap-2 max-h-48 overflow-y-auto custom-scrollbar p-1 ${!drawerMacro ? 'pointer-events-none opacity-50' : ''}`}>
                     {availableFloorsForMacro.map(floor => (
                       <label key={floor} className="flex items-center space-x-2 p-2 bg-slate-50 rounded-lg border hover:border-indigo-300 transition cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" checked={drawerFloors.includes(floor)} onChange={(e) => { if (e.target.checked) setDrawerFloors([...drawerFloors, floor]); else setDrawerFloors(drawerFloors.filter(f => f !== floor)); }} />
@@ -8284,6 +9692,277 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <button onClick={handleIncludeDrawerActivities} disabled={drawerSelectedServices.length === 0} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black uppercase tracking-wider rounded-xl shadow-md transition transform active:scale-95">Confirmar Atividades</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Mini-Drawer: Planejar Próxima Semana (Frentes Liberadas da Atividade 100%) */}
+      {nextWeekPopover && nextWeekSourceTask && (
+        <div
+          style={{ left: `${nextWeekPopover.x}px`, top: `${nextWeekPopover.y}px` }}
+          className="fixed z-50 w-[380px] max-w-[calc(100vw-24px)] max-h-[calc(100vh-32px)] bg-white rounded-2xl shadow-2xl border-2 border-indigo-900/20 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Draggable Header */}
+          <div
+            onMouseDown={(e) => {
+              if ((e.target as HTMLElement).closest('button')) return;
+              nextWeekDragRef.current = {
+                isDragging: true,
+                startX: e.clientX,
+                startY: e.clientY,
+                origX: nextWeekPopover.x,
+                origY: nextWeekPopover.y
+              };
+            }}
+            className="px-4 py-3 bg-indigo-950 text-white flex justify-between items-start gap-2 cursor-move select-none shrink-0"
+            title="Arraste para mover esta janela"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[9px] font-black rounded uppercase tracking-wider">→ Próx. Semana</span>
+                <span className="text-[10px] font-black text-indigo-200 uppercase tracking-wider">{formatDateBR(nextWeekIdForPopover)}</span>
+              </div>
+              <h3 className="font-black text-xs uppercase tracking-wider mt-1 truncate" title={nextWeekSourceTask.activityName}>
+                {nextWeekSourceTask.activityName}
+              </h3>
+              <p className="text-[10px] text-indigo-300 font-bold truncate">
+                Concluída em {nextWeekSourceTask.floor} • Frentes liberadas
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNextWeekPopover(null)}
+              className="text-xl leading-none font-bold text-indigo-200 hover:text-white px-1 cursor-pointer"
+              title="Fechar"
+            >
+              &times;
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="p-3.5 space-y-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-white">
+            {nextWeekWarning && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold p-2.5 rounded-lg">
+                {nextWeekWarning}
+              </div>
+            )}
+
+            {/* 1. Macroatividade */}
+            <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <div className="flex justify-between items-center gap-2">
+                <label className="block text-[10px] font-black uppercase text-indigo-600">1. Macroatividade Liberada</label>
+                {nextWeekMacro && (
+                  <span className="text-[9px] font-bold text-slate-500 truncate max-w-[160px]">
+                    {getMacroTitle(nextWeekMacro)}
+                  </span>
+                )}
+              </div>
+              {nextWeekMacroOptions.length > 0 ? (
+                <div className="max-h-28 overflow-y-auto custom-scrollbar rounded-lg border border-slate-200 bg-white p-1.5 space-y-1">
+                  {nextWeekMacroOptions.map(macro => (
+                    <button
+                      key={macro}
+                      type="button"
+                      onClick={() => {
+                        setNextWeekMacro(macro);
+                        const floorsForM = Array.from(new Set(
+                          nextWeekCandidateActivities
+                            .filter(item => slugify(item.macro) === macro && (item.progress ?? 0) < 100)
+                            .map(item => item.floor)
+                        )).filter(Boolean);
+                        const initFloors = floorsForM.length > 0 ? [floorsForM[0]] : [];
+                        const initServices = nextWeekCandidateActivities
+                          .filter(item => slugify(item.macro) === macro && initFloors.includes(item.floor) && (item.progress ?? 0) < 100)
+                          .map(s => s.id);
+                        setNextWeekFloors(initFloors);
+                        setNextWeekSelectedServices(initServices);
+                        setNextWeekWarning('');
+                      }}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-md border text-[11px] font-black uppercase transition cursor-pointer ${
+                        nextWeekMacro === macro
+                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                          : 'border-transparent text-slate-700 hover:border-indigo-200 hover:bg-indigo-50/60'
+                      }`}
+                    >
+                      {getMacroTitle(macro)}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="p-2 text-[10px] text-slate-400 italic text-center font-bold bg-white rounded-lg border border-slate-200">
+                  Nenhuma frente aberta encontrada para esta atividade.
+                </p>
+              )}
+            </div>
+
+            {/* 2. Pavimentos Sucessores */}
+            <div className="space-y-1.5 rounded-xl border border-indigo-100 bg-white p-2.5">
+              <div className="flex justify-between items-center">
+                <label className="block text-[10px] font-black uppercase text-indigo-600">2. Pavimentos Sucessores</label>
+                <div className="flex items-center gap-2">
+                  {nextWeekFloors.length > 0 && (
+                    <span className="text-[9px] font-bold text-slate-500">{nextWeekFloors.length} selecionado(s)</span>
+                  )}
+                  {nextWeekAvailableFloors.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (nextWeekFloors.length === nextWeekAvailableFloors.length) {
+                          setNextWeekFloors([]);
+                          setNextWeekSelectedServices([]);
+                        } else {
+                          const allFl = [...nextWeekAvailableFloors];
+                          setNextWeekFloors(allFl);
+                          const allSvcs = nextWeekCandidateActivities
+                            .filter(item => slugify(item.macro) === nextWeekMacro && allFl.includes(item.floor) && (item.progress ?? 0) < 100)
+                            .map(s => s.id);
+                          setNextWeekSelectedServices(allSvcs);
+                        }
+                      }}
+                      className="text-[9px] font-bold text-indigo-700 hover:underline uppercase cursor-pointer"
+                    >
+                      Todos
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto custom-scrollbar pr-0.5">
+                {nextWeekAvailableFloors.map(floor => {
+                  const isChecked = nextWeekFloors.includes(floor);
+                  return (
+                    <label
+                      key={floor}
+                      className={`flex items-center space-x-2 p-1.5 rounded-lg border transition cursor-pointer ${
+                        isChecked ? 'bg-indigo-50/70 border-indigo-300' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const updatedFloors = e.target.checked
+                            ? [...nextWeekFloors, floor]
+                            : nextWeekFloors.filter(f => f !== floor);
+                          setNextWeekFloors(updatedFloors);
+                          const floorServiceIds = nextWeekCandidateActivities
+                            .filter(item => slugify(item.macro) === nextWeekMacro && item.floor === floor && (item.progress ?? 0) < 100)
+                            .map(s => s.id);
+                          if (e.target.checked) {
+                            setNextWeekSelectedServices(prev => Array.from(new Set([...prev, ...floorServiceIds])));
+                          } else {
+                            setNextWeekSelectedServices(prev => prev.filter(id => !floorServiceIds.includes(id)));
+                          }
+                        }}
+                      />
+                      <span className="text-[10px] font-bold text-slate-700 truncate" title={floor}>{floor}</span>
+                    </label>
+                  );
+                })}
+                {nextWeekAvailableFloors.length === 0 && nextWeekMacro && (
+                  <p className="text-[10px] text-slate-400 italic col-span-2">Nenhum pavimento sucessor aberto.</p>
+                )}
+              </div>
+            </div>
+
+            {/* 3. Serviços */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center">
+                <label className="block text-[10px] font-black uppercase text-indigo-600">3. Atividades / Serviços</label>
+                {nextWeekAvailableServices.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (nextWeekSelectedServices.length === nextWeekAvailableServices.length) {
+                        setNextWeekSelectedServices([]);
+                      } else {
+                        setNextWeekSelectedServices(nextWeekAvailableServices.map(s => s.id));
+                      }
+                    }}
+                    className="text-[9px] font-bold text-indigo-700 hover:underline uppercase cursor-pointer"
+                  >
+                    Todos
+                  </button>
+                )}
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 max-h-40 overflow-y-auto custom-scrollbar space-y-1.5">
+                {nextWeekAvailableServices.map(item => {
+                  const alreadyInNextWeek = planning.some(
+                    t => t.weekId === nextWeekIdForPopover && !t.finalized && t.itemId === item.id && t.floor === item.floor
+                  );
+                  return (
+                    <label
+                      key={item.id}
+                      className={`flex items-center space-x-2.5 p-2 bg-white rounded-lg border transition cursor-pointer ${
+                        nextWeekSelectedServices.includes(item.id)
+                          ? 'border-indigo-400 bg-indigo-50/30'
+                          : 'border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500 shrink-0"
+                        checked={nextWeekSelectedServices.includes(item.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) setNextWeekSelectedServices([...nextWeekSelectedServices, item.id]);
+                          else setNextWeekSelectedServices(nextWeekSelectedServices.filter(id => id !== item.id));
+                        }}
+                      />
+                      <div className="min-w-0 flex-1 text-xs">
+                        <p className="font-bold text-slate-800 text-[11px] leading-tight truncate" title={item.service}>{item.service}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-[9px] text-slate-500 font-bold">{item.floor}</span>
+                          {alreadyInNextWeek && (
+                            <span className="px-1.5 py-0.2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[8px] font-black uppercase">
+                              Já na próx. semana
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+                {nextWeekAvailableServices.length === 0 && (
+                  <p className="p-2.5 text-[10px] text-slate-400 italic text-center font-bold">
+                    Selecione um pavimento acima para ver os serviços.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* 4. Empreiteiro / Equipe */}
+            <div className="space-y-1 border-t border-slate-200 pt-2.5">
+              <label className="block text-[10px] font-black uppercase text-slate-500">4. Empreiteiro / Equipe</label>
+              <select
+                className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold uppercase cursor-pointer focus:bg-white focus:border-indigo-500 outline-none"
+                value={nextWeekResponsible}
+                onChange={e => setNextWeekResponsible(e.target.value)}
+              >
+                <option value="">-- Padrão --</option>
+                {teams.map(team => <option key={team} value={team}>{team}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Footer: Lançar */}
+          <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setNextWeekPopover(null)}
+              className="px-3 py-2.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer"
+            >
+              Fechar
+            </button>
+            <button
+              type="button"
+              onClick={handleLaunchNextWeekActivities}
+              disabled={nextWeekSelectedServices.length === 0}
+              className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-md transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <span>Lançar na Próxima Semana</span>
+              <span>→</span>
+            </button>
           </div>
         </div>
       )}
