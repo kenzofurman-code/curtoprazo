@@ -39,6 +39,8 @@ import { BudgetLinkingView } from './BudgetLinkingView';
 import { GanttPlannerView } from './GanttPlannerView';
 import { applyBudgetWeightsToSchedule, getEffectiveBudgetState } from './budgetLinking';
 import { PhysicalFinancialViews } from './PhysicalFinancialViews';
+import { CompetenceCashViews } from './CompetenceCashViews';
+import { runPhysicalFinancialCalculation } from './physicalFinancialEngine';
 import { MacroflowCanvasView } from './MacroflowCanvasView';
 import {
   loadScheduleVersions,
@@ -78,7 +80,7 @@ interface LongTermPlannerProps {
   ) => Promise<void>;
   onUpdateSingleItemProgress: (item: any, newProgress: number) => Promise<void>;
   rawCronoSlot?: React.ReactNode;
-  activeSubView?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'raw_crono' | 'import';
+  activeSubView?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'competence_cash' | 'raw_crono' | 'import';
   hideSubNav?: boolean;
   onOpenImportModal?: () => void;
 }
@@ -133,7 +135,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   hideSubNav = false,
   onOpenImportModal,
 }) => {
-  const [internalSubView, setInternalSubView] = useState<'lob' | 'table' | 'budget' | 'physical_financial' | 'raw_crono' | 'import'>('lob');
+  const [internalSubView, setInternalSubView] = useState<'lob' | 'table' | 'budget' | 'physical_financial' | 'competence_cash' | 'raw_crono' | 'import'>('lob');
   const subView = activeSubView || internalSubView;
   const setSubView = setInternalSubView;
 
@@ -1805,6 +1807,17 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => setSubView('competence_cash')}
+                className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 ${
+                  subView === 'competence_cash'
+                    ? 'bg-emerald-800 text-white shadow-sm'
+                    : 'text-slate-600 hover:bg-white hover:text-slate-900'
+                }`}
+              >
+                <span>💵</span> Competência & Caixa
+              </button>
+              <button
+                type="button"
                 onClick={() => setSubView('import')}
                 className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 ${
                   subView === 'import'
@@ -1873,6 +1886,15 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
 
               <button
                 type="button"
+                onClick={handleQuickStartVerticalBuilding}
+                className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                title="⚡ Gerar Obra Vertical Padrão (Modelo 1 Clique)"
+              >
+                <span>⚡</span> Gerar Obra
+              </button>
+
+              <button
+                type="button"
                 disabled={isSaving}
                 onClick={() => persistStateToApp(activeState)}
                 className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition shadow-sm flex items-center gap-2 ${
@@ -1893,7 +1915,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
         </div>
 
         {/* BARRA DE FERRAMENTAS DE ENGENHARIA */}
-        {subView !== 'import' && (
+        {(subView === 'lob' || subView === 'table') && (
           <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -1991,44 +2013,6 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
           </div>
         )}
       </div>
-
-      {/* ONBOARDING QUANDO O CRONOGRAMA ESTÁ VAZIO */}
-      {activeState.activities.length === 0 && subView !== 'import' && (
-        <div className="bg-gradient-to-br from-emerald-950 via-emerald-900 to-slate-900 text-white p-6 rounded-2xl shadow-lg border border-emerald-800/60">
-          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
-            <div className="space-y-2 max-w-2xl">
-              <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[10px] font-black uppercase tracking-widest">
-                Planejamento de Longo Prazo do Zero (Modelo Prevision)
-              </span>
-              <h3 className="text-xl font-black tracking-tight">
-                Comece seu Cronograma pela Linha de Balanço ou carregue o Modelo Padrão de Obra
-              </h3>
-              <p className="text-xs text-emerald-100/80 leading-relaxed">
-                Cadastre seus <strong>Locais (Pavimentos)</strong> em lote sequencial, defina os{' '}
-                <strong>Pacotes de Trabalho e Sub-tarefas</strong>, e lance o <strong>Ritmo / Escadinha</strong> com
-                predecessoras automáticas.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={handleQuickStartVerticalBuilding}
-                className="px-4 py-3 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-black text-xs uppercase tracking-wider shadow-md transition active:scale-95"
-              >
-                ⚡ Gerar Obra Vertical Padrão (1 Clique)
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveModal('floors')}
-                className="px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white border border-white/20 font-bold text-xs uppercase tracking-wider transition"
-              >
-                🏢 Criar Locais do Zero
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* =====================================================================
           SUB-VISÃO 1: LINHA DE BALANÇO INTERATIVA (LOB CANVAS)
@@ -3029,6 +3013,35 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
             );
             await onApplySchedule(compiled, 'Versão do cronograma ativada com sucesso!');
           }}
+        />
+      )}
+
+      {/* =====================================================================
+          SUB-VISÃO: COMPETÊNCIA E CAIXA TEÓRICOS (CONTÁBIL / NF vs FLUXO DE CAIXA)
+         ===================================================================== */}
+      {subView === 'competence_cash' && (
+        <CompetenceCashViews
+          projectId={selectedProjectId || 'global'}
+          budgetItems={
+            getEffectiveBudgetState(
+              selectedProjectId || 'global',
+              activeState.activities,
+              activeState.floors,
+              activeState.services
+            ).items
+          }
+          calcResult={runPhysicalFinancialCalculation({
+            budgetItems: getEffectiveBudgetState(
+              selectedProjectId || 'global',
+              activeState.activities,
+              activeState.floors,
+              activeState.services
+            ).items,
+            scheduleTasks: activeState.activities,
+            cycleStartDay: 21,
+            cycleEndDay: 20,
+            cutoffMedNum: 1,
+          })}
         />
       )}
 

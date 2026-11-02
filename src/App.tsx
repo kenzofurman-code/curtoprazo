@@ -6246,7 +6246,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   };
 
-  const renderCronograma = (subViewOverride?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'raw_crono' | 'import') => (
+  const renderCronograma = (subViewOverride?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'competence_cash' | 'raw_crono' | 'import') => (
     <div className="space-y-6 animate-in fade-in duration-300">
       <LongTermPlanner
         activeSubView={subViewOverride}
@@ -9489,6 +9489,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               { id: 'table', label: 'Gantt', icon: '📋', fullLabel: 'Cronograma Gantt & EAP' },
               { id: 'budget', label: 'Orçamento & Vínculos', icon: '💰', fullLabel: 'Orçamento, Contas e Vínculos' },
               { id: 'physical_financial', label: 'Físico-Financ.', icon: '📈', fullLabel: 'Curva S e Replanejamento Físico-Financeiro' },
+              { id: 'competence_cash', label: 'Competência & Caixa', icon: '💵', fullLabel: 'Competência Teórica e Fluxo de Caixa' },
               { id: 'planning', label: 'Semanal', icon: '📅', fullLabel: 'Planejamento Semanal e Metas' },
               { id: 'config', label: 'Configurações', icon: '⚙️', fullLabel: 'Configurações e Acessos' },
             ].map((item) => {
@@ -9524,7 +9525,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </aside>
 
         {/* Área de Conteúdo Principal */}
-        <main className={`flex-1 min-w-0 ${['lob', 'table', 'budget', 'physical_financial', 'cronograma-inicial'].includes(activeTab) ? 'px-2 md:px-4 pt-2 pb-12' : 'max-w-[1600px] p-4 md:p-6 pb-24 mx-auto'}`}>
+        <main className={`flex-1 min-w-0 ${['lob', 'table', 'budget', 'physical_financial', 'competence_cash', 'cronograma-inicial'].includes(activeTab) ? 'px-2 md:px-4 pt-2 pb-12' : 'max-w-[1600px] p-4 md:p-6 pb-24 mx-auto'}`}>
           {activeTab === 'calendar' && renderCalendar()}
           {activeTab === 'dashboard' && (
             <div className="space-y-6">
@@ -9593,6 +9594,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           {activeTab === 'table' && renderCronograma('table')}
           {activeTab === 'budget' && renderCronograma('budget')}
           {activeTab === 'physical_financial' && renderCronograma('physical_financial')}
+          {activeTab === 'competence_cash' && renderCronograma('competence_cash')}
           {activeTab === 'planning' && renderPlanning()}
           {activeTab === 'config' && renderConfig()}
           {activeTab === 'cronograma-inicial' && renderCronograma()}
