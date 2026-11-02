@@ -80,6 +80,7 @@ interface LongTermPlannerProps {
   rawCronoSlot?: React.ReactNode;
   activeSubView?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'raw_crono' | 'import';
   hideSubNav?: boolean;
+  onOpenImportModal?: () => void;
 }
 
 const WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -130,6 +131,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   rawCronoSlot,
   activeSubView,
   hideSubNav = false,
+  onOpenImportModal,
 }) => {
   const [internalSubView, setInternalSubView] = useState<'lob' | 'table' | 'budget' | 'physical_financial' | 'raw_crono' | 'import'>('lob');
   const subView = activeSubView || internalSubView;
@@ -1849,6 +1851,17 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              {onOpenImportModal && (
+                <button
+                  type="button"
+                  onClick={onOpenImportModal}
+                  className="px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  title="Abrir o assistente inteligente de importação de cronograma (.xlsx / .csv)"
+                >
+                  <span>📥</span> Importar .XLSX
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={handleExportToExcel}
@@ -3070,21 +3083,39 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 bg-slate-50 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500 transition relative">
-              <input
-                type="file"
-                accept=".xlsx, .xls, .csv"
-                onChange={handleFileUpload}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-              <span className="text-4xl mb-2">📊</span>
-              <p className="text-xs font-black text-slate-700 uppercase">
-                Clique ou Arraste sua Planilha Excel (.XLSX / .CSV)
-              </p>
-              <p className="text-[11px] text-slate-400 mt-1">
-                O cronograma importado será carregado automaticamente na Linha de Balanço e no Curto Prazo.
-              </p>
-            </div>
+            {onOpenImportModal ? (
+              <div
+                onClick={onOpenImportModal}
+                className="border-2 border-dashed border-indigo-300 hover:border-indigo-600 rounded-2xl p-8 bg-indigo-50/40 hover:bg-indigo-50/70 flex flex-col items-center justify-center text-center cursor-pointer transition shadow-xs group"
+              >
+                <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">📥</span>
+                <p className="text-xs font-black text-indigo-950 uppercase tracking-tight">
+                  Motor Inteligente de Importação (.XLSX / .CSV)
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1 max-w-sm">
+                  Detecção semântica de colunas, configuração de linhas de cabeçalho/dados e rastreabilidade com metadados.
+                </p>
+                <span className="mt-3 px-4 py-2 bg-indigo-600 group-hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition">
+                  Abrir Assistente de Importação
+                </span>
+              </div>
+            ) : (
+              <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 bg-slate-50 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500 transition relative">
+                <input
+                  type="file"
+                  accept=".xlsx, .xls, .csv"
+                  onChange={handleFileUpload}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+                <span className="text-4xl mb-2">📊</span>
+                <p className="text-xs font-black text-slate-700 uppercase">
+                  Clique ou Arraste sua Planilha Excel (.XLSX / .CSV)
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  O cronograma importado será carregado automaticamente na Linha de Balanço e no Curto Prazo.
+                </p>
+              </div>
+            )}
 
             <div className="border border-emerald-200 rounded-2xl p-8 bg-emerald-50/40 flex flex-col items-center justify-center text-center">
               <span className="text-4xl mb-2">📤</span>

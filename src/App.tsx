@@ -32,6 +32,8 @@ import { LongTermPlanner } from './LongTermPlanner';
 import { ScheduleVersionsView } from './ScheduleVersionsView';
 import { CalendarView } from './CalendarView';
 import { compileLobToCronograma, hydrateLobFromCronograma } from './longTermSchedule';
+import { ScheduleImportModal } from './ScheduleImportModal';
+import { createNewScheduleVersion, setVersionAsBaseline } from './scheduleVersions';
 
 declare global {
   interface Window {
@@ -1265,6 +1267,8 @@ const App = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string>('');
+  const [isScheduleImportModalOpen, setIsScheduleImportModalOpen] = useState<boolean>(false);
+  const [versionUpdateKey, setVersionUpdateKey] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [dashboardSubView, setDashboardSubView] = useState<'overview' | 'matrix' | 'ppc' | 'history'>('overview');
   const [isWeeklyConfigModalOpen, setIsWeeklyConfigModalOpen] = useState<boolean>(false);
@@ -4941,6 +4945,103 @@ const App = () => {
     reader.readAsBinaryString(file);
   };
 
+  const handleCompleteScheduleImport = async (
+    parsedResult: any,
+    versionMeta: {
+      name: string;
+      description: string;
+      type: any;
+      author: string;
+      referenceDate: string;
+      sourceFileName: string;
+      isBaseline: boolean;
+      makeActive: boolean;
+    }
+  ) => {
+    try {
+      const activeProjId = selectedProjectId || 'projeto_principal';
+
+      // 1. Cria a versão em scheduleVersions com os metadados de rastreabilidade
+      const { created } = createNewScheduleVersion(
+        activeProjId,
+        versionMeta.name,
+        versionMeta.description,
+        versionMeta.isBaseline,
+        {
+          cronogramaInicial: parsedResult.parsedItems,
+          floors: parsedResult.floors,
+          allFloorsData: parsedResult.allFloorsData,
+          weights: parsedResult.weights,
+          teams: parsedResult.teams,
+          matrices: parsedResult.matrices,
+        },
+        {
+          type: versionMeta.type,
+          author: versionMeta.author,
+          sourceFileName: versionMeta.sourceFileName,
+          referenceDate: versionMeta.referenceDate,
+          totalActivities: parsedResult.stats.totalActivities,
+          totalFloors: parsedResult.stats.totalFloors,
+          notes: versionMeta.description,
+        }
+      );
+
+      // 2. Se marcada como Linha de Base Oficial, fixa a versão
+      if (versionMeta.isBaseline && created?.id) {
+        setVersionAsBaseline(activeProjId, created.id);
+      }
+
+      // 3. Se deve ser a versão Ativa, aplica ao cronograma da aplicação
+      if (versionMeta.makeActive) {
+        const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
+          planning,
+          parsedResult.allFloorsData,
+          parsedResult.parsedItems
+        );
+
+        setFloors(parsedResult.floors);
+        setAllFloorsData(updatedFloorsData);
+        setWeights(parsedResult.weights);
+        setCronogramaInicial(parsedResult.parsedItems);
+        setTeams(parsedResult.teams);
+        setMatrices(parsedResult.matrices);
+        setPlanning(recalculatedPlanning);
+
+        await saveToDB(
+          parsedResult.floors,
+          updatedFloorsData,
+          history,
+          parsedResult.weights,
+          recalculatedPlanning,
+          parsedResult.parsedItems,
+          parsedResult.teams,
+          delayReasons,
+          ppcHistory,
+          parsedResult.matrices,
+          teamPhones,
+          undefined,
+          projectCity,
+          weatherApiKey,
+          weatherCache,
+          true
+        );
+      }
+
+      setVersionUpdateKey((prev) => prev + 1);
+
+      setNotification({
+        message: `Importação concluída! ${parsedResult.stats.totalActivities.toLocaleString('pt-BR')} atividades carregadas na versão "${versionMeta.name}".`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      console.error('Erro na finalização da importação:', err);
+      setNotification({
+        message: `Erro ao salvar cronograma importado: ${err?.message || 'Falha inesperada'}`,
+        type: 'error',
+      });
+    }
+  };
+
   const handleAddFloor = async () => {
     if (!newFloorName.trim()) return;
     const floor = newFloorName.trim();
@@ -6161,6 +6262,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         currentBudgetImport={currentBudgetImport}
         getBudgetImportTooltip={getBudgetImportTooltip}
         handleFileUpload={handleFileUpload}
+        onOpenImportModal={() => setIsScheduleImportModalOpen(true)}
         onTriggerClearDB={() =>
           triggerConfirm(
             'Limpar Banco de Dados',
@@ -6432,6 +6534,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             teams,
             matrices,
           }}
+          onOpenImportModal={() => setIsScheduleImportModalOpen(true)}
+          versionUpdateKey={versionUpdateKey}
           onApplyVersion={async (snap, versionName) => {
             const compiled = compileLobToCronograma(
               hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
@@ -9357,6 +9461,17 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 </button>
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={() => setIsScheduleImportModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-md hover:shadow-indigo-600/30 transition border border-indigo-400/40 cursor-pointer ml-1"
+              title="Abrir o motor inteligente de importação de cronograma (.xlsx / .csv)"
+            >
+              <span className="text-xs">📥</span>
+              <span className="hidden sm:inline">Importar Cronograma</span>
+              <span className="sm:hidden">Importar</span>
+            </button>
           </div>
         </div>
       </header>
@@ -9404,7 +9519,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
 
           <div className="pt-2 border-t border-slate-800 text-center">
-            <span className="text-[8px] font-mono text-slate-500 block leading-tight">v2.4</span>
+            <span className="text-[8px] font-mono text-slate-500 block leading-tight">v2.5</span>
           </div>
         </aside>
 
@@ -10156,6 +10271,23 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-[6px] border-transparent border-t-slate-900"></div>
         </div>
       )}
+
+      {/* Modal do Motor Inteligente de Importação de Cronograma */}
+      <ScheduleImportModal
+        isOpen={isScheduleImportModalOpen}
+        onClose={() => setIsScheduleImportModalOpen(false)}
+        projectId={selectedProjectId || 'global'}
+        projectName={projects.find((p) => p.id === selectedProjectId)?.name || 'Obra Principal'}
+        currentSnapshot={{
+          cronogramaInicial,
+          floors,
+          allFloorsData,
+          weights,
+          teams,
+          matrices,
+        }}
+        onImportComplete={handleCompleteScheduleImport}
+      />
 
       <Notification {...notification} onClose={() => setNotification({ message: '', type: '' })} />
     </div>

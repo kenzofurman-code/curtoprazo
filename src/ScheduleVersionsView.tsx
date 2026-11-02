@@ -19,6 +19,8 @@ interface ScheduleVersionsViewProps {
     matrices?: any[];
   };
   onApplyVersion: (snapshot: any, versionName: string) => Promise<void>;
+  onOpenImportModal?: () => void;
+  versionUpdateKey?: number;
 }
 
 function formatDateBR(isoStr?: string): string {
@@ -42,10 +44,16 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
   projectName = 'Obra Principal',
   currentSnapshot,
   onApplyVersion,
+  onOpenImportModal,
+  versionUpdateKey,
 }) => {
   const [versions, setVersions] = useState<ScheduleVersion[]>(() =>
     loadScheduleVersions(projectId, currentSnapshot)
   );
+
+  React.useEffect(() => {
+    setVersions(loadScheduleVersions(projectId, currentSnapshot));
+  }, [projectId, versionUpdateKey]);
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [newVersionName, setNewVersionName] = useState('');
@@ -180,18 +188,30 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            setNewVersionName(`Revisão 0${versions.length + 1} - Reprogramação`);
-            setNewVersionDesc('');
-            setIsBaselineCheck(false);
-            setIsNewModalOpen(true);
-          }}
-          className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs uppercase tracking-wider shadow-sm transition flex items-center gap-2 active:scale-95"
-        >
-          <span>💾</span> Congelar Versão Atual
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onOpenImportModal && (
+            <button
+              type="button"
+              onClick={onOpenImportModal}
+              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-wider shadow-md hover:shadow-indigo-600/30 transition flex items-center gap-2 active:scale-95 cursor-pointer"
+            >
+              <span className="text-base">📥</span> Importar Cronograma (.XLSX)
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setNewVersionName(`Revisão 0${versions.length + 1} - Reprogramação`);
+              setNewVersionDesc('');
+              setIsBaselineCheck(false);
+              setIsNewModalOpen(true);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider border border-slate-300 transition flex items-center gap-2 active:scale-95 cursor-pointer"
+          >
+            <span>💾</span> Congelar Versão Atual
+          </button>
+        </div>
       </div>
 
       {/* CARDS DE RESUMO: BASELINE E VERSÃO ATIVA */}
@@ -285,11 +305,11 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
                 <div
                   key={v.id}
                   className={`p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-colors ${
-                    isAct ? 'bg-emerald-50/30' : 'hover:bg-slate-50'
+                    isAct ? 'bg-emerald-50/30 border border-emerald-200' : 'hover:bg-slate-50 border border-transparent'
                   }`}
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                  <div className="space-y-1.5 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-slate-900 text-sm">{v.name}</span>
                       {isBase && (
                         <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-300">
@@ -301,11 +321,48 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
                           🟢 Ativa
                         </span>
                       )}
+                      {v.type === 'scenario' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-100 text-purple-800 border border-purple-200">
+                          🟣 Cenário
+                        </span>
+                      )}
+                      {v.type === 'forecast' && !isBase && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-800 border border-blue-200">
+                          🔵 Previsão
+                        </span>
+                      )}
+                      {v.type === 'backup' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-200 text-slate-700">
+                          🟠 Backup
+                        </span>
+                      )}
                     </div>
-                    {v.description && <p className="text-xs text-slate-600">{v.description}</p>}
-                    <div className="flex items-center gap-4 text-[11px] text-slate-400 font-mono">
-                      <span>📅 Criada em: {formatDateBR(v.createdAt)}</span>
+
+                    {v.description && (
+                      <p className="text-xs text-slate-700 font-medium leading-relaxed">{v.description}</p>
+                    )}
+
+                    {v.notes && (
+                      <div className="text-[11px] text-slate-600 bg-slate-100/70 p-2 rounded-lg border border-slate-200/80">
+                        <strong className="text-slate-800">Do que se trata:</strong> {v.notes}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500 font-mono">
+                      <span>📅 Criada: {formatDateBR(v.createdAt)}</span>
+                      {v.referenceDate && (
+                        <span className="text-indigo-700 font-bold">
+                          📌 Data Cronograma: {formatDateBR(v.referenceDate).split(' ')[0]}
+                        </span>
+                      )}
+                      {v.sourceFileName && (
+                        <span className="text-slate-600">
+                          📁 Arquivo: <strong className="text-slate-700">{v.sourceFileName}</strong>
+                        </span>
+                      )}
                       <span>📦 {taskCount} atividades</span>
+                      {v.totalFloors ? <span>🏢 {v.totalFloors} pavimentos</span> : null}
+                      {v.author && <span>👤 Autor: {v.author}</span>}
                     </div>
                   </div>
 

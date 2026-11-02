@@ -27,6 +27,12 @@ export interface ScheduleVersion {
   isBaseline: boolean;
   isActive: boolean;
   snapshot: ScheduleVersionSnapshot;
+  // Campos de rastreabilidade e histórico de importação
+  sourceFileName?: string;
+  referenceDate?: string;
+  totalActivities?: number;
+  totalFloors?: number;
+  notes?: string;
 }
 
 const STORAGE_PREFIX = 'curtoprazo_schedule_versions_';
@@ -85,6 +91,11 @@ export function createNewScheduleVersion(
   options?: {
     type?: ScheduleVersionType;
     author?: string;
+    sourceFileName?: string;
+    referenceDate?: string;
+    totalActivities?: number;
+    totalFloors?: number;
+    notes?: string;
   }
 ): { versions: ScheduleVersion[]; created: ScheduleVersion } {
   const existing = loadScheduleVersions(projectId, snapshot);
@@ -108,6 +119,11 @@ export function createNewScheduleVersion(
     createdAt: new Date().toISOString(),
     isBaseline,
     isActive: true,
+    sourceFileName: options?.sourceFileName,
+    referenceDate: options?.referenceDate,
+    totalActivities: options?.totalActivities,
+    totalFloors: options?.totalFloors,
+    notes: options?.notes,
     snapshot: {
       cronogramaInicial: JSON.parse(JSON.stringify(snapshot.cronogramaInicial || [])),
       floors: [...(snapshot.floors || [])],
