@@ -1,5 +1,6 @@
+import { exportCompleteLocalBackup, importCompleteLocalBackup } from './localBackup';
 import { useRef, useState } from 'react';
-import { exportAllLocalData, importLocalBackup, isLocalDbMode, MAX_LOCAL_BACKUP_BYTES, parseLocalBackup, setLocalDbMode } from './localDatabase';
+import { isLocalDbMode, MAX_LOCAL_BACKUP_BYTES, parseLocalBackup, setLocalDbMode } from './localDatabase';
 import type { LocalBackup } from './localDatabase';
 
 type Props = { cloudAvailable: boolean; onReload?: () => void };
@@ -18,10 +19,10 @@ export default function LocalDatabaseSettings({ cloudAvailable, onReload = () =>
     localStorage.removeItem('selected_project_id');
     onReload();
   };
-  const download = () => {
+  const download = async () => {
     setError('');
     try {
-      const url = URL.createObjectURL(new Blob([exportAllLocalData()], { type: 'application/json' }));
+      const url = URL.createObjectURL(new Blob([await exportCompleteLocalBackup()], { type: 'application/json' }));
       const anchor = document.createElement('a');
       anchor.href = url; anchor.download = `backup_local_curtoprazo_${new Date().toISOString().slice(0, 10)}.json`;
       anchor.click(); URL.revokeObjectURL(url);
@@ -37,10 +38,10 @@ export default function LocalDatabaseSettings({ cloudAvailable, onReload = () =>
     } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível ler a cópia.'); }
     finally { setBusy(false); }
   };
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!backup || !count) return;
     setError(''); setBusy(true);
-    try { importLocalBackup(backup); activate(true); }
+    try { await importCompleteLocalBackup(backup); activate(true); }
     catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível carregar a cópia.'); setBusy(false); }
   };
   const button = 'rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:cursor-not-allowed disabled:opacity-50';

@@ -22,8 +22,7 @@ import {
   isLocalDbMode,
   getLocalDocData,
   setLocalDocData,
-  subscribeLocalDoc,
-  exportAllLocalData
+  subscribeLocalDoc
 } from './localDatabase';
 import { preparePayload, resolvePayload, MAX_SAVE_BYTES } from './chunkedPayload';
 import { GENERAL_DELAY_REASONS, DELAY_REASON_REGISTRY_ID, normalizeDelayReason, mergeDelayReasons, projectOnlyDelayReasons, normalizeDelayReasonFields } from './delayReasons';
@@ -38,7 +37,8 @@ import { ScheduleVersionsView } from './ScheduleVersionsView';
 import { CalendarView } from './CalendarView';
 import { compileLobToCronograma, hydrateLobFromCronograma } from './longTermSchedule';
 import { ScheduleImportModal } from './ScheduleImportModal';
-import { createNewScheduleVersion, setVersionAsBaseline } from './scheduleVersions';
+import { createNewScheduleVersion } from './scheduleVersions';
+import { exportCompleteLocalBackup } from './localBackup';
 
 declare global {
   interface Window {
@@ -4775,7 +4775,7 @@ const App = () => {
       const activeProjId = selectedProjectId || 'projeto_principal';
 
       // 1. Cria a versão em scheduleVersions com os metadados de rastreabilidade
-      const { created } = createNewScheduleVersion(
+      await createNewScheduleVersion(
         activeProjId,
         versionMeta.name,
         versionMeta.description,
@@ -4798,11 +4798,6 @@ const App = () => {
           notes: versionMeta.description,
         }
       );
-
-      // 2. Se marcada como Linha de Base Oficial, fixa a versão
-      if (versionMeta.isBaseline && created?.id) {
-        setVersionAsBaseline(activeProjId, created.id);
-      }
 
       // 3. Se deve ser a versão Ativa, aplica ao cronograma da aplicação
       if (versionMeta.makeActive) {
@@ -4852,6 +4847,7 @@ const App = () => {
         message: `Erro ao salvar cronograma importado: ${err?.message || 'Falha inesperada'}`,
         type: 'error',
       });
+      throw err;
     }
   };
 
@@ -9249,8 +9245,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 <span>🛡️ Banco Local Ativo (Nuvem Protegida)</span>
                 <button
-                  onClick={() => {
-                    const dataStr = exportAllLocalData();
+                  onClick={async () => {
+                    try {
+                    const dataStr = await exportCompleteLocalBackup();
                     const blob = new Blob([dataStr], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
@@ -9258,6 +9255,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     a.download = `backup_local_curtoprazo_${new Date().toISOString().slice(0, 10)}.json`;
                     a.click();
                     URL.revokeObjectURL(url);
+
+                    } catch (err) { setNotification({message: err instanceof Error ? err.message : "Não foi possível baixar a cópia.",type:"error"}); }
                   }}
                   className="ml-1 hover:text-white underline text-[9px] cursor-pointer"
                   title="Exportar backup completo dos dados locais em arquivo JSON"

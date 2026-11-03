@@ -1,6 +1,6 @@
+import { useScheduleVersionHistory } from './useScheduleVersionHistory';
 import React, { useState, useMemo } from 'react';
 import {
-  loadScheduleVersions,
   createNewScheduleVersion,
   setVersionAsBaseline,
   activateScheduleVersion,
@@ -47,13 +47,7 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
   onOpenImportModal,
   versionUpdateKey,
 }) => {
-  const [versions, setVersions] = useState<ScheduleVersion[]>(() =>
-    loadScheduleVersions(projectId, currentSnapshot)
-  );
-
-  React.useEffect(() => {
-    setVersions(loadScheduleVersions(projectId, currentSnapshot));
-  }, [projectId, versionUpdateKey]);
+  const {versions,setVersions,busy:versionsBusy,error:versionsError,run:runVersions} = useScheduleVersionHistory(projectId,currentSnapshot,versionUpdateKey);
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [newVersionName, setNewVersionName] = useState('');
@@ -69,32 +63,38 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
     return versions.find((v) => v.isActive) || versions[0] || null;
   }, [versions]);
 
-  const handleCreateVersion = () => {
-    const { versions: updated } = createNewScheduleVersion(
-      projectId,
-      newVersionName || `Revisão 0${versions.length + 1}`,
-      newVersionDesc,
-      isBaselineCheck,
-      currentSnapshot
-    );
-    setVersions(updated);
-    setIsNewModalOpen(false);
-    setNewVersionName('');
-    setNewVersionDesc('');
-    setIsBaselineCheck(false);
+  const handleCreateVersion = async () => {
+    await runVersions(async () => {
+      const { versions: updated } = await createNewScheduleVersion(
+        projectId,
+        newVersionName || `Revisão 0${versions.length + 1}`,
+        newVersionDesc,
+        isBaselineCheck,
+        currentSnapshot
+      );
+      setVersions(updated);
+      setIsNewModalOpen(false);
+      setNewVersionName('');
+      setNewVersionDesc('');
+      setIsBaselineCheck(false);
+    });
   };
 
-  const handleSetBaseline = (versionId: string) => {
-    const updated = setVersionAsBaseline(projectId, versionId);
-    setVersions(updated);
+  const handleSetBaseline = async (versionId: string) => {
+    await runVersions(async () => {
+      const updated = await setVersionAsBaseline(projectId, versionId);
+      setVersions(updated);
+    });
   };
 
   const handleActivate = async (version: ScheduleVersion) => {
-    const { versions: updated } = activateScheduleVersion(projectId, version.id);
-    setVersions(updated);
-    if (version.snapshot) {
-      await onApplyVersion(version.snapshot, version.name);
-    }
+    await runVersions(async () => {
+      const { versions: updated } = await activateScheduleVersion(projectId, version.id);
+      setVersions(updated);
+      if (version.snapshot) {
+        await onApplyVersion(version.snapshot, version.name);
+      }
+    });
   };
 
   // Comparação de variância entre versão Ativa e Linha de Base
@@ -171,6 +171,8 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 pb-16">
+      {versionsBusy && <p role="status" className="text-sm text-slate-600">Processando histórico de versões…</p>}
+      {versionsError && !isNewModalOpen && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{versionsError}</p>}
       {/* HEADER DA TELA */}
       <div className="bg-white p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -470,6 +472,7 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
       {isNewModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+            {versionsError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{versionsError}</p>}
             <div className="flex items-center justify-between border-b pb-3">
               <h3 className="font-black text-slate-900 text-sm uppercase tracking-wider flex items-center gap-1.5">
                 <span>💾</span> Salvar Nova Versão de Cronograma
@@ -532,6 +535,7 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
               </button>
               <button
                 type="button"
+                disabled={versionsBusy}
                 onClick={handleCreateVersion}
                 className="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs shadow-md transition"
               >

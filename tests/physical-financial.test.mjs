@@ -24,6 +24,16 @@ function moduleFrom(filePath, source) {
   loadedModules.set(filePath, mod.exports);
 
   const customRequire = (id) => {
+    if (id.startsWith('./scheduleVersionStorage')) {
+      return {
+        versionStorageKey: projectId => 'versions_' + projectId,
+        readVersionList: async key => structuredClone(inMemDb.get(key) || []),
+        updateVersionList: async (key, update) => {
+          const next = update(structuredClone(inMemDb.get(key) || []));
+          inMemDb.set(key, structuredClone(next)); return next;
+        }
+      };
+    }
     if (id.startsWith('./localDatabase')) {
       return {
         getLocalDocData: (docId) => inMemDb.get(docId) || null,
@@ -280,7 +290,7 @@ test('Base Medição e Replanejado pelo Saldo: Blindagem de medições passadas 
   assert.equal(res.sCurve.replan_accum_pcts[res.sCurve.replan_accum_pcts.length - 1], 100, 'Curva S Replanejada deve fechar em 100%');
 });
 
-test('Gestão de Versões e Linha de Base (Baseline): Snapshot, seleção e ativação', () => {
+test('Gestão de Versões e Linha de Base (Baseline): Snapshot, seleção e ativação', async () => {
   const projectId = 'test_proj_' + Date.now();
   const initialSnapshot = {
     cronogramaInicial: [{ id: 'act1', name: 'Alvenaria' }],
@@ -290,12 +300,12 @@ test('Gestão de Versões e Linha de Base (Baseline): Snapshot, seleção e ativ
   };
 
   // Inicializa
-  const initialList = loadScheduleVersions(projectId, initialSnapshot);
+  const initialList = await loadScheduleVersions(projectId, initialSnapshot);
   assert.equal(initialList.length, 1);
   assert.equal(initialList[0].isBaseline, true);
 
   // Cria nova versão de reprogramação
-  const { versions, created } = createNewScheduleVersion(
+  const { versions, created } = await createNewScheduleVersion(
     projectId,
     'Revisão 01 - Acelerada',
     'Simulação com 2 equipes a mais',
@@ -312,17 +322,17 @@ test('Gestão de Versões e Linha de Base (Baseline): Snapshot, seleção e ativ
   assert.equal(created.isActive, true);
 
   // Baseline original permanece a inicial
-  const baseline = getBaselineVersion(projectId);
+  const baseline = await getBaselineVersion(projectId);
   assert.ok(baseline);
   assert.equal(baseline.id, initialList[0].id);
 
   // Altera a linha de base para a nova versão criada
-  const updatedWithNewBaseline = setVersionAsBaseline(projectId, created.id);
+  const updatedWithNewBaseline = await setVersionAsBaseline(projectId, created.id);
   assert.equal(updatedWithNewBaseline.find((v) => v.id === created.id).isBaseline, true);
   assert.equal(updatedWithNewBaseline.find((v) => v.id === initialList[0].id).isBaseline, false);
 });
 
-test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e Exclusão Segura', () => {
+test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e Exclusão Segura', async () => {
   const projectId = 'test_types_' + Date.now();
   const baseSnap = {
     cronogramaInicial: [{ id: 'act1', name: 'Alvenaria Oficial' }],
@@ -330,10 +340,10 @@ test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e 
     allFloorsData: {},
   };
 
-  loadScheduleVersions(projectId, baseSnap);
+  await loadScheduleVersions(projectId, baseSnap);
 
   // 1. Cria Cenário (Simulação)
-  const { created: scenario } = createNewScheduleVersion(
+  const { created: scenario } = await createNewScheduleVersion(
     projectId,
     'Cenário 01 - Teste Turno Noturno',
     'Simulação com turno estendido',
@@ -347,7 +357,7 @@ test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e 
   assert.equal(scenario.isActive, true);
 
   // 2. Cria Backup de Segurança
-  const { created: backup } = createNewScheduleVersion(
+  const { created: backup } = await createNewScheduleVersion(
     projectId,
     'Backup Pré-Revisão',
     'Segurança antes de alterações',
@@ -359,7 +369,7 @@ test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e 
   assert.equal(backup.author, 'Coordenador');
 
   // 3. Cria Cronograma Meta
-  const { created: meta } = createNewScheduleVersion(
+  const { created: meta } = await createNewScheduleVersion(
     projectId,
     'Meta Interna Acelerada',
     'Ritmo agressivo',
@@ -370,7 +380,7 @@ test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e 
   assert.equal(meta.type, 'meta');
 
   // 4. Promove Cenário a Previsto Oficial
-  const { versions: afterPromotion, active: official } = promoteScenarioToOfficial(projectId, scenario.id);
+  const { versions: afterPromotion, active: official } = await promoteScenarioToOfficial(projectId, scenario.id);
   assert.ok(official);
   assert.equal(official.type, 'forecast');
   assert.equal(official.isActive, true);
@@ -378,11 +388,19 @@ test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e 
   assert.ok(afterPromotion.find((v) => v.id === official.id));
 
   // 5. Exclusão Segura: Não permite excluir a baseline oficial
-  const baseVer = getBaselineVersion(projectId);
-  const afterTryDeleteBase = deleteScheduleVersion(projectId, baseVer.id);
+  const baseVer = await getBaselineVersion(projectId);
+  const afterTryDeleteBase = await deleteScheduleVersion(projectId, baseVer.id);
   assert.ok(afterTryDeleteBase.find((v) => v.id === baseVer.id), 'Baseline oficial deve estar protegida contra exclusão');
 
   // 6. Exclusão de versão não-baseline é permitida
-  const afterDeleteBackup = deleteScheduleVersion(projectId, backup.id);
+  const afterDeleteBackup = await deleteScheduleVersion(projectId, backup.id);
   assert.equal(afterDeleteBackup.find((v) => v.id === backup.id), undefined, 'Backup excluído não deve estar na lista');
+});
+
+test('primeira importação cria uma versão sem duplicar o mesmo cronograma como baseline',async()=>{
+  const snapshot={cronogramaInicial:[{id:'1',service:'Concretagem'}],floors:['Térreo'],allFloorsData:{}};
+  const result=await createNewScheduleVersion('first_import','Importação','',false,snapshot);
+  assert.equal(result.versions.length,1);
+  assert.deepEqual(result.created.snapshot.cronogramaInicial,snapshot.cronogramaInicial);
+  assert.equal((await loadScheduleVersions('first_import')).length,1);
 });

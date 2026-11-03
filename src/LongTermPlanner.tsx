@@ -1,3 +1,4 @@
+import { useScheduleVersionHistory } from './useScheduleVersionHistory';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import type {
@@ -43,13 +44,11 @@ import { CompetenceCashViews } from './CompetenceCashViews';
 import { runPhysicalFinancialCalculation } from './physicalFinancialEngine';
 import { MacroflowCanvasView } from './MacroflowCanvasView';
 import {
-  loadScheduleVersions,
   createNewScheduleVersion,
   setVersionAsBaseline,
   activateScheduleVersion,
   deleteScheduleVersion,
   promoteScenarioToOfficial,
-  getBaselineVersion,
   type ScheduleVersion,
   type ScheduleVersionType,
 } from './scheduleVersions';
@@ -142,16 +141,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   const setSubView = setInternalSubView;
 
   // Gestão de Versões de Cronograma e Linha de Base (Baseline)
-  const [scheduleVersions, setScheduleVersions] = useState<ScheduleVersion[]>(() =>
-    loadScheduleVersions(selectedProjectId || 'global', {
-      cronogramaInicial,
-      floors,
-      allFloorsData,
-      weights,
-      teams,
-      matrices,
-    })
-  );
+  const {versions:scheduleVersions,setVersions:setScheduleVersions,busy:versionsBusy,error:versionsError,run:runVersions} = useScheduleVersionHistory(selectedProjectId || 'global',{cronogramaInicial,floors,allFloorsData,weights,teams,matrices});
   const [showGhostBaseline, setShowGhostBaseline] = useState<boolean>(() => {
     try {
       return localStorage.getItem(`curtoprazo_lob_ghost_${selectedProjectId || 'global'}`) === 'true';
@@ -167,19 +157,6 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   const [isVersionDrawerOpen, setIsVersionDrawerOpen] = useState(false);
   const [versionSearchQuery, setVersionSearchQuery] = useState('');
   const [isMacroflowModalOpen, setIsMacroflowModalOpen] = useState(false);
-
-  useEffect(() => {
-    setScheduleVersions(
-      loadScheduleVersions(selectedProjectId || 'global', {
-        cronogramaInicial,
-        floors,
-        allFloorsData,
-        weights,
-        teams,
-        matrices,
-      })
-    );
-  }, [selectedProjectId]);
 
   const currentBaseline = useMemo(() => {
     return scheduleVersions.find((v) => v.isBaseline) || scheduleVersions[0] || null;
@@ -206,85 +183,95 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   }, [currentBaseline]);
 
   const handleSwitchScheduleVersion = async (versionId: string) => {
-    const { versions: updated, active } = activateScheduleVersion(selectedProjectId || 'global', versionId);
-    setScheduleVersions(updated);
-    if (active && active.snapshot) {
-      const snap = active.snapshot;
-      const compiled = compileLobToCronograma(
-        hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
-        snap.allFloorsData,
-        snap.weights || weights,
-        snap.teams || teams,
-        snap.matrices || matrices
-      );
-      await onApplySchedule(compiled, `Versão "${active.name}" ativada no cronograma!`);
-    }
-  };
-
-  const handleMarkAsBaseline = (versionId: string) => {
-    const updated = setVersionAsBaseline(selectedProjectId || 'global', versionId);
-    setScheduleVersions(updated);
-  };
-
-  const handleCreateNewVersion = (typeOverride?: ScheduleVersionType) => {
-    const chosenType = typeOverride || verTypeInput;
-    const isBaseline = chosenType === 'baseline' || verIsBaselineCheck;
-    const fallbackTitle =
-      chosenType === 'baseline'
-        ? `Linha de Base 0${scheduleVersions.filter((v) => v.isBaseline).length + 1}`
-        : chosenType === 'scenario'
-        ? `Cenário Simulação 0${scheduleVersions.filter((v) => v.type === 'scenario').length + 1}`
-        : chosenType === 'meta'
-        ? `Cronograma Meta 0${scheduleVersions.filter((v) => v.type === 'meta').length + 1}`
-        : chosenType === 'backup'
-        ? `Backup de Segurança ${new Date().toLocaleDateString('pt-BR')}`
-        : `Revisão 0${scheduleVersions.length + 1}`;
-
-    const { versions: updated } = createNewScheduleVersion(
-      selectedProjectId || 'global',
-      verNameInput || fallbackTitle,
-      verDescInput,
-      isBaseline,
-      {
-        cronogramaInicial,
-        floors,
-        allFloorsData,
-        weights,
-        teams,
-        matrices,
-      },
-      {
-        type: chosenType,
-        author: verAuthorInput || 'Engenharia / Planejamento',
+    await runVersions(async () => {
+      const { versions: updated, active } = await activateScheduleVersion(selectedProjectId || 'global', versionId);
+      setScheduleVersions(updated);
+      if (active && active.snapshot) {
+        const snap = active.snapshot;
+        const compiled = compileLobToCronograma(
+          hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
+          snap.allFloorsData,
+          snap.weights || weights,
+          snap.teams || teams,
+          snap.matrices || matrices
+        );
+        await onApplySchedule(compiled, `Versão "${active.name}" ativada no cronograma!`);
       }
-    );
-    setScheduleVersions(updated);
-    setIsVersionModalOpen(false);
-    setVerNameInput('');
-    setVerDescInput('');
-    setVerIsBaselineCheck(false);
-    setVerTypeInput('forecast');
+    });
+  };
+
+  const handleMarkAsBaseline = async (versionId: string) => {
+    await runVersions(async () => {
+      const updated = await setVersionAsBaseline(selectedProjectId || 'global', versionId);
+      setScheduleVersions(updated);
+    });
+  };
+
+  const handleCreateNewVersion = async (typeOverride?: ScheduleVersionType) => {
+    await runVersions(async () => {
+      const chosenType = typeOverride || verTypeInput;
+      const isBaseline = chosenType === 'baseline' || verIsBaselineCheck;
+      const fallbackTitle =
+        chosenType === 'baseline'
+          ? `Linha de Base 0${scheduleVersions.filter((v) => v.isBaseline).length + 1}`
+          : chosenType === 'scenario'
+          ? `Cenário Simulação 0${scheduleVersions.filter((v) => v.type === 'scenario').length + 1}`
+          : chosenType === 'meta'
+          ? `Cronograma Meta 0${scheduleVersions.filter((v) => v.type === 'meta').length + 1}`
+          : chosenType === 'backup'
+          ? `Backup de Segurança ${new Date().toLocaleDateString('pt-BR')}`
+          : `Revisão 0${scheduleVersions.length + 1}`;
+
+      const { versions: updated } = await createNewScheduleVersion(
+        selectedProjectId || 'global',
+        verNameInput || fallbackTitle,
+        verDescInput,
+        isBaseline,
+        {
+          cronogramaInicial,
+          floors,
+          allFloorsData,
+          weights,
+          teams,
+          matrices,
+        },
+        {
+          type: chosenType,
+          author: verAuthorInput || 'Engenharia / Planejamento',
+        }
+      );
+      setScheduleVersions(updated);
+      setIsVersionModalOpen(false);
+      setVerNameInput('');
+      setVerDescInput('');
+      setVerIsBaselineCheck(false);
+      setVerTypeInput('forecast');
+    });
   };
 
   const handlePromoteScenario = async (scenarioId: string) => {
-    const { versions: updated, active } = promoteScenarioToOfficial(selectedProjectId || 'global', scenarioId);
-    setScheduleVersions(updated);
-    if (active && active.snapshot) {
-      const snap = active.snapshot;
-      const compiled = compileLobToCronograma(
-        hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
-        snap.allFloorsData,
-        snap.weights || weights,
-        snap.teams || teams,
-        snap.matrices || matrices
-      );
-      await onApplySchedule(compiled, `Cenário promovido a Previsto Oficial com sucesso!`);
-    }
+    await runVersions(async () => {
+      const { versions: updated, active } = await promoteScenarioToOfficial(selectedProjectId || 'global', scenarioId);
+      setScheduleVersions(updated);
+      if (active && active.snapshot) {
+        const snap = active.snapshot;
+        const compiled = compileLobToCronograma(
+          hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
+          snap.allFloorsData,
+          snap.weights || weights,
+          snap.teams || teams,
+          snap.matrices || matrices
+        );
+        await onApplySchedule(compiled, `Cenário promovido a Previsto Oficial com sucesso!`);
+      }
+    });
   };
 
-  const handleDeleteScheduleVersion = (versionId: string) => {
-    const updated = deleteScheduleVersion(selectedProjectId || 'global', versionId);
-    setScheduleVersions(updated);
+  const handleDeleteScheduleVersion = async (versionId: string) => {
+    await runVersions(async () => {
+      const updated = await deleteScheduleVersion(selectedProjectId || 'global', versionId);
+      setScheduleVersions(updated);
+    });
   };
 
   // Estado local da Linha de Balanço hidratado a partir do projeto ativo
@@ -1752,6 +1739,8 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
 
   return (
     <div className="space-y-4">
+      {versionsBusy && <p role="status" className="text-sm text-slate-600">Processando histórico de versões…</p>}
+      {versionsError && !isVersionModalOpen && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{versionsError}</p>}
       {/* BARRA SUPERIOR: Seletor de Visão + KPIs do Longo Prazo + Sincronização */}
       <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-md border border-slate-200 flex flex-col gap-4">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -6413,6 +6402,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       {isVersionModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+            {versionsError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{versionsError}</p>}
             <div className="flex items-center justify-between border-b pb-3">
               <h3 className="font-black text-slate-900 text-sm uppercase tracking-wider flex items-center gap-1.5">
                 <span>💾</span> Salvar Versão / Cenário do Cronograma
@@ -6518,6 +6508,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
               </button>
               <button
                 type="button"
+                disabled={versionsBusy}
                 onClick={() => handleCreateNewVersion()}
                 className="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs shadow-md transition"
               >

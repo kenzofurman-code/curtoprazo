@@ -1,3 +1,4 @@
+import { useScheduleVersionHistory } from './useScheduleVersionHistory';
 import React, { useState, useMemo, useEffect } from 'react';
 import type { BudgetItem } from './budgetLinking';
 import {
@@ -8,7 +9,6 @@ import {
   type MeasurementCycle,
 } from './physicalFinancialEngine';
 import {
-  loadScheduleVersions,
   createNewScheduleVersion,
   setVersionAsBaseline,
   activateScheduleVersion,
@@ -67,18 +67,11 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
   const [isApplyingMedicao, setIsApplyingMedicao] = useState<boolean>(false);
 
   // Versões de Cronograma e Linha de Base
-  const [versions, setVersions] = useState<ScheduleVersion[]>(() =>
-    loadScheduleVersions(projectId, currentSnapshot)
-  );
+  const {versions,setVersions,busy:versionsBusy,error:versionsError,run:runVersions} = useScheduleVersionHistory(projectId,currentSnapshot);
   const [isNewVersionModalOpen, setIsNewVersionModalOpen] = useState<boolean>(false);
   const [newVersionName, setNewVersionName] = useState<string>('');
   const [newVersionDesc, setNewVersionDesc] = useState<string>('');
   const [newVersionIsBaseline, setNewVersionIsBaseline] = useState<boolean>(false);
-
-  // Carrega versões ao mudar projeto
-  useEffect(() => {
-    setVersions(loadScheduleVersions(projectId, currentSnapshot));
-  }, [projectId]);
 
   const activeVersion = useMemo(() => {
     return versions.find((v) => v.isActive) || versions[0] || null;
@@ -185,33 +178,39 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
   }, [activeTab, calcResult]);
 
   // Criação de nova versão
-  const handleCreateVersion = () => {
-    if (!currentSnapshot) return;
-    const { versions: updated } = createNewScheduleVersion(
-      projectId,
-      newVersionName || `Versão ${versions.length + 1}`,
-      newVersionDesc,
-      newVersionIsBaseline,
-      currentSnapshot
-    );
-    setVersions(updated);
-    setIsNewVersionModalOpen(false);
-    setNewVersionName('');
-    setNewVersionDesc('');
-    setNewVersionIsBaseline(false);
+  const handleCreateVersion = async () => {
+    await runVersions(async () => {
+      if (!currentSnapshot) return;
+      const { versions: updated } = await createNewScheduleVersion(
+        projectId,
+        newVersionName || `Versão ${versions.length + 1}`,
+        newVersionDesc,
+        newVersionIsBaseline,
+        currentSnapshot
+      );
+      setVersions(updated);
+      setIsNewVersionModalOpen(false);
+      setNewVersionName('');
+      setNewVersionDesc('');
+      setNewVersionIsBaseline(false);
+    });
   };
 
-  const handleSetBaseline = (versionId: string) => {
-    const updated = setVersionAsBaseline(projectId, versionId);
-    setVersions(updated);
+  const handleSetBaseline = async (versionId: string) => {
+    await runVersions(async () => {
+      const updated = await setVersionAsBaseline(projectId, versionId);
+      setVersions(updated);
+    });
   };
 
   const handleActivateVersion = async (versionId: string) => {
-    const { versions: updated, active } = activateScheduleVersion(projectId, versionId);
-    setVersions(updated);
-    if (active && onApplyScheduleVersion && active.snapshot) {
-      await onApplyScheduleVersion(active.snapshot);
-    }
+    await runVersions(async () => {
+      const { versions: updated, active } = await activateScheduleVersion(projectId, versionId);
+      setVersions(updated);
+      if (active && onApplyScheduleVersion && active.snapshot) {
+        await onApplyScheduleVersion(active.snapshot);
+      }
+    });
   };
 
   const handleMedicaoChange = (code: string, medNum: number, value: number) => {
@@ -225,6 +224,8 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
 
   return (
     <div className="bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden flex flex-col min-h-[750px] animate-in fade-in duration-200">
+      {versionsBusy && <p role="status" className="p-3 text-sm text-slate-600">Processando histórico de versões…</p>}
+      {versionsError && !isNewVersionModalOpen && <p role="alert" className="bg-red-50 p-3 text-sm text-red-800">{versionsError}</p>}
       {/* =====================================================================
           HEADER PRINCIPAL COM NAVEGAÇÃO DE SUB-ABAS E BARRA DE VERSÕES
          ===================================================================== */}
@@ -1006,6 +1007,7 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
       {isNewVersionModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+            {versionsError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{versionsError}</p>}
             <div className="flex items-center justify-between border-b pb-3">
               <h3 className="font-black text-slate-900 text-sm uppercase tracking-wider flex items-center gap-1.5">
                 <span>💾</span> Congelar Nova Versão do Cronograma
@@ -1065,6 +1067,7 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
                 Cancelar
               </button>
               <button
+                disabled={versionsBusy}
                 onClick={handleCreateVersion}
                 className="px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs shadow-md transition"
               >
