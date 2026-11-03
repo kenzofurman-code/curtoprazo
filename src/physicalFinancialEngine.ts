@@ -312,6 +312,7 @@ export function compareWbsCodes(aCode: string, bCode: string): number {
 // -------------------------------------------------------------
 
 export interface RunPhysicalFinancialParams {
+  projectName?: string;
   budgetItems: BudgetItem[];
   scheduleTasks: any[]; // LobActivity[] ou cronogramaInicial[]
   cycleStartDay?: number;
@@ -357,8 +358,8 @@ export function runPhysicalFinancialCalculation(
   // Define datas limites da obra
   allTaskStarts.sort();
   allTaskEnds.sort();
-  const projStart = allTaskStarts[0] || '2025-01-01';
-  const projEnd = allTaskEnds[allTaskEnds.length - 1] || '2027-12-31';
+  const projStart = allTaskStarts[0] || formatISODate(new Date());
+  const projEnd = allTaskEnds[allTaskEnds.length - 1] || projStart;
 
   // 2. Gerar ciclos de medição
   const cycles = generateCycles(
@@ -382,7 +383,7 @@ export function runPhysicalFinancialCalculation(
     if (b.level === 1 && b.totalCost > 0) rootBudget = b.totalCost;
     if (b.level === 5) sumL5Budget += b.totalCost;
   }
-  const totalProjBudget = rootBudget > 0 ? rootBudget : (sumL5Budget > 0 ? sumL5Budget : 1.0);
+  const totalProjBudget = rootBudget > 0 ? rootBudget : Math.max(0, sumL5Budget);
 
   // 4. DISTRIBUIÇÃO (NÍVEL 6 & PESOS)
   const tabDistribuicao: PhysicalFinancialRow[] = [];
@@ -459,7 +460,7 @@ export function runPhysicalFinancialCalculation(
         l5CycleVals[String(cy.num)] = (l5CycleVals[String(cy.num)] || 0) + cyVal;
 
         tCyclePctsService[String(cy.num)] = allocatedVal > 0 ? (cyVal / allocatedVal) * 100 : 0;
-        tCyclePctsObra[String(cy.num)] = totalProjBudget > 0 ? (cyVal / totalProjBudget) * 100 : 0;
+        tCyclePctsObra[String(cy.num)] = totalProjBudget > 0 ? (cyVal / (totalProjBudget || 1)) * 100 : 0;
       }
 
       const tTotal = Object.values(tCycleVals).reduce((a, b) => a + b, 0);
@@ -473,7 +474,7 @@ export function runPhysicalFinancialCalculation(
         weight_pct: Math.round(weightPct * 100) / 100,
         allocated_val: Math.round(allocatedVal * 100) / 100,
         budget: allocatedVal,
-        budget_pct: totalProjBudget > 0 ? (allocatedVal / totalProjBudget) * 100 : 0,
+        budget_pct: totalProjBudget > 0 ? (allocatedVal / (totalProjBudget || 1)) * 100 : 0,
         cycle_vals: tCycleVals,
         cycle_pcts: tCyclePctsObra,
         cycle_pcts_service: tCyclePctsService,
@@ -481,7 +482,7 @@ export function runPhysicalFinancialCalculation(
         total: Math.round(tTotal * 100) / 100,
         total_pct: allocatedVal > 0 ? (tTotal / allocatedVal) * 100 : 0,
         total_pct_service: allocatedVal > 0 ? (tTotal / allocatedVal) * 100 : 0,
-        total_pct_obra: totalProjBudget > 0 ? (tTotal / totalProjBudget) * 100 : 0,
+        total_pct_obra: totalProjBudget > 0 ? (tTotal / (totalProjBudget || 1)) * 100 : 0,
       });
     });
 
@@ -493,7 +494,7 @@ export function runPhysicalFinancialCalculation(
     for (const cy of cycles) {
       const v = l5CycleVals[String(cy.num)] || 0;
       l5CyclePctsService[String(cy.num)] = bVal > 0 ? (v / bVal) * 100 : 0;
-      l5CyclePctsObra[String(cy.num)] = totalProjBudget > 0 ? (v / totalProjBudget) * 100 : 0;
+      l5CyclePctsObra[String(cy.num)] = totalProjBudget > 0 ? (v / (totalProjBudget || 1)) * 100 : 0;
     }
 
     tabDistribuicao.push({
@@ -505,7 +506,7 @@ export function runPhysicalFinancialCalculation(
       weight_pct: 100,
       allocated_val: bVal,
       budget: bVal,
-      budget_pct: totalProjBudget > 0 ? (bVal / totalProjBudget) * 100 : 0,
+      budget_pct: totalProjBudget > 0 ? (bVal / (totalProjBudget || 1)) * 100 : 0,
       cycle_vals: l5CycleVals,
       cycle_pcts: l5CyclePctsObra,
       cycle_pcts_service: l5CyclePctsService,
@@ -513,7 +514,7 @@ export function runPhysicalFinancialCalculation(
       total: Math.round(l5Total * 100) / 100,
       total_pct: bVal > 0 ? (l5Total / bVal) * 100 : 0,
       total_pct_service: bVal > 0 ? (l5Total / bVal) * 100 : 0,
-      total_pct_obra: totalProjBudget > 0 ? (l5Total / totalProjBudget) * 100 : 0,
+      total_pct_obra: totalProjBudget > 0 ? (l5Total / (totalProjBudget || 1)) * 100 : 0,
     });
 
     tabDistribuicao.push(...childRows);
@@ -533,7 +534,7 @@ export function runPhysicalFinancialCalculation(
       parent_code: item.parentId,
       description: item.name,
       budget: b,
-      budget_pct: totalProjBudget > 0 ? (b / totalProjBudget) * 100 : 0,
+      budget_pct: totalProjBudget > 0 ? (b / (totalProjBudget || 1)) * 100 : 0,
       cycle_vals: initialCycles,
       total: 0,
       total_pct: 0,
@@ -560,7 +561,7 @@ export function runPhysicalFinancialCalculation(
       if (children.length > 0) {
         if (p.budget <= 0) {
           p.budget = children.reduce((acc, c) => acc + c.budget, 0);
-          p.budget_pct = totalProjBudget > 0 ? (p.budget / totalProjBudget) * 100 : 0;
+          p.budget_pct = totalProjBudget > 0 ? (p.budget / (totalProjBudget || 1)) * 100 : 0;
         }
 
         for (const cy of cycles) {
@@ -581,10 +582,10 @@ export function runPhysicalFinancialCalculation(
     for (const cy of cycles) {
       const v = cVals[String(cy.num)] || 0;
       rowTot += v;
-      cPcts[String(cy.num)] = totalProjBudget > 0 ? (v / totalProjBudget) * 100 : 0;
+      cPcts[String(cy.num)] = totalProjBudget > 0 ? (v / (totalProjBudget || 1)) * 100 : 0;
     }
     node.total = Math.round(rowTot * 100) / 100;
-    node.total_pct = totalProjBudget > 0 ? (rowTot / totalProjBudget) * 100 : 0;
+    node.total_pct = totalProjBudget > 0 ? (rowTot / (totalProjBudget || 1)) * 100 : 0;
     node.cycle_pcts = cPcts;
     tabFisicoFinanceiro.push(node);
   }
@@ -867,10 +868,10 @@ export function runPhysicalFinancialCalculation(
           parent_code: code,
           description: vt.name,
           budget: taskSaldo,
-          budget_pct: totalProjBudget > 0 ? (taskSaldo / totalProjBudget) * 100 : 0,
+          budget_pct: totalProjBudget > 0 ? (taskSaldo / (totalProjBudget || 1)) * 100 : 0,
           saldo: Math.round(taskSaldo * 100) / 100,
           saldo_pct: bVal > 0 ? (taskSaldo / bVal) * 100 : 0,
-          saldo_pct_obra: totalProjBudget > 0 ? (taskSaldo / totalProjBudget) * 100 : 0,
+          saldo_pct_obra: totalProjBudget > 0 ? (taskSaldo / (totalProjBudget || 1)) * 100 : 0,
           duration: vt.weight,
           weight_pct: Math.round(wPct * 100) / 100,
           allocated_val: Math.round(taskSaldo * 100) / 100,
@@ -879,12 +880,12 @@ export function runPhysicalFinancialCalculation(
             cycles.map((cy) => [String(cy.num), bVal > 0 ? (tRepCycles[String(cy.num)] / bVal) * 100 : 0])
           ),
           cycle_pcts_obra: Object.fromEntries(
-            cycles.map((cy) => [String(cy.num), totalProjBudget > 0 ? (tRepCycles[String(cy.num)] / totalProjBudget) * 100 : 0])
+            cycles.map((cy) => [String(cy.num), totalProjBudget > 0 ? (tRepCycles[String(cy.num)] / (totalProjBudget || 1)) * 100 : 0])
           ),
           total: Math.round(tSum * 100) / 100,
           total_pct: bVal > 0 ? (tSum / bVal) * 100 : 0,
           total_pct_service: bVal > 0 ? (tSum / bVal) * 100 : 0,
-          total_pct_obra: totalProjBudget > 0 ? (tSum / totalProjBudget) * 100 : 0,
+          total_pct_obra: totalProjBudget > 0 ? (tSum / (totalProjBudget || 1)) * 100 : 0,
         });
       });
     } else if (saldo > 0 && futureCycles.length > 0) {
@@ -906,12 +907,12 @@ export function runPhysicalFinancialCalculation(
       parent_code: item.parentId,
       description: item.name,
       budget: bVal,
-      budget_pct: totalProjBudget > 0 ? (bVal / totalProjBudget) * 100 : 0,
+      budget_pct: totalProjBudget > 0 ? (bVal / (totalProjBudget || 1)) * 100 : 0,
       med_val: Math.round(medVal * 100) / 100,
       med_pct: Math.round(medPct * 10000) / 100,
       saldo: Math.round(saldo * 100) / 100,
       saldo_pct: bVal > 0 ? Math.round((saldo / bVal) * 10000) / 100 : 0,
-      saldo_pct_obra: totalProjBudget > 0 ? Math.round((saldo / totalProjBudget) * 10000) / 100 : 0,
+      saldo_pct_obra: totalProjBudget > 0 ? Math.round((saldo / (totalProjBudget || 1)) * 10000) / 100 : 0,
       weight_pct: 100,
       allocated_val: saldo,
       cycle_vals: l5Cycles,
@@ -919,12 +920,12 @@ export function runPhysicalFinancialCalculation(
         cycles.map((cy) => [String(cy.num), bVal > 0 ? (l5Cycles[String(cy.num)] / bVal) * 100 : 0])
       ),
       cycle_pcts_obra: Object.fromEntries(
-        cycles.map((cy) => [String(cy.num), totalProjBudget > 0 ? (l5Cycles[String(cy.num)] / totalProjBudget) * 100 : 0])
+        cycles.map((cy) => [String(cy.num), totalProjBudget > 0 ? (l5Cycles[String(cy.num)] / (totalProjBudget || 1)) * 100 : 0])
       ),
       total: Math.round(l5Tot * 100) / 100,
       total_pct: bVal > 0 ? (l5Tot / bVal) * 100 : 0,
       total_pct_service: bVal > 0 ? (l5Tot / bVal) * 100 : 0,
-      total_pct_obra: totalProjBudget > 0 ? (l5Tot / totalProjBudget) * 100 : 0,
+      total_pct_obra: totalProjBudget > 0 ? (l5Tot / (totalProjBudget || 1)) * 100 : 0,
     });
 
     tabReplanejado.push(...childReplanRows);
@@ -944,7 +945,7 @@ export function runPhysicalFinancialCalculation(
       parent_code: item.parentId,
       description: item.name,
       budget: b,
-      budget_pct: totalProjBudget > 0 ? (b / totalProjBudget) * 100 : 0,
+      budget_pct: totalProjBudget > 0 ? (b / (totalProjBudget || 1)) * 100 : 0,
       med_val: 0,
       med_pct: 0,
       saldo: b,
@@ -978,7 +979,7 @@ export function runPhysicalFinancialCalculation(
       if (children.length > 0) {
         if (p.budget <= 0) {
           p.budget = children.reduce((acc, c) => acc + c.budget, 0);
-          p.budget_pct = totalProjBudget > 0 ? (p.budget / totalProjBudget) * 100 : 0;
+          p.budget_pct = totalProjBudget > 0 ? (p.budget / (totalProjBudget || 1)) * 100 : 0;
         }
         p.med_val = children.reduce((acc, c) => acc + (c.med_val || 0), 0);
         p.med_pct = p.budget > 0 ? (p.med_val / p.budget) * 100 : 0;
@@ -1001,10 +1002,10 @@ export function runPhysicalFinancialCalculation(
     for (const cy of cycles) {
       const v = cVals[String(cy.num)] || 0;
       rowTot += v;
-      cPcts[String(cy.num)] = totalProjBudget > 0 ? (v / totalProjBudget) * 100 : 0;
+      cPcts[String(cy.num)] = totalProjBudget > 0 ? (v / (totalProjBudget || 1)) * 100 : 0;
     }
     node.total = Math.round(rowTot * 100) / 100;
-    node.total_pct = totalProjBudget > 0 ? (rowTot / totalProjBudget) * 100 : 0;
+    node.total_pct = totalProjBudget > 0 ? (rowTot / (totalProjBudget || 1)) * 100 : 0;
     node.cycle_pcts = cPcts;
     tabFfReplanejado.push(node);
   }
@@ -1021,7 +1022,7 @@ export function runPhysicalFinancialCalculation(
   for (const cy of cycles) {
     const v = rootBaseline?.cycle_vals[String(cy.num)] || 0;
     bRun += v;
-    baselineAccumPcts.push(Math.round(Math.min(100, (bRun / totalProjBudget) * 100) * 100) / 100);
+    baselineAccumPcts.push(Math.round(Math.min(100, (bRun / (totalProjBudget || 1)) * 100) * 100) / 100);
   }
 
   // Curva Replanejada Mensal e Acumulada
@@ -1034,9 +1035,9 @@ export function runPhysicalFinancialCalculation(
     const v = rootReplan?.cycle_vals[String(cy.num)] || 0;
     rRun += v;
     replanMonthVals.push(Math.round(v * 100) / 100);
-    replanMonthPcts.push(Math.round((v / totalProjBudget) * 10000) / 100);
+    replanMonthPcts.push(Math.round((v / (totalProjBudget || 1)) * 10000) / 100);
     replanAccumVals.push(Math.round(rRun * 100) / 100);
-    replanAccumPcts.push(Math.round(Math.min(100, (rRun / totalProjBudget) * 100) * 100) / 100);
+    replanAccumPcts.push(Math.round(Math.min(100, (rRun / (totalProjBudget || 1)) * 100) * 100) / 100);
   }
 
   // Curva Realizada (Medições passadas até o corte)
@@ -1048,7 +1049,7 @@ export function runPhysicalFinancialCalculation(
       const v = rootReplan?.cycle_vals[String(cy.num)] || 0;
       mRun += v;
       realizedMonthVals.push(Math.round(v * 100) / 100);
-      realizedAccumPcts.push(Math.round(Math.min(100, (mRun / totalProjBudget) * 100) * 100) / 100);
+      realizedAccumPcts.push(Math.round(Math.min(100, (mRun / (totalProjBudget || 1)) * 100) * 100) / 100);
     } else {
       realizedMonthVals.push(null);
       realizedAccumPcts.push(null);
@@ -1067,12 +1068,12 @@ export function runPhysicalFinancialCalculation(
   };
 
   return {
-    projectName: 'Piemonte Qoya Residence',
+    projectName: params.projectName || '',
     totalBudget: Math.round(totalProjBudget * 100) / 100,
     totalMeasured: Math.round(totalMeasuredL5 * 100) / 100,
-    totalMeasuredPct: Math.round((totalMeasuredL5 / totalProjBudget) * 10000) / 100,
+    totalMeasuredPct: Math.round((totalMeasuredL5 / (totalProjBudget || 1)) * 10000) / 100,
     totalBalance: Math.round(totalBalanceL5 * 100) / 100,
-    totalBalancePct: Math.round((totalBalanceL5 / totalProjBudget) * 10000) / 100,
+    totalBalancePct: Math.round((totalBalanceL5 / (totalProjBudget || 1)) * 10000) / 100,
     cutoffMedNum,
     cutoffDate,
     cycleConfig: {

@@ -16,6 +16,7 @@ import {
 } from './scheduleVersions';
 
 interface PhysicalFinancialViewsProps {
+  projectName?: string;
   projectId: string;
   budgetItems: BudgetItem[];
   scheduleTasks: any[];
@@ -42,6 +43,7 @@ function formatPercent(val?: number, decimals = 2): string {
 }
 
 export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
+  projectName = '',
   projectId,
   budgetItems,
   scheduleTasks,
@@ -89,6 +91,7 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
   // Executa o motor central de cálculo com os parâmetros ativos
   const calcResult: PhysicalFinancialCalculationResult = useMemo(() => {
     return runPhysicalFinancialCalculation({
+      projectName,
       budgetItems,
       scheduleTasks,
       cycleStartDay,
@@ -96,7 +99,7 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
       cutoffMedNum,
       customMeasurementsMonthly: customMonthlyMeasurements,
     });
-  }, [budgetItems, scheduleTasks, cycleStartDay, cutoffMedNum, customMonthlyMeasurements]);
+  }, [projectName, budgetItems, scheduleTasks, cycleStartDay, cutoffMedNum, customMonthlyMeasurements]);
 
   // Alterna expansão de item Nível 5
   const toggleExpand = (code: string) => {

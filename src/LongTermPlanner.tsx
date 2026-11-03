@@ -55,6 +55,7 @@ import {
 } from './scheduleVersions';
 
 interface LongTermPlannerProps {
+  projectName?: string;
   selectedProjectId: string | null;
   cronogramaInicial: any[];
   floors: string[];
@@ -116,6 +117,7 @@ function formatLobDateRange(startStr?: string, endStr?: string): string {
 }
 
 export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
+  projectName = '',
   selectedProjectId,
   cronogramaInicial,
   floors,
@@ -2987,6 +2989,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
          ===================================================================== */}
       {subView === 'physical_financial' && (
         <PhysicalFinancialViews
+          projectName={projectName}
           projectId={selectedProjectId || 'global'}
           budgetItems={
             getEffectiveBudgetState(

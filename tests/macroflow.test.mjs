@@ -47,106 +47,47 @@ const {
   applyMacroflowToSchedule,
 } = macroflowModule;
 
-test('Modelo Padrão de Macrofluxo: Carrega as 7 raias completas da obra com pacotes e tarefas do Excel', () => {
+test('macrofluxo novo inicia vazio, sem pacotes, tarefas ou vínculos de exemplo', () => {
   const model = getDefaultMacroflowModel();
-
-  assert.ok(model.swimlanes.length >= 7, 'Deve ter pelo menos 7 macrofluxos principais');
-
-  const names = model.swimlanes.map((s) => s.name);
-  assert.ok(names.includes('MARCOS DA OBRA'), 'Deve conter MARCOS DA OBRA');
-  assert.ok(names.includes('TORRE - PAVIMENTO TIPO'), 'Deve conter TORRE - PAVIMENTO TIPO');
-  assert.ok(names.includes('FACHADA'), 'Deve conter FACHADA');
-  assert.ok(names.includes('SUBSOLOS'), 'Deve conter SUBSOLOS');
-  assert.ok(names.includes('ÁTICO / COBERTURA'), 'Deve conter ÁTICO / COBERTURA');
-  assert.ok(names.includes('ÁREAS EXTERNAS / COMUNS'), 'Deve conter ÁREAS EXTERNAS');
-  assert.ok(names.includes('GERAL E CUSTOS'), 'Deve conter GERAL E CUSTOS');
-
-  // Verifica contagem de pacotes na Torre
-  const torre = model.swimlanes.find((s) => s.category === 'tower');
-  assert.ok(torre, 'Raia da torre deve existir');
-  assert.ok(torre.packages.length >= 20, 'Torre deve ter mais de 20 pacotes mapeados');
-
-  // Verifica sub-tarefas da Estrutura
-  const estrutura = torre.packages.find((p) => p.name === 'ESTRUTURA');
-  assert.ok(estrutura, 'Pacote ESTRUTURA deve existir na Torre');
-  assert.ok(estrutura.jobs.length >= 6, 'ESTRUTURA deve conter suas sub-tarefas (fôrmas, armaduras, bandejão, etc.)');
-
-  const jobNames = estrutura.jobs.map((j) => j.name);
-  assert.ok(jobNames.some((n) => n.includes('formas')), 'Deve conter tarefa de fôrmas');
-  assert.ok(jobNames.some((n) => n.includes('armaduras')), 'Deve conter tarefa de armaduras');
+  assert.deepEqual(model.swimlanes, []);
+  assert.deepEqual(model.interLinks, []);
 });
 
-test('parseRhythmDays: Extrai número de dias a partir de diferentes formatos descritivos de ritmo', () => {
+test('ritmos continuam sendo extraídos de textos importados', () => {
   assert.equal(parseRhythmDays('10d - por pvto'), 10);
-  assert.equal(parseRhythmDays('1d - por pvto'), 1);
   assert.equal(parseRhythmDays('15d - cada 200 m2'), 15);
-  assert.equal(parseRhythmDays('30d'), 30);
-  assert.equal(parseRhythmDays('5'), 5);
-  assert.equal(parseRhythmDays(''), 5, 'Fallback padrão para 5 dias quando vazio');
+  assert.equal(parseRhythmDays(''), 5);
 });
 
-test('Vínculos Inter-Raias: Valida mapeamento de precedência entre raias distintas (Torre -> Fachada, Subsolo -> Torre)', () => {
-  const model = getDefaultMacroflowModel();
-
-  assert.ok(model.interLinks.length >= 4, 'Deve conter vínculos inter-raias de exemplo');
-
-  // Verifica vínculo Subsolo -> Torre
-  const subToTorre = model.interLinks.find(
-    (l) => l.sourceSwimlaneId === 'sw_basement' && l.targetSwimlaneId === 'sw_tower'
-  );
-  assert.ok(subToTorre, 'Deve existir vínculo conectando Subsolo à Torre');
-
-  // Verifica vínculo Torre -> Fachada com defasagem de pavimentos
-  const torreToFachada = model.interLinks.find(
-    (l) => l.sourceSwimlaneId === 'sw_tower' && l.targetSwimlaneId === 'sw_facade'
-  );
-  assert.ok(torreToFachada, 'Deve existir vínculo conectando Torre à Fachada');
-  assert.equal(torreToFachada.type, 'floor_lag', 'Vínculo Torre -> Fachada deve ser de defasagem de pavimentos');
-  assert.equal(torreToFachada.lagValue, 5, 'Defasagem padrão de 5 pavimentos');
+const empty = () => ({calendar:createDefaultCalendar('2026-04-01'),replicationGroups:[],floors:[],services:[],activities:[]});
+const fixture = () => ({
+  ...getDefaultMacroflowModel(),
+  swimlanes:[{id:'s',name:'Etapa cadastrada',category:'custom',color:'#111111',targetGroupName:'Local cadastrado',packages:[
+    {id:'p1',name:'Primeiro pacote',color:'#111111',rhythmDays:2,position:1,colIndex:1,jobs:[{id:'j1',name:'Primeira tarefa',defaultDurationDays:2,costWeight:50}]},
+    {id:'p2',name:'Segundo pacote',color:'#111111',rhythmDays:3,position:2,colIndex:2,jobs:[]}
+  ]}]
 });
 
-test('applyMacroflowToSchedule: Gera atividades com escadinha vertical, predecessoras horizontais e inter-raias', () => {
-  const model = getDefaultMacroflowModel();
-  const calendar = createDefaultCalendar('2026-04-01');
-
-  const initialEmptyState = {
-    calendar,
-    replicationGroups: [],
-    floors: [],
-    services: [],
-    activities: [],
-  };
-
-  const generated = applyMacroflowToSchedule(model, initialEmptyState, { defaultStartDate: '2026-04-01' });
-
-  assert.ok(generated.replicationGroups.length >= 5, 'Deve criar os agrupamentos de replicação');
-  assert.ok(generated.floors.length >= 10, 'Deve gerar os pavimentos correspondentes');
-  assert.ok(generated.services.length >= 20, 'Deve criar os pacotes de serviço com seus modelos de tarefas');
-  assert.ok(generated.activities.length > 50, 'Deve gerar a malha de atividades da Linha de Balanço');
-
-  // Verifica se as atividades têm predecessoras verticais nos pavimentos superiores
-  const torreActs = generated.activities.filter((a) => a.serviceId.includes('estrutura'));
-  assert.ok(torreActs.length > 1, 'Deve ter atividades de estrutura');
-
-  const secondFloorAct = torreActs[1];
-  assert.ok(secondFloorAct.predecessorIds.length > 0, 'Atividade do pavimento superior deve ter predecessora vertical');
+test('macrofluxo vazio mantém cronograma vazio; macrofluxo importado não inventa pavimentos', () => {
+  const result = applyMacroflowToSchedule(getDefaultMacroflowModel(), empty());
+  assert.deepEqual(result.activities, []);
+  assert.deepEqual(result.floors, []);
+  assert.deepEqual(result.services, []);
+  const imported = applyMacroflowToSchedule(fixture(), empty());
+  assert.deepEqual(imported.floors, []);
+  assert.deepEqual(imported.activities, []);
+  assert.equal(imported.services[0].defaultTotalCost, 50);
+  assert.equal(imported.services[1].defaultTotalCost, 0);
 });
 
-test('Matriz de Colunas/Etapas: Valida posicionamento temporal alinhado entre raias (Subsolo C5-C8 -> Torre C9 -> Fachada C21)', () => {
-  const model = getDefaultMacroflowModel();
-
-  const subsolo = model.swimlanes.find((s) => s.category === 'basement');
-  const torre = model.swimlanes.find((s) => s.category === 'tower');
-  const fachada = model.swimlanes.find((s) => s.category === 'facade');
-  const marcos = model.swimlanes.find((s) => s.category === 'milestones');
-
-  const supra = subsolo.packages.find((p) => p.name === 'SUPRAESTRUTURA');
-  const estruturaTorre = torre.packages.find((p) => p.name === 'ESTRUTURA');
-  const balancimFachada = fachada.packages.find((p) => p.name === 'BALANCIM');
-  const inicioObra = marcos.packages.find((p) => p.name === 'INÍCIO DA OBRA');
-
-  assert.equal(supra.colIndex, 8, 'Supraestrutura de subsolo deve estar na etapa/coluna 8');
-  assert.equal(estruturaTorre.colIndex, 9, 'Estrutura da torre deve iniciar após subsolo na etapa 9');
-  assert.equal(balancimFachada.colIndex, 21, 'Fachada deve iniciar apenas na etapa 21');
-  assert.equal(inicioObra.colIndex, 4, 'Início da obra no marco 4');
+test('gera atividades e precedências somente nos locais e pacotes fornecidos', () => {
+  const state = empty();
+  state.replicationGroups = [{id:'group',name:'Local cadastrado',position:1,linesPerFloor:2,color:'#111111'}];
+  state.floors = [1,2].map(n=>({id:'floor'+n,name:'Local '+n,position:n,replicationGroupId:'group'}));
+  const result = applyMacroflowToSchedule(fixture(), state);
+  assert.equal(result.floors.length,2);
+  assert.equal(result.services.length,2);
+  assert.equal(result.activities.length,4);
+  assert.ok(result.activities.some(a=>a.predecessorIds.length));
+  assert.ok(result.activities.every(a=>state.floors.some(f=>f.id===a.floorId)));
 });

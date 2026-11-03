@@ -66,6 +66,15 @@ const {
   runPhysicalFinancialCalculation,
 } = engineModule;
 
+test('físico-financeiro sem dados apresenta totais zero e não assume uma obra ou orçamento de exemplo', () => {
+  const result = runPhysicalFinancialCalculation({budgetItems:[],scheduleTasks:[],projectName:'Obra cadastrada'});
+  assert.equal(result.projectName,'Obra cadastrada');
+  for(const field of ['totalBudget','totalMeasured','totalMeasuredPct','totalBalance','totalBalancePct'])assert.equal(result[field],0);
+  assert.deepEqual(result.tabDistribuicao,[]);
+  assert.deepEqual(result.tabMedicao,[]);
+  assert.ok(!JSON.stringify(result).includes('Qoya'));
+});
+
 const {
   loadScheduleVersions,
   saveScheduleVersions,

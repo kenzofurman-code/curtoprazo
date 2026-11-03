@@ -4,8 +4,6 @@
  */
 
 import type { LobActivity, LobActivityJob, ScheduleFloor, ScheduleServicePackage } from './longTermSchedule';
-import qoyaBudgetJson from './data/qoya_orcamento_executivo.json';
-import qoyaLinksJson from './data/qoya_vinculos_cronograma.json';
 
 export type PonderationMode = 'equal' | 'time' | 'quantity' | 'area';
 
@@ -221,6 +219,9 @@ export function generateInitialBudgetFromSchedule(
   activities: LobActivity[],
   services: ScheduleServicePackage[]
 ): ProjectBudgetState {
+  if (!activities.length && !services.length) {
+    return { projectId, budgetName: '', totalCost: 0, items: [], lastUpdated: new Date().toISOString() };
+  }
   const serviceMap = new Map<string, ScheduleServicePackage>();
   services.forEach((s) => serviceMap.set(s.id, s));
 
@@ -661,100 +662,7 @@ export function applyImportedLinksToBudget(
 }
 
 /**
- * Retorna o orçamento executivo oficial e vínculos pré-carregados para a obra QOYA (projeto_principal).
- */
-export function getQoyaPreloadedBudgetState(
-  activities: LobActivity[],
-  floors: ScheduleFloor[],
-  services: ScheduleServicePackage[]
-): ProjectBudgetState {
-  const budgetList = qoyaBudgetJson as {
-    level: number;
-    code: string;
-    desc: string;
-    mat: number;
-    mo: number;
-    total: number;
-  }[];
-
-  const linksList = qoyaLinksJson as {
-    level: number;
-    code: string;
-    desc: string;
-    cost: number;
-    pkg: string;
-    srv: string;
-    lot: string;
-    part: string;
-    weight: number;
-  }[];
-
-  const items: BudgetItem[] = budgetList.map((b) => {
-    const dots = (b.code.match(/\./g) || []).length;
-    return {
-      id: `bgt_projeto_principal_${b.code.replace(/[^a-zA-Z0-9]/g, '_')}`,
-      eapCode: b.code,
-      name: b.desc,
-      level: b.level || dots + 1,
-      materialCost: b.mat,
-      laborCost: b.mo,
-      totalCost: b.total || (b.mat || 0) + (b.mo || 0),
-      isLeaf: true,
-      linkedScheduleIds: [],
-      weights: {},
-    };
-  });
-
-  // Identifica hierarquia de pais e filhos
-  items.forEach((item) => {
-    const isParent = items.some(
-      (other) => other.eapCode.startsWith(item.eapCode + '.') && other.eapCode !== item.eapCode
-    );
-    item.isLeaf = !isParent;
-
-    if (item.level > 1) {
-      const lastDot = item.eapCode.lastIndexOf('.');
-      if (lastDot > 0) {
-        const parentCode = item.eapCode.slice(0, lastDot);
-        const parent = items.find((p) => p.eapCode === parentCode);
-        if (parent) item.parentId = parent.id;
-      }
-    }
-  });
-
-  const baseBudget: ProjectBudgetState = {
-    projectId: 'projeto_principal',
-    budgetName: 'Orçamento Executivo Oficial - PIEMONTE QOYA',
-    totalCost: items[0]?.totalCost || 65573854.11,
-    items,
-    lastUpdated: new Date().toISOString(),
-  };
-
-  const convertedLinks: BudgetLinkingRow[] = linksList.map((l) => ({
-    level: l.level,
-    eapCode: l.code,
-    description: l.desc,
-    cost: l.cost,
-    packageName: l.pkg,
-    serviceName: l.srv,
-    lotName: l.lot,
-    partName: l.part,
-    weightPercent: l.weight,
-  }));
-
-  const { updatedBudget } = applyImportedLinksToBudget(
-    baseBudget,
-    convertedLinks,
-    activities,
-    floors,
-    services
-  );
-
-  return updatedBudget;
-}
-
-/**
- * Retorna o estado efetivo do orçamento de um projeto (localStorage, snapshot oficial QOYA ou inicial gerado).
+ * Retorna o estado efetivo do orçamento de um projeto (dados salvos ou valores derivados do cronograma real).
  */
 export function getEffectiveBudgetState(
   projectId: string,
@@ -766,19 +674,12 @@ export function getEffectiveBudgetState(
     const saved = localStorage.getItem(`curtoprazo_budget_${projectId}`);
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+      if (parsed && Array.isArray(parsed.items)) {
         return parsed;
       }
     }
   } catch (_) {}
 
-  if (projectId === 'projeto_principal') {
-    try {
-      return getQoyaPreloadedBudgetState(activities, floors, services);
-    } catch (err) {
-      console.warn('Erro ao carregar orçamento oficial QOYA:', err);
-    }
-  }
   return generateInitialBudgetFromSchedule(projectId, activities, services);
 }
 

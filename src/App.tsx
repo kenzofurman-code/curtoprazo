@@ -1,3 +1,4 @@
+import LocalDatabaseSettings from './LocalDatabaseSettings';
 import ScheduleImportPreview from './ScheduleImportPreview';
 import { SCHEDULE_FIELDS } from './scheduleImport';
 import type { ScheduleAnalysis, ScheduleSheet } from './scheduleImport';
@@ -16,12 +17,10 @@ import {
 } from 'firebase/firestore';
 import {
   isLocalDbMode,
-  setLocalDbMode,
   getLocalDocData,
   setLocalDocData,
   subscribeLocalDoc,
-  exportAllLocalData,
-  resetLocalDataToFirestoreSnapshot
+  exportAllLocalData
 } from './localDatabase';
 import { preparePayload, resolvePayload, MAX_SAVE_BYTES } from './chunkedPayload';
 import { GENERAL_DELAY_REASONS, DELAY_REASON_REGISTRY_ID, normalizeDelayReason, mergeDelayReasons, projectOnlyDelayReasons, normalizeDelayReasonFields } from './delayReasons';
@@ -556,43 +555,6 @@ const parseISODateLocal = (dateStr) => {
   return new Date(yyyy, mm, dd, 0, 0, 0, 0);
 };
 
-
-const generateMockWeather = (city, dateStr) => {
-  let seed = 0;
-  const locationStr = String(city || "Curitiba, PR");
-  for (let i = 0; i < dateStr.length; i++) seed += dateStr.charCodeAt(i);
-  for (let i = 0; i < locationStr.length; i++) seed += locationStr.charCodeAt(i);
-  const rand = (seed % 100) / 100;
-  
-  let conditions = "Ensolarado";
-  let icon = "clear-day";
-  let tempMax = 22 + Math.floor(rand * 6) - 3;
-  let tempMin = 12 + Math.floor(rand * 6) - 3;
-  let precip = 0;
-  
-  if (rand < 0.2) {
-    conditions = "Chuva Forte";
-    icon = "rain";
-    precip = 15;
-  } else if (rand < 0.45) {
-    conditions = "Parcialmente Nublado";
-    icon = "partly-cloudy-day";
-  } else if (rand < 0.7) {
-    conditions = "Nublado";
-    icon = "cloudy";
-  } else if (rand < 0.9) {
-    conditions = "Garoa";
-    icon = "showers";
-    precip = 2;
-  }
-  
-  if (locationStr.toLowerCase().includes("curitiba")) {
-    tempMax -= 4;
-    tempMin -= 4;
-  }
-  
-  return { tempMax, tempMin, precip, conditions, icon };
-};
 
 const getWeatherEmoji = (icon) => {
   switch (icon) {
@@ -1170,14 +1132,8 @@ const firebaseConfig = (import.meta.env.VITE_FIREBASE_CONFIG ? JSON.parse(import
 const appId = import.meta.env.VITE_APP_ID || (typeof window.__app_id !== 'undefined' ? window.__app_id : 'obra-app');
 const initialAuthToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN || (typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null);
 
-const INITIAL_PAVIMENTOS = ['Térreo', 'Pav. Tipo 1', 'Pav. Tipo 2', 'Pav. Cobertura'];
-const INITIAL_STRUCTURE = {
-  'estrutura': { title: 'ESTRUTURA', items: [{ id: 'forma', name: 'FORMA', actualPercent: 0 }, { id: 'armadura', name: 'ARMADURA', actualPercent: 0 }] },
-  'instalacoes': { title: 'INSTALAÇÕES', items: [{ id: 'hidraulica', name: 'HIDRÁULICA', actualPercent: 0 }, { id: 'eletrica', name: 'ELÉTRICA', actualPercent: 0 }] }
-};
-const INITIAL_CRONOGRAMA = [];
 const MAX_IMPORTED_CRONOGRAMA_ITEMS = 15000;
-const INITIAL_TEAMS = ['EQUIPE CIVIL', 'EQUIPE ARMADURA', 'EQUIPE HIDRÁULICA', 'EQUIPE ELÉTRICA', 'EQUIPE ACABAMENTO'];
+const INITIAL_TEAMS = [];
 const INITIAL_DELAYS = GENERAL_DELAY_REASONS;
 
 const App = () => {
@@ -1246,7 +1202,7 @@ const App = () => {
   const [teamGeneralDelayReason, setTeamGeneralDelayReason] = useState<string>('');
   const [teamGeneralObservations, setTeamGeneralObservations] = useState<string>('');
   const [teamSubmitSuccess, setTeamSubmitSuccess] = useState<boolean>(false);
-  const [projectCity, setProjectCity] = useState<string>("Curitiba, PR");
+  const [projectCity, setProjectCity] = useState<string>("");
   const [weatherApiKey, setWeatherApiKey] = useState<string>("");
   const [weatherCache, setWeatherCache] = useState<Record<string, { tempMax: number, tempMin: number, precip: number, conditions: string, icon: string }>>({});
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
@@ -1587,55 +1543,11 @@ const App = () => {
         
         setProjects(mappedList);
       } else {
-        const defaultList = [
-          {
-            id: 'pace',
-            name: 'PACE',
-            type: 'Obra',
-            area: '24170.23',
-            badges: ['WB', 'PE', 'PK', 'PE', 'RT', 'AO', 'GP', 'AS', 'LF'],
-            address: 'Rua Monsenhor Ivo Zanlorenzi, 1230 - Mossunguê, Curitiba - PR',
-            imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60'
-          },
-          {
-            id: 'glb_partilha',
-            name: 'GLB PARTILHA',
-            type: 'Obra',
-            area: '10984.93',
-            badges: ['WB', 'EL', 'LR', 'PE', 'PK', 'PE', 'RT', 'RF', 'MB', 'GP', 'AS', 'dcfi', 'LF'],
-            address: 'Rua Bispo Dom José, 2423 - Batel, Curitiba - PR',
-            imageUrl: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=600&auto=format&fit=crop&q=60'
-          },
-          {
-            id: 'icaro_casa_terrea',
-            name: 'ÍCARO CASA TÉRREA',
-            type: 'Obra',
-            area: '53681.76',
-            badges: ['WB', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'GP', 'AS', 'KF', 'LR', 'OB', 'AH', 'AS', 'dcfi', 'LF'],
-            address: 'Rua Catarina Margarida Luvizoto Gobbo, 120 - Curitiba - PR',
-            imageUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=600&auto=format&fit=crop&q=60'
-          },
-          {
-            id: 'projeto_principal',
-            name: 'QOYA',
-            type: 'Obra',
-            area: '16777.23',
-            badges: ['PF', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'JM', 'GP', 'AS', 'dcfi', 'LF'],
-            address: 'R. Buenos Aires, 572 - Água Verde, Curitiba - PR',
-            imageUrl: 'https://images.unsplash.com/photo-1582407947304-fd86f028f716?w=600&auto=format&fit=crop&q=60'
-          },
-          {
-            id: 'alberi',
-            name: 'ALBERI',
-            type: 'Obra',
-            area: '24801.92',
-            badges: ['AV', 'CS', 'PE', 'PK', 'WH', 'PE', 'Jd', 'MB', 'GP', 'dcfi', 'LF'],
-            address: 'R. Bom Jesus, 969 - Juvevê, Curitiba - PR',
-            imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=600&auto=format&fit=crop&q=60'
-          }
-        ];
-        setDoc(projectsDocRef, { list: defaultList });
-        setProjects(defaultList);
+        setProjects([]);
+        if (!urlUserId) {
+          localStorage.removeItem('selected_project_id');
+          setSelectedProjectId('');
+        }
       }
     });
     return () => unsubscribe();
@@ -1962,7 +1874,7 @@ const App = () => {
         setTeams(d.teams || []);
         setTeamPhones(d.teamPhones || {});
         setProjectDelayReasons(mergeDelayReasons(d.projectDelayReasons ?? d.delayReasons ?? []));
-        setProjectCity(d.projectCity || "Curitiba, PR");
+        setProjectCity(d.projectCity || "");
         setWeatherApiKey(d.weatherApiKey || "");
         setWeatherCache(d.weatherCache || {});
 
@@ -2168,22 +2080,7 @@ const App = () => {
 
       if (missingDates.length === 0) return;
 
-      if (!weatherApiKey) {
-        for (let i = -15; i <= 15; i++) {
-          const dayDate = addDays(today, i);
-          const dayStr = toISODate(dayDate);
-          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
-          if (!newCache[cacheKey]) {
-            newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
-            changed = true;
-          }
-        }
-        if (changed) {
-          setWeatherCache(newCache);
-          await saveWeatherCacheOnly(newCache);
-        }
-        return;
-      }
+      if (!weatherApiKey || !projectCity.trim()) return;
 
       setWeatherLoading(true);
       try {
@@ -2218,19 +2115,7 @@ const App = () => {
         }
       } catch (err) {
         console.error("Error fetching weather:", err);
-        setNotification({ message: "Erro ao consultar clima na API. Usando dados locais.", type: "error" });
-        for (let i = -15; i <= 15; i++) {
-          const dayDate = addDays(today, i);
-          const dayStr = toISODate(dayDate);
-          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
-          if (!newCache[cacheKey]) {
-            newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
-            changed = true;
-          }
-        }
-        if (changed) {
-          setWeatherCache(newCache);
-        }
+        setNotification({ message: "Não foi possível consultar o clima. Os dias sem dados permanecem indisponíveis.", type: "error" });
       } finally {
         setWeatherLoading(false);
       }
@@ -2307,7 +2192,7 @@ const App = () => {
           delayReasons: mergeDelayReasons(generalDelayReasonsRef.current, Array.isArray(delays) ? delays : INITIAL_DELAYS),
           ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
           matrices: compressStringUnicode(matricesStr),
-          projectCity: pCity || "Curitiba, PR",
+          projectCity: pCity || "",
           weatherApiKey: wApiKey || "",
           weatherCache: wCache || {},
           budgetDiffs: compressStringUnicode(budgetDiffsStr),
@@ -4948,8 +4833,8 @@ const App = () => {
     const updatedFloors = [...floors, floor];
     const updatedData = cloneDeep(allFloorsData);
     const updatedWeights = cloneDeep(weights);
-    updatedData[floor] = cloneDeep(INITIAL_STRUCTURE);
-    updatedWeights[floor] = { estrutura: 50, instalacoes: 50 };
+    updatedData[floor] = {};
+    updatedWeights[floor] = {};
     const updatedMats = matrices.map(m => ({
       ...m,
       floors: !(m.floors || []).includes(floor) ? [...(m.floors || []), floor] : m.floors
@@ -6148,6 +6033,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
   const renderCronograma = (subViewOverride?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'competence_cash' | 'raw_crono' | 'import') => (
     <div className="space-y-6 animate-in fade-in duration-300">
       <LongTermPlanner
+        projectName={projects.find(project => project.id === selectedProjectId)?.name || ''}
         activeSubView={subViewOverride}
         hideSubNav={Boolean(subViewOverride)}
         selectedProjectId={selectedProjectId}
@@ -7624,7 +7510,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       setNotification({ message: 'Um projeto com esse nome já existe.', type: 'error' });
       return;
     }
-    const defaultImage = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
+    const defaultImage = '';
     const newProj = {
       id: cleanId,
       name: newProjName.trim().toUpperCase(),
@@ -7842,6 +7728,15 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
 
           {/* Grid of Projects */}
+          <details className="rounded-2xl border border-slate-700 bg-slate-900 p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-100">Banco de dados e cópias de segurança</summary>
+            <div className="mt-4"><LocalDatabaseSettings cloudAvailable={Object.keys(firebaseConfig).length > 0} /></div>
+          </details>
+          {projects.length === 0 && <div className="rounded-2xl border border-slate-700 bg-slate-900 p-6 text-sm text-slate-200">
+            <h2 className="text-lg font-bold text-white">Nenhuma obra cadastrada</h2>
+            <p className="mt-2">Este banco está vazio. Cadastre a primeira obra ou carregue uma cópia dos dados nas configurações acima.</p>
+            <button onClick={() => setShowAddProjectModal(true)} className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400">Cadastrar primeira obra</button>
+          </div>}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             
             {filteredProjects.map((p) => {
@@ -7889,14 +7784,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     
                     {/* Site Render image */}
                     <div className="h-44 w-full overflow-hidden bg-slate-950 relative">
-                      <img 
-                        src={p.imageUrl} 
-                        alt={p.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-85 group-hover:opacity-100"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
-                        }}
-                      />
+                      {p.imageUrl ? <img src={p.imageUrl} alt={p.name} className="h-full w-full object-cover" onError={event => { event.currentTarget.hidden = true; }} />
+                        : <div className="flex h-full items-center justify-center text-sm text-slate-400">Sem imagem cadastrada</div>}
                     </div>
                     
                     {/* Project Specs */}
@@ -7968,7 +7857,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
           </div>
 
-          {filteredProjects.length === 0 && !isSystemAdmin && (
+          {projects.length > 0 && filteredProjects.length === 0 && !isSystemAdmin && (
             <div className="bg-slate-900/40 border border-slate-800/80 p-12 rounded-3xl text-center max-w-md mx-auto space-y-4 my-8">
               <span className="text-4xl block">📭</span>
               <h3 className="text-sm font-black uppercase text-slate-300 tracking-wider">Nenhuma Obra Associada</h3>
@@ -8003,7 +7892,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <input
                     type="text"
                     required
-                    placeholder="Ex: QOYA, PACE..."
+                    placeholder="Nome da obra"
                     value={newProjName}
                     onChange={e => setNewProjName(e.target.value)}
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
@@ -8111,7 +8000,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <input
                     type="text"
                     required
-                    placeholder="Ex: QOYA, PACE..."
+                    placeholder="Nome da obra"
                     value={editProjName}
                     onChange={e => setEditProjName(e.target.value)}
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
@@ -8887,36 +8776,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
         </div>
 
-        {/* Card: Backup e Segurança do Banco Local */}
-        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
-          <div className="flex justify-between items-center border-b pb-3">
-            <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">🛡️ Banco Local & Nuvem Protegida</h3>
-            <span className="px-2.5 py-1 bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg text-[10px] font-bold">
-              100% Protegido
-            </span>
-          </div>
-          <p className="text-xs text-slate-600">
-            Todos os dados modificados são gravados de forma isolada no banco de dados local deste navegador. A base Firestore na nuvem permanece blindada contra alterações acidentais.
-          </p>
-          <div className="flex flex-wrap gap-2 pt-2">
-            <button
-              onClick={() => {
-                const dataStr = exportAllLocalData();
-                const blob = new Blob([dataStr], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `backup_local_curtoprazo_${new Date().toISOString().slice(0, 10)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-                setNotification({ message: 'Backup JSON baixado com sucesso!', type: 'success' });
-              }}
-              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow flex items-center gap-2 cursor-pointer"
-            >
-              <span>💾</span> Baixar Backup Completo (.JSON)
-            </button>
-          </div>
-        </div>
+        <LocalDatabaseSettings cloudAvailable={Object.keys(firebaseConfig).length > 0} />
 
         {/* Card: Atalhos para Configurações Operacionais */}
         <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4 lg:col-span-2">

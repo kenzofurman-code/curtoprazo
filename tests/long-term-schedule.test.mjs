@@ -38,6 +38,14 @@ const {
   optimizeSubLines,
 } = lobModule;
 
+test('cronograma vazio não recebe agrupamentos, pavimentos ou serviços predefinidos', () => {
+  const empty = hydrateLobFromCronograma([], [], {});
+  assert.deepEqual(empty.replicationGroups, []);
+  assert.deepEqual(empty.floors, []);
+  assert.deepEqual(empty.services, []);
+  assert.deepEqual(empty.activities, []);
+});
+
 test('calendário respeita dias úteis Seg-Sex e feriados ao somar durações', () => {
   const cal = {
     ...createDefaultCalendar('2026-10-12'),

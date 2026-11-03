@@ -1623,9 +1623,7 @@ export function hydrateLobFromCronograma(
   if (len === 0 && (!floorsList || floorsList.length === 0)) {
     return {
       calendar,
-      replicationGroups: [
-        { id: 'grp_principal', name: 'TORRE PRINCIPAL', position: 1, linesPerFloor: 5, color: GROUP_COLORS[0] },
-      ],
+      replicationGroups: [],
       floors: [],
       services: [],
       activities: [],

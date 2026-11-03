@@ -43,7 +43,7 @@ test('falha de permissão libera nova tentativa e conserva o formulário',async(
 });
 test('mensagem de erro é renderizada no painel mesmo com formulário aberto',()=>{
   const dashboard=source.slice(source.indexOf('  const renderProjectsDashboard ='),source.indexOf('  const renderInfographic ='));
-  const context={React,projects:[],projectSearchQuery:'',plannerUsername:'admin',isAccessAdmin:false,
+  const context={React,LocalDatabaseSettings:()=>null,firebaseConfig:{},projects:[],projectSearchQuery:'',plannerUsername:'admin',isAccessAdmin:false,
     accessControl:{users:[],projectAccess:{}},showAddProjectModal:true,editingProject:null,showAccessModal:false,
     setShowAccessModal:()=>{},setAccessUser:()=>{},setAccessPass:()=>{},handleAddNewProject:()=>{},
     newProjName:'existente',newProjArea:'1',newProjAddress:'Rua',newProjBadges:'',newProjImageUrl:'',

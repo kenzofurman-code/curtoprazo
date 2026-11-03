@@ -12,11 +12,10 @@ import {
   distributeWeightsByQuantity,
   distributeWeightsByArea,
   validateWeightsSum,
-  generateInitialBudgetFromSchedule,
+  getEffectiveBudgetState,
   parseBudgetRows,
   parseBudgetLinkingRows,
   applyImportedLinksToBudget,
-  getQoyaPreloadedBudgetState,
 } from './budgetLinking';
 import type {
   LobActivity,
@@ -53,23 +52,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
 }) => {
   // Estado principal do orçamento
   const [budgetState, setBudgetState] = useState<ProjectBudgetState>(() => {
-    try {
-      const saved = localStorage.getItem(`curtoprazo_budget_${projectId}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (_) {}
-    if (projectId === 'projeto_principal') {
-      try {
-        return getQoyaPreloadedBudgetState(activities, floors, services);
-      } catch (err) {
-        console.warn('Erro ao carregar orçamento oficial QOYA:', err);
-      }
-    }
-    return generateInitialBudgetFromSchedule(projectId, activities, services);
+    return getEffectiveBudgetState(projectId, activities, floors, services);
   });
 
   // Filtros da tabela de orçamento (Esquerda)
@@ -312,22 +295,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
             <span>🔗</span> Importar Vínculos
           </button>
 
-          {projectId === 'projeto_principal' && (
-            <button
-              type="button"
-              onClick={() => {
-                const qoyaState = getQoyaPreloadedBudgetState(activities, localFloors, services);
-                setBudgetState(qoyaState);
-                try {
-                  localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(qoyaState));
-                } catch (_) {}
-              }}
-              className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs rounded-xl transition flex items-center gap-1.5"
-              title="Restaurar orçamento executivo oficial e vínculos oficiais da obra QOYA"
-            >
-              <span>✨</span> Oficial QOYA
-            </button>
-          )}
+
 
           <button
             type="button"

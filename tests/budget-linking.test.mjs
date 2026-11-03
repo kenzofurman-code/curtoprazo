@@ -30,6 +30,17 @@ const budgetModule = moduleFrom(
   await readFile(new URL('../src/budgetLinking.ts', import.meta.url), 'utf8')
 );
 
+test('obra sem dados não carrega orçamento específico e orçamento salvo vazio é preservado', () => {
+  const values = new Map();
+  globalThis.localStorage = { getItem: key => values.get(key) ?? null };
+  const empty = budgetModule.getEffectiveBudgetState('projeto_principal');
+  assert.deepEqual(empty.items, []);
+  assert.equal(empty.totalCost, 0);
+  const saved = { projectId: 'obra', budgetName: 'Limpo pelo usuário', items: [], totalCost: 0 };
+  values.set('curtoprazo_budget_obra', JSON.stringify(saved));
+  assert.deepEqual(budgetModule.getEffectiveBudgetState('obra'), saved);
+});
+
 const {
   distributeWeightsEqually,
   distributeWeightsByTime,

@@ -32,14 +32,14 @@ export const MacroflowCanvasView: React.FC<MacroflowCanvasViewProps> = ({
   projectName = 'Obra',
   selectedProjectId,
 }) => {
-  // Carrega modelo persistido ou padrão de fábrica
+  // Carrega dados persistidos ou um macrofluxo vazio
   const [data, setData] = useState<MacroflowProjectData>(() => {
     const storageKey = `curtoprazo_macroflow_${selectedProjectId || 'global'}`;
     try {
       const saved = localStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && Array.isArray(parsed.swimlanes) && parsed.swimlanes.length > 0) {
+        if (parsed && Array.isArray(parsed.swimlanes)) {
           return parsed;
         }
       }
@@ -288,6 +288,10 @@ export const MacroflowCanvasView: React.FC<MacroflowCanvasViewProps> = ({
 
   // Salva o macrofluxo e sincroniza com o cronograma da aplicação
   const handleSaveMacroflow = () => {
+    if (!data.swimlanes.length || !currentState.floors.length) {
+      alert('Cadastre os locais da obra e importe o macrofluxo antes de aplicar ao cronograma.');
+      return;
+    }
     const nextSchedule = applyMacroflowToSchedule(data, currentState, {
       defaultStartDate: currentState.calendar.startDate,
     });
@@ -346,20 +350,6 @@ export const MacroflowCanvasView: React.FC<MacroflowCanvasViewProps> = ({
               100%
             </button>
           </div>
-
-          {/* Carregar Modelo Padrão */}
-          <button
-            type="button"
-            onClick={() => {
-              if (confirm('Deseja recarregar o Modelo Padrão Completo de Obra?')) {
-                setData(getDefaultMacroflowModel());
-              }
-            }}
-            className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold transition flex items-center gap-1.5 shadow-2xs"
-            title="Carrega o modelo oficial de obra com todas as tarefas e ritmos"
-          >
-            <span>📥</span> Modelo Padrão
-          </button>
 
           {/* Baixar Planilha Modelo */}
           <button
@@ -445,6 +435,10 @@ export const MacroflowCanvasView: React.FC<MacroflowCanvasViewProps> = ({
             transform: `scale(${zoomLevel / 100})`,
           }}
         >
+          {!data.swimlanes.length && <div className="max-w-lg rounded-xl bg-white p-6 text-sm text-slate-700">
+            <h3 className="text-base font-bold text-slate-900">Nenhum macrofluxo cadastrado</h3>
+            <p className="mt-2">Importe uma planilha de macrofluxo para começar. Nenhuma raia ou atividade é criada automaticamente.</p>
+          </div>}
           {/* CABEÇALHO HORIZONTAL DE ETAPAS / COLUNAS COMPARTILHADAS */}
           <div className="flex items-center bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden sticky top-0 z-20">
             <div className="w-[260px] shrink-0 px-4 py-2.5 bg-slate-100 border-r border-slate-200 font-bold text-xs uppercase text-slate-600 tracking-wider flex items-center justify-between">
