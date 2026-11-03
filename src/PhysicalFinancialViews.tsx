@@ -74,11 +74,11 @@ export const PhysicalFinancialViews: React.FC<PhysicalFinancialViewsProps> = ({
   const [newVersionIsBaseline, setNewVersionIsBaseline] = useState<boolean>(false);
 
   const activeVersion = useMemo(() => {
-    return versions.find((v) => v.isActive) || versions[0] || null;
+    return versions.find((v) => v.isActive) || null;
   }, [versions]);
 
   const baselineVersion = useMemo(() => {
-    return versions.find((v) => v.isBaseline) || versions[0] || null;
+    return versions.find((v) => v.isBaseline) || null;
   }, [versions]);
 
   // Executa o motor central de cálculo com os parâmetros ativos

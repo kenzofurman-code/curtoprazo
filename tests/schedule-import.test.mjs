@@ -18,6 +18,7 @@ const { normalizeDelayReasonFields, mergeDelayReasons, GENERAL_DELAY_REASONS } =
 );
 const scheduleSource = await readFile(new URL('../src/scheduleImport.ts', import.meta.url), 'utf8');
 const { analyzeSchedule, SCHEDULE_FIELDS } = await import(`data:text/javascript;base64,${Buffer.from(transpile(scheduleSource)).toString('base64')}`);
+const { buildBudgetDiffs } = await import(`data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL('../src/scheduleDifferences.ts', import.meta.url), 'utf8'))).toString('base64')}`);
 const helpers = transpile(source.slice(source.indexOf('// --- Utilitários'), source.indexOf('// --- Configuração Firebase')));
 const { compressStringUnicode, decompressIfNeeded, serializeCrono, deserializeCrono } = new Function(
   `${helpers}; return { compressStringUnicode, decompressIfNeeded, serializeCrono, deserializeCrono };`
@@ -49,6 +50,9 @@ async function importWorkbook(count, review = preview => analyzeSchedule(preview
   const noop = () => {};
   const context = {
     depsXLSX: XLSX,
+    buildBudgetDiffs, selectedProjectId:'obra', plannerUsername:'Teste',
+    createNewScheduleVersion:async()=>({created:{id:'test-import'}}),activateScheduleVersion:async()=>{},setVersionUpdateKey:()=>{},
+    loadScheduleVersions:async()=>[],
     canOpenModule: () => true,
     SCHEDULE_FIELDS,
     setScheduleImportPreview: preview => { if (preview) preview.resolve(review(preview)); },

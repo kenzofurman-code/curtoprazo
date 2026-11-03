@@ -6,6 +6,8 @@ Aplicativo web/PWA para planejamento semanal, medição física e acompanhamento
 
 - Cadastro e seleção de projetos de obra.
 - Importação de cronograma por Excel, XLS ou CSV.
+- Histórico de cronogramas com ativação, desativação e exclusão de versões. A opção de ativar imediatamente controla se uma importação substitui o cronograma carregado.
+- Geração do curto prazo por diferença: na semana desejada, clique em **Gerar por Diferença**, escolha a versão de referência e confirme em **OK**. A comparação usa o último cronograma importado e lança apenas avanços positivos, sem repetir a mesma comparação. Excluir uma versão remove seu registro do histórico e mantém as medições e o planejamento.
 - Controle de atividades por pavimento, macroatividade, serviço e equipe.
 - Planejamento semanal com meta, dias previstos, avanço executado, atraso e observações.
 - Fechamento semanal com gravação de PPC.

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 const compile = source => ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.CommonJS}}).outputText;
-const sources = Object.fromEntries(await Promise.all(['chunkedPayload','cloudDocumentRepository','firebaseDocuments'].map(async name => [name,compile(await readFile(new URL(`../../src/${name}.ts`,import.meta.url),'utf8'))])));
+const sources = Object.fromEntries(await Promise.all(['chunkedPayload','cloudDocumentRepository','firebaseDocuments','scheduleVersionStorage','scheduleVersions'].map(async name => [name,compile(await readFile(new URL(`../../src/${name}.ts`,import.meta.url),'utf8'))])));
 const copy = value => value === undefined ? undefined : structuredClone(value);
 export function cloudTestModules() {
   const backend = {documents:new Map(),reads:[],writes:[],failRead:false,failWrite:false};
@@ -35,5 +35,5 @@ export function cloudTestModules() {
     },module.exports,module);
     modules[name]=module.exports;return module.exports;
   }
-  return {backend,client:load('firebaseDocuments'),repository:load('cloudDocumentRepository')};
+  return {backend,client:load('firebaseDocuments'),repository:load('cloudDocumentRepository'),versions:load('scheduleVersions')};
 }

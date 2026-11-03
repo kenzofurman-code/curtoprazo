@@ -1055,7 +1055,7 @@ export const GanttPlannerView: React.FC<GanttPlannerViewProps> = ({
                       : '📋'}
                   </span>
                   <span className="font-bold text-slate-800 truncate text-xs">
-                    {currentActiveVersion?.name || 'Versão Inicial'}
+                    {currentActiveVersion?.name || 'Nenhuma versão ativa'}
                   </span>
                   {currentActiveVersion?.isBaseline && (
                     <span className="shrink-0 px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 text-[9px] font-black">

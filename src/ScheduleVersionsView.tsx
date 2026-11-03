@@ -4,6 +4,8 @@ import {
   createNewScheduleVersion,
   setVersionAsBaseline,
   activateScheduleVersion,
+  deactivateScheduleVersion,
+  deleteScheduleVersion,
   type ScheduleVersion,
 } from './scheduleVersions';
 
@@ -56,11 +58,11 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
   const [searchFilter, setSearchFilter] = useState('');
 
   const baselineVersion = useMemo(() => {
-    return versions.find((v) => v.isBaseline) || versions[0] || null;
+    return versions.find((v) => v.isBaseline) || null;
   }, [versions]);
 
   const activeVersion = useMemo(() => {
-    return versions.find((v) => v.isActive) || versions[0] || null;
+    return versions.find((v) => v.isActive) || null;
   }, [versions]);
 
   const handleCreateVersion = async () => {
@@ -89,12 +91,20 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
 
   const handleActivate = async (version: ScheduleVersion) => {
     await runVersions(async () => {
-      const { versions: updated } = await activateScheduleVersion(projectId, version.id);
-      setVersions(updated);
       if (version.snapshot) {
         await onApplyVersion(version.snapshot, version.name);
       }
+      const { versions: updated } = await activateScheduleVersion(projectId, version.id);
+      setVersions(updated);
     });
+  };
+  const handleDeactivate = async (version: ScheduleVersion) => {
+    await runVersions(async () => setVersions(await deactivateScheduleVersion(projectId, version.id)));
+  };
+  const handleDelete = async (version: ScheduleVersion) => {
+    const baseWarning = version.isBaseline ? ' A referência de linha de base também será removida.' : '';
+    if (!confirm(`Excluir a versão "${version.name}" do histórico?${baseWarning} O cronograma carregado, as medições e o planejamento serão mantidos.`)) return;
+    await runVersions(async () => setVersions(await deleteScheduleVersion(projectId, version.id)));
   };
 
   // Comparação de variância entre versão Ativa e Linha de Base
@@ -243,9 +253,9 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
             </span>
             <span className="text-xs">✏️ Editável</span>
           </div>
-          <h3 className="font-bold text-slate-900 text-sm">{activeVersion?.name || 'Versão Atual'}</h3>
+          <h3 className="font-bold text-slate-900 text-sm">{activeVersion?.name || 'Nenhuma versão ativa'}</h3>
           <p className="text-[11px] text-slate-600 line-clamp-2">
-            {activeVersion?.description || 'Versão atualmente carregada na Linha de Balanço e no planejamento semanal.'}
+            {activeVersion ? activeVersion.description || 'Versão carregada no cronograma.' : 'Os dados carregados permanecem na obra. Escolha uma versão abaixo para ativar.'}
           </p>
           <div className="text-[10px] text-slate-500 font-mono pt-1 border-t border-emerald-200/60">
             Criada em: {formatDateBR(activeVersion?.createdAt)}
@@ -368,20 +378,26 @@ export const ScheduleVersionsView: React.FC<ScheduleVersionsViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2">
                     {!isAct && (
                       <button
                         type="button"
                         onClick={() => handleActivate(v)}
+                        disabled={versionsBusy}
                         className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition"
                       >
-                        Carregar no Cronograma
+                        Ativar
                       </button>
                     )}
+                    {isAct && <button type="button" disabled={versionsBusy} onClick={() => handleDeactivate(v)}
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-100 disabled:opacity-50">Desativar</button>}
+                    <button type="button" disabled={versionsBusy} onClick={() => handleDelete(v)}
+                      className="px-3 py-1.5 rounded-lg border border-rose-200 text-rose-700 font-bold text-xs hover:bg-rose-50 disabled:opacity-50">Excluir</button>
                     {!isBase && (
                       <button
                         type="button"
                         onClick={() => handleSetBaseline(v.id)}
+                        disabled={versionsBusy}
                         className="px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs transition"
                         title="Tornar esta versão a Linha de Base Oficial"
                       >

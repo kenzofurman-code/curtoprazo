@@ -49,6 +49,7 @@ import {
   setVersionAsBaseline,
   activateScheduleVersion,
   deleteScheduleVersion,
+  deactivateScheduleVersion,
   promoteScenarioToOfficial,
   type ScheduleVersion,
   type ScheduleVersionType,
@@ -160,11 +161,11 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   const [isMacroflowModalOpen, setIsMacroflowModalOpen] = useState(false);
 
   const currentBaseline = useMemo(() => {
-    return scheduleVersions.find((v) => v.isBaseline) || scheduleVersions[0] || null;
+    return scheduleVersions.find((v) => v.isBaseline) || null;
   }, [scheduleVersions]);
 
   const currentActiveVersion = useMemo(() => {
-    return scheduleVersions.find((v) => v.isActive) || scheduleVersions[0] || null;
+    return scheduleVersions.find((v) => v.isActive) || null;
   }, [scheduleVersions]);
 
   // Mapa de tarefas da baseline para renderizar linha de base fantasma na Linha de Balanço
@@ -185,8 +186,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
 
   const handleSwitchScheduleVersion = async (versionId: string) => {
     await runVersions(async () => {
-      const { versions: updated, active } = await activateScheduleVersion(selectedProjectId || 'global', versionId);
-      setScheduleVersions(updated);
+      const active = scheduleVersions.find(v => v.id === versionId);
       if (active && active.snapshot) {
         const snap = active.snapshot;
         const compiled = compileLobToCronograma(
@@ -196,8 +196,10 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
           snap.teams || teams,
           snap.matrices || matrices
         );
-        await onApplySchedule(compiled, `Versão "${active.name}" ativada no cronograma!`);
+        await onApplySchedule(compiled, `Cronograma "${active.name}" carregado e salvo no Firebase.`);
       }
+      const { versions: updated } = await activateScheduleVersion(selectedProjectId || 'global', versionId);
+      setScheduleVersions(updated);
     });
   };
 
@@ -273,6 +275,9 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       const updated = await deleteScheduleVersion(selectedProjectId || 'global', versionId);
       setScheduleVersions(updated);
     });
+  };
+  const handleDeactivateScheduleVersion = async (versionId: string) => {
+    await runVersions(async () => setScheduleVersions(await deactivateScheduleVersion(selectedProjectId || 'global', versionId)));
   };
 
   // Estado local da Linha de Balanço hidratado a partir do projeto ativo
@@ -2081,7 +2086,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                         : '📋'}
                     </span>
                     <span className="font-bold text-slate-800 truncate text-xs">
-                      {currentActiveVersion?.name || 'Versão Inicial'}
+                      {currentActiveVersion?.name || 'Nenhuma versão ativa'}
                     </span>
                     {currentActiveVersion?.isBaseline && (
                       <span className="shrink-0 px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 text-[9px] font-black">
@@ -3456,7 +3461,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                     <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-1.5 shadow-2xs">
                       <div className="flex items-center justify-between">
                         <span className="font-black text-sm text-slate-900">
-                          {currentActiveVersion?.name || 'Versão Inicial'}
+                          {currentActiveVersion?.name || 'Nenhuma versão ativa'}
                         </span>
                         <span className="text-[10px] font-mono text-slate-400">
                           {currentActiveVersion?.createdAt
@@ -6577,7 +6582,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
 
                   <div>
                     <h4 className="font-black text-base text-slate-900 leading-tight">
-                      {currentActiveVersion?.name || 'Versão Inicial'}
+                      {currentActiveVersion?.name || 'Nenhuma versão ativa'}
                     </h4>
                     <p className="text-slate-600 text-xs mt-1">
                       {currentActiveVersion?.description || 'Cronograma principal sem observações registradas.'}
@@ -6839,11 +6844,12 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                                 {ver.author && <span>• {ver.author}</span>}
                               </div>
 
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
                                 {!isActive && (
                                   <button
                                     type="button"
                                     onClick={() => handleSwitchScheduleVersion(ver.id)}
+                                    disabled={versionsBusy}
                                     className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] transition cursor-pointer"
                                   >
                                     Visualizar / Ativar
@@ -6854,6 +6860,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handleMarkAsBaseline(ver.id)}
+                                    disabled={versionsBusy}
                                     title="Tornar esta versão a Linha de Base Oficial"
                                     className="px-2 py-0.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] border border-amber-200 transition cursor-pointer"
                                   >
@@ -6865,6 +6872,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => handlePromoteScenario(ver.id)}
+                                    disabled={versionsBusy}
                                     title="Levar este cenário para o previsto oficial"
                                     className="px-2 py-0.5 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-800 font-bold text-[10px] border border-purple-200 transition cursor-pointer"
                                   >
@@ -6872,20 +6880,23 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                                   </button>
                                 )}
 
-                                {!ver.isBaseline && scheduleVersions.length > 1 && (
+                                {isActive && <button type="button" disabled={versionsBusy}
+                                  onClick={() => handleDeactivateScheduleVersion(ver.id)}
+                                  className="px-2 py-0.5 rounded-lg border border-slate-300 text-slate-700 font-bold text-[10px] disabled:opacity-50">Desativar</button>}
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      if (confirm(`Deseja realmente excluir a versão "${ver.name}"?`)) {
+                                      if (confirm(`Excluir a versão "${ver.name}" do histórico?${ver.isBaseline ? ' A referência de linha de base também será removida.' : ''} O cronograma carregado, as medições e o planejamento serão mantidos.`)) {
                                         handleDeleteScheduleVersion(ver.id);
                                       }
                                     }}
                                     title="Excluir versão"
+                                    aria-label={`Excluir versão ${ver.name}`}
+                                    disabled={versionsBusy}
                                     className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition cursor-pointer"
                                   >
                                     🗑️
                                   </button>
-                                )}
                               </div>
                             </div>
                           </div>

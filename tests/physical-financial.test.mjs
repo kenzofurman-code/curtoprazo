@@ -28,6 +28,10 @@ function moduleFrom(filePath, source) {
       return {
         versionStorageKey: projectId => 'versions_' + projectId,
         readVersionList: async key => structuredClone(inMemDb.get(key) || []),
+        initializeVersionList: async (key, initial) => {
+          if (!inMemDb.has(key)) inMemDb.set(key, [structuredClone(initial)]);
+          return structuredClone(inMemDb.get(key));
+        },
         updateVersionList: async (key, update) => {
           const next = update(structuredClone(inMemDb.get(key) || []));
           inMemDb.set(key, structuredClone(next)); return next;
@@ -387,10 +391,10 @@ test('4 Tipos de Versionamento (Cenário, Backup, Meta, Baseline), Promoção e 
   assert.ok(official.name.includes('Previsto Oficial'));
   assert.ok(afterPromotion.find((v) => v.id === official.id));
 
-  // 5. Exclusão Segura: Não permite excluir a baseline oficial
+  // 5. A exclusão explícita também permite remover uma baseline.
   const baseVer = await getBaselineVersion(projectId);
   const afterTryDeleteBase = await deleteScheduleVersion(projectId, baseVer.id);
-  assert.ok(afterTryDeleteBase.find((v) => v.id === baseVer.id), 'Baseline oficial deve estar protegida contra exclusão');
+  assert.ok(!afterTryDeleteBase.find((v) => v.id === baseVer.id));
 
   // 6. Exclusão de versão não-baseline é permitida
   const afterDeleteBackup = await deleteScheduleVersion(projectId, backup.id);

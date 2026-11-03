@@ -14,3 +14,7 @@ export async function readVersionList(key: string): Promise<any[]> {
 export async function updateVersionList(key: string, update: (current: any[]) => any[]): Promise<any[]> {
   return mutateFirebaseDocument(key, previous => update(versions(previous)));
 }
+export async function initializeVersionList(key: string, initial: any): Promise<any[]> {
+  // An explicitly emptied history must stay empty after deleting its last version.
+  return mutateFirebaseDocument(key, previous => previous == null ? [initial] : versions(previous));
+}
