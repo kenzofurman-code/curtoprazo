@@ -16,6 +16,8 @@ const reasonSource = await readFile(new URL('../src/delayReasons.ts', import.met
 const { normalizeDelayReasonFields, mergeDelayReasons, GENERAL_DELAY_REASONS } = await import(
   `data:text/javascript;base64,${Buffer.from(transpile(reasonSource)).toString('base64')}`
 );
+const scheduleSource = await readFile(new URL('../src/scheduleImport.ts', import.meta.url), 'utf8');
+const { analyzeSchedule, SCHEDULE_FIELDS } = await import(`data:text/javascript;base64,${Buffer.from(transpile(scheduleSource)).toString('base64')}`);
 const helpers = transpile(source.slice(source.indexOf('// --- Utilitários'), source.indexOf('// --- Configuração Firebase')));
 const { compressStringUnicode, decompressIfNeeded, serializeCrono, deserializeCrono } = new Function(
   `${helpers}; return { compressStringUnicode, decompressIfNeeded, serializeCrono, deserializeCrono };`
@@ -28,7 +30,7 @@ function extractHandler(name, nextName, context) {
     ${transpile(handler)}; return ${name};`)(context);
 }
 
-async function importWorkbook(count) {
+async function importWorkbook(count, review = preview => analyzeSchedule(preview.sheets[0])) {
   const rows = [
     ['', '', '', '', '', '', '', '', 'Avanço físico (%)'],
     ['ID', 'Pacote de trabalho', 'Serviço', 'Lote', 'Responsáveis', 'Predecessoras', 'Data de Início', 'Data de Término', 'Realizado']
@@ -47,6 +49,8 @@ async function importWorkbook(count) {
   const noop = () => {};
   const context = {
     depsXLSX: XLSX,
+    SCHEDULE_FIELDS,
+    setScheduleImportPreview: preview => { if (preview) preview.resolve(review(preview)); },
     FileReader: class { readAsBinaryString() { this.onload({ target: { result: binary } }); } },
     setIsImporting: value => { if (!value) finish(); },
     setImportStatus: value => statuses.push(value),
@@ -73,6 +77,8 @@ test('importa um único XLSX com 9000 atividades, progresso e dependências', as
   assert.equal(saved[5][8999].originalId, '9000');
   assert.deepEqual(saved[5][8999].predecessors, ['8999']);
   assert.equal(saved[5][8999].progress, 37.5);
+  assert.equal(saved[5][8999].start, '2026-10-01');
+  assert.equal(saved[5][8999].end, '2026-10-31');
   assert.ok(statuses.some(status => status.includes('9000 de 9000')));
 });
 
@@ -177,4 +183,10 @@ test('salva cronograma, físico e planejamento juntos; falha não deixa gravaç�
   failCommit = true;
   await assert.rejects(save({ ...args, crono: [] }), /Falha simulada/);
   assert.deepEqual(store, previous);
+});
+
+test('cancelar a prévia não grava nem substitui dados do projeto', async () => {
+  const { saved, notification } = await importWorkbook(2, () => null);
+  assert.equal(saved, undefined);
+  assert.equal(notification, undefined);
 });

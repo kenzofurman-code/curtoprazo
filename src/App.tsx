@@ -1,3 +1,6 @@
+import ScheduleImportPreview from './ScheduleImportPreview';
+import { SCHEDULE_FIELDS } from './scheduleImport';
+import type { ScheduleAnalysis, ScheduleSheet } from './scheduleImport';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
@@ -381,82 +384,6 @@ const toLocalDateString = (date = new Date()) => {
 };
 
 const getTodayDateString = () => toLocalDateString(new Date());
-
-const parseExcelDate = (value, fallback = getTodayDateString()) => {
-  if (value === undefined || value === null || value === '') return fallback;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return toLocalDateString(value);
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    epoch.setUTCDate(epoch.getUTCDate() + Math.floor(value));
-    return toLocalDateString(epoch);
-  }
-  const text = String(value).trim();
-  const br = text.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
-  if (br) {
-    const [, d, m, y] = br;
-    const yyyy = y.length === 2 ? `20${y}` : y;
-    return `${yyyy}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  }
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? fallback : toLocalDateString(parsed);
-};
-
-const parsePercent = (value) => {
-  if (value === undefined || value === null || value === '') return 0;
-  if (typeof value === 'number') return clampPercent(value <= 1 ? value * 100 : value);
-  let normalized = String(value).replace('%', '').replace(/\s/g, '').trim();
-  normalized = normalized.replace(/[^\d,.-]/g, '');
-  const lastComma = normalized.lastIndexOf(',');
-  const lastDot = normalized.lastIndexOf('.');
-  if (lastComma !== -1 && lastDot !== -1) {
-    const decimalSeparator = lastComma > lastDot ? ',' : '.';
-    const thousandsSeparator = decimalSeparator === ',' ? '.' : ',';
-    normalized = normalized
-      .replace(new RegExp(`\\${thousandsSeparator}`, 'g'), '')
-      .replace(decimalSeparator, '.');
-  } else if (lastComma !== -1) {
-    normalized = normalized.replace(',', '.');
-  }
-  const n = Number(normalized);
-  if (!Number.isFinite(n)) return 0;
-  return clampPercent(n <= 1 ? n * 100 : n);
-};
-
-const normalizeHeaderText = (value) => String(value || '')
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase()
-  .trim();
-
-const findColumnIndex = (headerRow, candidates, fallback = -1) => {
-  const normalizedHeaders = headerRow.map(normalizeHeaderText);
-  const normalizedCandidates = candidates.map(normalizeHeaderText);
-  const exactIndex = normalizedHeaders.findIndex(header => normalizedCandidates.includes(header));
-  if (exactIndex !== -1) return exactIndex;
-  const partialIndex = normalizedHeaders.findIndex(header =>
-    normalizedCandidates.some(candidate => candidate && header.includes(candidate))
-  );
-  return partialIndex !== -1 ? partialIndex : fallback;
-};
-
-const findGroupedColumnIndex = (headerRow, groupRow, groupCandidates, headerCandidates, fallback = -1) => {
-  let currentGroup = '';
-  const normalizedGroups = groupCandidates.map(normalizeHeaderText);
-  const normalizedHeaders = headerCandidates.map(normalizeHeaderText);
-
-  for (let i = 0; i < headerRow.length; i++) {
-    const groupText = normalizeHeaderText(groupRow[i]);
-    if (groupText) currentGroup = groupText;
-
-    const headerText = normalizeHeaderText(headerRow[i]);
-    const groupMatches = normalizedGroups.some(group => group && currentGroup.includes(group));
-    const headerMatches = normalizedHeaders.some(header => header && headerText === header);
-
-    if (groupMatches && headerMatches) return i;
-  }
-
-  return fallback;
-};
 
 const roundPercentValue = (value) => {
   const n = Number(value);
@@ -1267,6 +1194,9 @@ const App = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string>('');
+  const [scheduleImportPreview, setScheduleImportPreview] = useState<{
+    fileName: string; sheets: ScheduleSheet[]; resolve: (result: ScheduleAnalysis | null) => void;
+  } | null>(null);
   const [isScheduleImportModalOpen, setIsScheduleImportModalOpen] = useState<boolean>(false);
   const [versionUpdateKey, setVersionUpdateKey] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -4635,6 +4565,7 @@ const App = () => {
   const handleFileUpload = (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
+    e.target.value = ''; // Allow retrying the same file after review/cancellation.
 
     setIsImporting(true);
     setImportStatus('Lendo e analisando planilha Excel...');
@@ -4645,65 +4576,32 @@ const App = () => {
         try {
           const XLSX = await import('xlsx');
           const bstr = evt.target.result as string;
-          const workbook = XLSX.read(bstr, { type: 'binary' });
-          const wsname = workbook.SheetNames[0];
-          const ws = workbook.Sheets[wsname];
-          const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
-          
-          if (data.length < 2) {
-            setNotification({ message: "Planilha sem linhas suficientes.", type: "error" });
+          const workbook = XLSX.read(bstr, { type: 'binary', cellNF: true });
+          const sheets: ScheduleSheet[] = workbook.SheetNames.map(name => {
+            const ws = workbook.Sheets[name];
+            const formats = {};
+            Object.keys(ws).filter(key => !key.startsWith('!') && ws[key].z).forEach(key => { formats[key] = ws[key].z; });
+            return { name, rows: XLSX.utils.sheet_to_json(ws, { header: 1, range: 0, blankrows: true }),
+              merges: ws['!merges'], formats, date1904: !!workbook.Workbook?.WBProps?.date1904 };
+          });
+          if (!sheets.length) throw new Error('O arquivo não contém abas para importar.');
+          setImportStatus('Aguardando revisão da importação...');
+          const reviewed = await new Promise<ScheduleAnalysis | null>(resolve => {
+            setScheduleImportPreview({ fileName: file.name, sheets, resolve });
+          });
+          setScheduleImportPreview(null);
+          if (!reviewed) {
             setIsImporting(false);
             setImportStatus('');
             return;
           }
+          if (reviewed.errors.length) throw new Error('Resolva as pendências da prévia antes de importar.');
+          const importFields = Object.keys(SCHEDULE_FIELDS);
+          const colIdx = Object.fromEntries(importFields.map((field, index) => [field, index]));
+          const data = reviewed.records.map(record => importFields.map(field => record.values[field]));
+          const headerIndex = -1;
 
-          let headerIndex = 3; 
-          for (let i = 0; i < Math.min(10, data.length); i++) {
-            const rowStr = (data[i] || []).join('').toLowerCase();
-            // Exclude 'id' to prevent matching rows above header containing 'unidade' (which contains 'id')
-            if (rowStr.includes('pacote de trabalho') || rowStr.includes('serviço') || rowStr.includes('macroatividade')) {
-              headerIndex = i; 
-              break;
-            }
-          }
-
-          if (data.length <= headerIndex + 1) {
-            setNotification({ message: "Não há dados abaixo da linha de cabeçalho.", type: "error" });
-            setIsImporting(false);
-            setImportStatus('');
-            return;
-          }
-
-          const headerRow = data[headerIndex].map(h => String(h || '').trim());
-          const groupRow = headerIndex > 0 ? data[headerIndex - 1].map(h => String(h || '').trim()) : [];
-          const progressColumn = findGroupedColumnIndex(
-            headerRow,
-            groupRow,
-            ['Avanço físico (%)', 'Avanco fisico (%)'],
-            ['Realizado']
-          );
-          
-          const colIdx = {
-            id: findColumnIndex(headerRow, ['ID', 'Identificador']),
-            macro: findColumnIndex(headerRow, ['Pacote de trabalho/tarefas', 'Pacote de trabalho', 'Macroatividade'], 2),
-            service: findColumnIndex(headerRow, ['Serviço', 'Servico'], 3),
-            replicationGroup: findColumnIndex(headerRow, ['Grupo de replicação', 'Grupo de replicacao', 'Grupo Replicacao']),
-            floor: findColumnIndex(headerRow, ['Lote', 'Local do serviço', 'Local do servico'], 5),
-            duration: findColumnIndex(headerRow, ['Duração', 'Duracao', 'Prazo', 'Dias'], 12),
-            start: findColumnIndex(headerRow, ['Data de Início', 'Data de Inicio'], 10),
-            end: findColumnIndex(headerRow, ['Data de Término', 'Data de Termino'], 11),
-            cost: findColumnIndex(headerRow, ['Custo Vinculado Atual'], 15),
-            responsible: findColumnIndex(headerRow, ['Responsáveis', 'Responsaveis', 'Responsável', 'Responsavel'], 14),
-            predecessors: findColumnIndex(headerRow, ['Predecessoras', 'Predecessores', 'Predecessora', 'Predecessor']),
-            successors: findColumnIndex(headerRow, ['Sucessoras', 'Sucessores', 'Sucessora', 'Sucessor']),
-            progress: progressColumn !== -1
-              ? progressColumn
-              : findGroupedColumnIndex(headerRow, groupRow, ['Última Medição do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
-          };
-
-          // Two-pass import: 1st pass collects all detail rows (with explicit service names).
-          // 2nd pass collects package-only rows (service = '-') using the macro name as the service name.
-          // Deduplication is handled by the unique item ID key.
+          // Review has validated values and resolved repeated source identifiers.
           const seenItemKeys = new Set<string>();
           let parsedItems = [];
           const rawParsedRows = [];
@@ -4728,19 +4626,19 @@ const App = () => {
             const floorName = String(rawFloor || 'Térreo').trim();
             const itemKey = `xls_${slugify(floorName)}_${slugify(rawMacro)}_${slugify(rawService)}${rawId ? '_' + rawId : ''}`;
 
-            if (seenItemKeys.has(itemKey)) return; // skip duplicates
+            if (seenItemKeys.has(itemKey)) throw new Error(`Há atividades com nomes que geram a mesma identificação: ${rawMacro} / ${rawService} / ${floorName}. Diferencie seus identificadores na planilha.`);
             seenItemKeys.add(itemKey);
 
-            const rawDuration = colIdx.duration !== -1 && row[colIdx.duration] !== undefined ? parseInt(row[colIdx.duration], 10) : 10;
-            const rawStart = parseExcelDate(colIdx.start !== -1 && row[colIdx.start] !== undefined ? row[colIdx.start] : undefined);
-            const rawEnd = parseExcelDate(colIdx.end !== -1 && row[colIdx.end] !== undefined ? row[colIdx.end] : undefined, rawStart);
-            const rawCost = colIdx.cost !== -1 && row[colIdx.cost] !== undefined ? parseFloat(String(row[colIdx.cost]).replace(/[^\d.-]/g, '')) : 0;
+            const rawDuration = Number(row[colIdx.duration]);
+            const rawStart = String(row[colIdx.start]);
+            const rawEnd = String(row[colIdx.end]);
+            const rawCost = Number(row[colIdx.cost]);
             const rawResp = colIdx.responsible !== -1 && row[colIdx.responsible] !== undefined && row[colIdx.responsible] !== null ? String(row[colIdx.responsible]).trim().toUpperCase() : 'EQUIPE GERAL';
             const rawPredecessors = colIdx.predecessors !== -1 && row[colIdx.predecessors] !== undefined ? parseDependencyList(row[colIdx.predecessors]) : [];
             const rawSuccessors = colIdx.successors !== -1 && row[colIdx.successors] !== undefined ? parseDependencyList(row[colIdx.successors]) : [];
             let rawProgress = 0;
             if (colIdx.progress !== -1 && row[colIdx.progress] !== undefined) {
-              rawProgress = parsePercent(row[colIdx.progress]);
+              rawProgress = Number(row[colIdx.progress]); // Already validated and scaled in the review.
             }
 
             if (rawResp && rawResp !== 'UNDEFINED' && rawResp !== '' && rawResp !== '-') importedTeams.add(rawResp);
@@ -4933,8 +4831,9 @@ const App = () => {
 
         } catch (err) {
           console.error(err);
-          setNotification({ message: "Falha ao analisar a planilha Excel.", type: "error" });
+          setNotification({ message: err instanceof Error ? err.message : "Falha ao analisar a planilha Excel.", type: "error" });
           setIsImporting(false);
+          setImportStatus('');
         }
       }, 100);
     };
@@ -10135,7 +10034,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       )}
 
       {/* Importing Loader Spinner Modal */}
-      {isImporting && (
+      {scheduleImportPreview && <ScheduleImportPreview fileName={scheduleImportPreview.fileName} sheets={scheduleImportPreview.sheets}
+        limit={MAX_IMPORTED_CRONOGRAMA_ITEMS} onFinish={result => scheduleImportPreview.resolve(result)} />}
+      {isImporting && !scheduleImportPreview && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
           <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl flex flex-col items-center space-y-6 max-w-sm text-center">
             <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
