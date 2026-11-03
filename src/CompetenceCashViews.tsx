@@ -101,11 +101,13 @@ export const CompetenceCashViews: React.FC<CompetenceCashViewsProps> = ({
   };
 
   // Salva configurações do Modal
-  const handleSaveConfigs = () => {
-    saveCurvasConfig(projectId, editingConfigs);
+  const handleSaveConfigs = async () => {
+    try {
+    await saveCurvasConfig(projectId, editingConfigs);
     setStageConfigs(editingConfigs);
     setProjectParams(editingParams);
     setIsConfigModalOpen(false);
+    } catch (error) { alert(error instanceof Error ? error.message : 'Não foi possível salvar no Firebase.'); }
   };
 
   // Restaura configurações para o padrão
@@ -127,7 +129,7 @@ export const CompetenceCashViews: React.FC<CompetenceCashViewsProps> = ({
     try {
       const imported = await parseCurvasConfigExcelFile(file);
       const merged = { ...stageConfigs, ...imported };
-      saveCurvasConfig(projectId, merged);
+      await saveCurvasConfig(projectId, merged);
       setStageConfigs(merged);
       alert('Configurações importadas do Excel com sucesso!');
     } catch (err) {

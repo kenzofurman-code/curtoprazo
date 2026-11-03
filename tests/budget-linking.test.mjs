@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
+const values = new Map();
 const compile = (source) =>
   ts.transpileModule(source, {
     compilerOptions: {
@@ -17,6 +18,7 @@ const compile = (source) =>
 function moduleFrom(source) {
   const mod = { exports: {} };
   const customRequire = (id) => {
+    if (id === './firebaseDocuments') return { cloudStorage: { getItem: key => values.get(key) ?? null } };
     if (id.startsWith('./data/')) {
       return require('../src/' + id.slice(2));
     }
@@ -31,8 +33,7 @@ const budgetModule = moduleFrom(
 );
 
 test('obra sem dados não carrega orçamento específico e orçamento salvo vazio é preservado', () => {
-  const values = new Map();
-  globalThis.localStorage = { getItem: key => values.get(key) ?? null };
+  values.clear();
   const empty = budgetModule.getEffectiveBudgetState('projeto_principal');
   assert.deepEqual(empty.items, []);
   assert.equal(empty.totalCost, 0);

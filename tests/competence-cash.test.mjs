@@ -24,10 +24,10 @@ function moduleFrom(filePath, source) {
   loadedModules.set(filePath, mod.exports);
 
   const customRequire = (id) => {
-    if (id.startsWith('./localDatabase')) {
+    if (id.startsWith('./firebaseDocuments')) {
       return {
-        getLocalDocData: (docId) => inMemDb.get(docId) || null,
-        setLocalDocData: (docId, val) => inMemDb.set(docId, val),
+        getCachedFirebaseDocument: (docId) => inMemDb.get(docId) || null,
+        saveFirebaseDocument: async (docId, val) => { inMemDb.set(docId, val); },
       };
     }
     if (id.startsWith('./physicalFinancialEngine')) {
@@ -323,7 +323,7 @@ test('Distribuição em Lotes: divide material em N entregas e estende ciclos se
   assert.ok(result.extendedCycles.length >= cycles.length);
 });
 
-test('Persistência e Cascata de Herança em loadCurvasConfig e saveCurvasConfig', () => {
+test('Persistência e Cascata de Herança em loadCurvasConfig e saveCurvasConfig', async () => {
   const projectId = 'obra_teste_persist';
   const budgetItems = [
     { code: '1', level: 1, description: 'Obra Teste', total_price: 150000 },
@@ -348,7 +348,7 @@ test('Persistência e Cascata de Herança em loadCurvasConfig e saveCurvasConfig
     },
   };
 
-  engine.saveCurvasConfig(projectId, customConfig);
+  await engine.saveCurvasConfig(projectId, customConfig);
 
   // Carrega e verifica se o filho '02.01.01' herdou 75% material e 25% MO
   const loaded = engine.loadCurvasConfig(projectId, budgetItems);

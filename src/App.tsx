@@ -1,29 +1,14 @@
 import ModuleVisibilitySettings from './ModuleVisibilitySettings';
 import { APP_MODULES, canAccessModule, resolveVisibleTab } from './moduleVisibility';
 import { useModuleVisibility } from './useModuleVisibility';
-import LocalDatabaseSettings from './LocalDatabaseSettings';
 import ScheduleImportPreview from './ScheduleImportPreview';
 import { SCHEDULE_FIELDS } from './scheduleImport';
 import type { ScheduleAnalysis, ScheduleSheet } from './scheduleImport';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { 
-  getFirestore as fbGetFirestore, 
-  doc as fbDoc, 
-  setDoc as fbSetDoc, 
-  updateDoc as fbUpdateDoc, 
-  onSnapshot as fbOnSnapshot, 
-  getDoc as fbGetDoc, 
-  writeBatch as fbWriteBatch, 
-  runTransaction as fbRunTransaction 
-} from 'firebase/firestore';
-import {
-  isLocalDbMode,
-  getLocalDocData,
-  setLocalDocData,
-  subscribeLocalDoc
-} from './localDatabase';
+import { getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, writeBatch, runTransaction } from 'firebase/firestore';
+import { configureFirebaseDocuments, primeProjectFirebaseDocuments, CLOUD_STATUS_EVENT, retryFirebaseWrites } from './firebaseDocuments';
 import { preparePayload, resolvePayload, MAX_SAVE_BYTES } from './chunkedPayload';
 import { GENERAL_DELAY_REASONS, DELAY_REASON_REGISTRY_ID, normalizeDelayReason, mergeDelayReasons, projectOnlyDelayReasons, normalizeDelayReasonFields } from './delayReasons';
 import DelayReasonSelect from './DelayReasonSelect';
@@ -38,7 +23,6 @@ import { CalendarView } from './CalendarView';
 import { compileLobToCronograma, hydrateLobFromCronograma } from './longTermSchedule';
 import { ScheduleImportModal } from './ScheduleImportModal';
 import { createNewScheduleVersion } from './scheduleVersions';
-import { exportCompleteLocalBackup } from './localBackup';
 
 declare global {
   interface Window {
@@ -49,125 +33,6 @@ declare global {
     __initial_auth_token?: string;
   }
 }
-
-// --- Ponte de Banco Local Seguro (Isolamento total do Firestore em nuvem) ---
-const isLocalModeActive = (): boolean => isLocalDbMode();
-
-const getFirestore = (app?: any): any => {
-  if (isLocalModeActive()) {
-    return { isLocal: true };
-  }
-  return fbGetFirestore(app);
-};
-
-const doc = (dbOrParent: any, ...pathSegments: string[]): any => {
-  if (isLocalModeActive() || (dbOrParent && dbOrParent.isLocal)) {
-    const parentPath = dbOrParent?.path ? String(dbOrParent.path) : '';
-    const id = pathSegments[pathSegments.length - 1] || '';
-    const fullPath = parentPath ? `${parentPath}/${pathSegments.join('/')}` : pathSegments.join('/');
-    const docParentPath = parentPath || pathSegments.slice(0, -1).join('/');
-    return {
-      id,
-      path: fullPath,
-      parent: { path: docParentPath, isLocal: true },
-      isLocal: true
-    };
-  }
-  return (fbDoc as any)(dbOrParent, ...pathSegments);
-};
-
-const setDoc = async (ref: any, data: any, options?: any): Promise<void> => {
-  if (isLocalModeActive() || ref?.isLocal) {
-    const docId = ref.id;
-    if (options?.merge) {
-      const existing = getLocalDocData(docId) || {};
-      setLocalDocData(docId, { ...existing, ...data });
-    } else {
-      setLocalDocData(docId, data);
-    }
-    return Promise.resolve();
-  }
-  return fbSetDoc(ref, data, options);
-};
-
-const updateDoc = async (ref: any, data: any): Promise<void> => {
-  if (isLocalModeActive() || ref?.isLocal) {
-    const docId = ref.id;
-    const existing = getLocalDocData(docId) || {};
-    setLocalDocData(docId, { ...existing, ...data });
-    return Promise.resolve();
-  }
-  return fbUpdateDoc(ref, data);
-};
-
-const getDoc = async (ref: any): Promise<any> => {
-  if (isLocalModeActive() || ref?.isLocal) {
-    const docId = ref.id;
-    const data = getLocalDocData(docId);
-    return Promise.resolve({
-      id: docId,
-      exists: () => data !== null && data !== undefined,
-      data: () => (data ? JSON.parse(JSON.stringify(data)) : {})
-    });
-  }
-  return fbGetDoc(ref);
-};
-
-const onSnapshot = (ref: any, onNext: (snap: any) => void, onError?: (err: any) => void): (() => void) => {
-  if (isLocalModeActive() || ref?.isLocal) {
-    const docId = ref.id;
-    return subscribeLocalDoc(docId, snap => {
-      try {
-        onNext(snap);
-      } catch (err) {
-        if (onError) onError(err);
-      }
-    });
-  }
-  return fbOnSnapshot(ref, onNext, onError);
-};
-
-const writeBatch = (db: any): any => {
-  if (isLocalModeActive() || (db && db.isLocal)) {
-    const operations: Array<() => Promise<void>> = [];
-    return {
-      set: (ref: any, data: any, options?: any) => {
-        operations.push(() => setDoc(ref, data, options));
-      },
-      update: (ref: any, data: any) => {
-        operations.push(() => updateDoc(ref, data));
-      },
-      delete: (ref: any) => {
-        operations.push(() => {
-          setLocalDocData(ref.id, null);
-          return Promise.resolve();
-        });
-      },
-      commit: async () => {
-        for (const op of operations) {
-          await op();
-        }
-      }
-    };
-  }
-  return fbWriteBatch(db);
-};
-
-const runTransaction = async (db: any, updateFunction: (transaction: any) => Promise<any>): Promise<any> => {
-  if (isLocalModeActive() || (db && db.isLocal)) {
-    const transaction = {
-      get: async (ref: any) => getDoc(ref),
-      set: (ref: any, data: any, options?: any) => setDoc(ref, data, options),
-      update: (ref: any, data: any) => updateDoc(ref, data),
-      delete: (ref: any) => {
-        setLocalDocData(ref.id, null);
-      }
-    };
-    return updateFunction(transaction);
-  }
-  return fbRunTransaction(db, updateFunction);
-};
-
 
 // --- Utilitários de Data e Dados ---
 const compressString = (str: string): string => {
@@ -1141,6 +1006,7 @@ const INITIAL_DELAYS = GENERAL_DELAY_REASONS;
 
 const App = () => {
   const [db, setDb] = useState<any>(null);
+  const [auxCloudStatus, setAuxCloudStatus] = useState({pending:0,error:'',retryable:false});
   const [globalSettingsDb, setGlobalSettingsDb] = useState<any>(null);
   const [globalSettingsConnectionError, setGlobalSettingsConnectionError] = useState('');
   const [userId, setUserId] = useState<any>(null);
@@ -1468,58 +1334,49 @@ const App = () => {
 
   useEffect(() => {
     let unsubscribe = () => {};
-    const localMode = isLocalModeActive();
-    if (localMode) {
-      setDb(getFirestore()); setUserId('local_user'); setLoading(false);
-    }
     try {
-      if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-        if (localMode) return;
-        throw new Error('Configuração do Firebase não encontrada.');
-      }
+      if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) throw new Error('Configuração do Firebase não encontrada.');
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
-      if (!localMode) setDb(fbGetFirestore(app));
+      const cloudDb = getFirestore(app);
+      setDb(cloudDb);
       unsubscribe = onAuthStateChanged(auth, async (user) => {
         try {
           if (user) {
-            // Global visibility is always read from Firebase, including in local work mode.
-            setGlobalSettingsDb(fbGetFirestore(app));
-            setGlobalSettingsConnectionError('');
-            if (!localMode) setUserId(user.uid);
+            configureFirebaseDocuments(cloudDb, appId);
+            setGlobalSettingsDb(cloudDb); setGlobalSettingsConnectionError('');
+            setUserId(user.uid);
           } else {
-            setGlobalSettingsDb(null);
+            configureFirebaseDocuments(null, appId);
+            setGlobalSettingsDb(null); setUserId(null);
             if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
             else await signInAnonymously(auth);
           }
-        } catch (authErr) {
-          console.error('Auth error:', authErr);
-          setGlobalSettingsConnectionError('Não foi possível autenticar a conexão da configuração global.');
-          if (!localMode) {
-            setNotification({ message: 'Falha na autenticação do Firebase.', type: 'error' });
-            setLoading(false);
-          }
+        } catch (error) {
+          console.error('Erro de autenticação:', error);
+          setGlobalSettingsConnectionError('Não foi possível autenticar no Firebase.');
+          setNotification({message:'Não foi possível conectar ao Firebase. Verifique a conexão e recarregue a página.',type:'error'});
+          setLoading(false);
         }
-      }, () => {
-        setGlobalSettingsDb(null);
-        setGlobalSettingsConnectionError('Não foi possível conectar à configuração global.');
-        if (!localMode) setLoading(false);
-      });
-    } catch (err) {
-      console.error('Firebase init error:', err);
-      setGlobalSettingsConnectionError('Configure o Firebase para salvar a visibilidade dos módulos para todos.');
-      if (!localMode) {
-        setNotification({ message: 'Configure o Firebase antes de usar o salvamento em nuvem.', type: 'error' });
-        setLoading(false);
-      }
+      }, () => { setUserId(null); setLoading(false); });
+    } catch (error) {
+      console.error('Erro ao conectar ao Firebase:', error);
+      setGlobalSettingsConnectionError('Configure o Firebase para utilizar o sistema.');
+      setNotification({message:'A conexão com o Firebase é obrigatória. Verifique a configuração e recarregue a página.',type:'error'});
+      setLoading(false);
     }
     return () => unsubscribe();
+  }, []);
+  useEffect(() => {
+    const onStatus = (event: Event) => setAuxCloudStatus((event as CustomEvent).detail);
+    window.addEventListener(CLOUD_STATUS_EVENT, onStatus);
+    return () => window.removeEventListener(CLOUD_STATUS_EVENT, onStatus);
   }, []);
 
   // Aviso de alterações pendentes ao fechar o navegador
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (dbSavingStatus !== 'saved') {
+      if (dbSavingStatus !== 'saved' || auxCloudStatus.pending > 0 || auxCloudStatus.error) {
         e.preventDefault();
         e.returnValue = 'Existem alterações pendentes que estão sendo salvas no banco de dados. Tem certeza de que deseja sair?';
         return e.returnValue;
@@ -1527,7 +1384,7 @@ const App = () => {
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [dbSavingStatus]);
+  }, [dbSavingStatus, auxCloudStatus.pending, auxCloudStatus.error]);
 
   // Motivos gerais são lidos também nos links de apontamento de campo.
   useEffect(() => {
@@ -1798,6 +1655,7 @@ const App = () => {
     let hasLoadedFloors = false;
     let hasLoadedPlanning = false;
     let hasReceivedMeta = false;
+    let hasReceivedAuxiliary = false;
     let hasReceivedCrono = false;
     let hasReceivedFloors = false;
     let hasReceivedPlanning = false;
@@ -1846,7 +1704,7 @@ const App = () => {
     };
 
     const reconcileLoadedProgress = () => {
-      if (!hasReceivedMeta || !hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning) return;
+      if (!hasReceivedMeta || !hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning || !hasReceivedAuxiliary) return;
       if (failedPayloads.size > 0) return;
       if (['cronogramaInicial', 'data', 'planning'].some(field => payloadRevisions[field] !== metaRevision)) return;
 
@@ -1868,6 +1726,10 @@ const App = () => {
       setIsProjectHydrated(true);
       setLoading(false);
     };
+
+    primeProjectFirebaseDocuments(targetId).then(() => {
+      if (!disposed) { hasReceivedAuxiliary = true; reconcileLoadedProgress(); }
+    }).catch(error => { if (!disposed) handlePayloadError(error); });
 
     const unsubMeta = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
@@ -7753,13 +7615,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
 
           {/* Grid of Projects */}
-          <details className="rounded-2xl border border-slate-700 bg-slate-900 p-4">
-            <summary className="cursor-pointer text-sm font-semibold text-slate-100">Banco de dados e cópias de segurança</summary>
-            <div className="mt-4"><LocalDatabaseSettings cloudAvailable={Object.keys(firebaseConfig).length > 0} /></div>
-          </details>
+
           {projects.length === 0 && <div className="rounded-2xl border border-slate-700 bg-slate-900 p-6 text-sm text-slate-200">
             <h2 className="text-lg font-bold text-white">Nenhuma obra cadastrada</h2>
-            <p className="mt-2">Este banco está vazio. Cadastre a primeira obra ou carregue uma cópia dos dados nas configurações acima.</p>
+              <p className="mt-2">Nenhuma obra foi encontrada no Firebase. Cadastre a primeira obra para começar.</p>
             <button onClick={() => setShowAddProjectModal(true)} className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400">Cadastrar primeira obra</button>
           </div>}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -8776,7 +8635,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             </span>
           </div>
           <p className="text-xs text-slate-600">
-            A identificação do operador é registrada em cada alteração salva no banco de dados local ou sincronizada na nuvem.
+            A identificação do operador é registrada em cada alteração salva no Firebase.
           </p>
           <div className="space-y-2">
             <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Alterar Nome do Operador</label>
@@ -8812,7 +8671,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             localStorage.removeItem('selected_project_id'); setSelectedProjectId(''); setShowAccessModal(true);
           }}>Abrir painel de admin</button>
         </div>
-        <LocalDatabaseSettings cloudAvailable={Object.keys(firebaseConfig).length > 0} />
 
         {/* Card: Atalhos para Configurações Operacionais */}
         <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4 lg:col-span-2">
@@ -9092,6 +8950,15 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   };
 
+  if (!loading && (!db || !userId || (selectedProjectId && !isProjectHydrated))) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
+      <div className="max-w-md space-y-4"><h1 className="text-xl font-bold">Não foi possível carregar os dados do Firebase</h1>
+        <p className="text-sm text-slate-300">Verifique a conexão e a configuração do Firebase. O sistema só permite editar após carregar os dados da nuvem.</p>
+        <button className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white" onClick={() => window.location.reload()}>Recarregar</button>
+      </div>
+    </div>;
+  }
+
   if (isTeamMode) {
     if (loading) {
       return (
@@ -9220,7 +9087,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 </button>
               </div>
             )}
-            {dbSavingStatus === 'saving' && (
+            {(dbSavingStatus === 'saving' || auxCloudStatus.pending > 0) && (
               <span className="px-3 py-1 bg-blue-900/80 border border-blue-700/50 rounded-full text-[9px] font-bold text-blue-200 animate-pulse flex items-center gap-1">
                 💾 Gravando...
               </span>
@@ -9230,7 +9097,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 ⏳ Alterações pendentes...
               </span>
             )}
-            {dbSavingStatus === 'saved' && (
+            {dbSavingStatus === 'saved' && !auxCloudStatus.pending && !auxCloudStatus.error && (
               <span className="px-3 py-1 bg-emerald-950/50 border border-emerald-800/40 rounded-full text-[9px] font-bold text-emerald-300 flex items-center gap-1">
                 ✅ Sincronizado
               </span>
@@ -9240,32 +9107,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 Último avanço: {dbLastUpdatedBy}
               </span>
             )}
-            {isLocalModeActive() && (
-              <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-500/60 rounded-full text-[9px] font-bold text-emerald-300 shadow-sm" title="Banco 100% local no navegador. A nuvem Firestore está totalmente segura e protegida contra modificações.">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>🛡️ Banco Local Ativo (Nuvem Protegida)</span>
-                <button
-                  onClick={async () => {
-                    try {
-                    const dataStr = await exportCompleteLocalBackup();
-                    const blob = new Blob([dataStr], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `backup_local_curtoprazo_${new Date().toISOString().slice(0, 10)}.json`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-
-                    } catch (err) { setNotification({message: err instanceof Error ? err.message : "Não foi possível baixar a cópia.",type:"error"}); }
-                  }}
-                  className="ml-1 hover:text-white underline text-[9px] cursor-pointer"
-                  title="Exportar backup completo dos dados locais em arquivo JSON"
-                >
-                  Baixar Backup
-                </button>
-              </div>
-            )}
-
             {canOpenModule('import') && (
             <button
               type="button"
@@ -9282,6 +9123,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
       </header>
 
+      {auxCloudStatus.error && <div role="alert" className="flex flex-wrap items-center gap-3 bg-red-50 px-5 py-3 text-sm text-red-900">
+        <span>Não foi possível salvar no Firebase: {auxCloudStatus.error} Mantenha esta página aberta e tente novamente.</span>
+        {auxCloudStatus.retryable && <button className="rounded-lg border border-red-300 px-3 py-1 font-semibold" onClick={() => { void retryFirebaseWrites().catch(() => {}); }}>Tentar salvar novamente</button>}
+      </div>}
       {/* Layout Flex com Sidebar Drawer Lateral na Esquerda */}
       <div className="flex min-h-[calc(100vh-68px)]">
         {/* Menu Lateral Esquerdo (Drawer com Ícones e Rótulos Compactos) */}

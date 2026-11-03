@@ -1,3 +1,4 @@
+import { cloudStorage } from './firebaseDocuments';
 /**
  * Módulo de Orçamento, Vínculo com Cronograma e Ponderação de Pesos e Custos
  * Baseado no modelo Prevision (app/budget/index.html e WeightDistributorService).
@@ -671,7 +672,7 @@ export function getEffectiveBudgetState(
   services: ScheduleServicePackage[] = []
 ): ProjectBudgetState {
   try {
-    const saved = localStorage.getItem(`curtoprazo_budget_${projectId}`);
+    const saved = cloudStorage.getItem(`curtoprazo_budget_${projectId}`);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed && Array.isArray(parsed.items)) {

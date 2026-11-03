@@ -1,3 +1,4 @@
+import { cloudStorage } from './firebaseDocuments';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import type {
   LobActivity,
@@ -276,10 +277,11 @@ export const GanttPlannerView: React.FC<GanttPlannerViewProps> = ({
   const [redoStack, setRedoStack] = useState<GanttTaskItem[][]>([]);
 
   // Carregar e persistir configurações
+  const [configLoadedProject, setConfigLoadedProject] = useState<string | null>(null);
   useEffect(() => {
     try {
       const storageKey = `curtoprazo_gantt_config_${projectKey || 'global'}`;
-      const saved = localStorage.getItem(storageKey);
+      const saved = cloudStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (typeof parsed.pxPerDay === 'number') setPxPerDay(parsed.pxPerDay);
@@ -297,9 +299,11 @@ export const GanttPlannerView: React.FC<GanttPlannerViewProps> = ({
         if (parsed.levelSort) setLevelSort((prev) => ({ ...prev, ...parsed.levelSort }));
       }
     } catch (_) {}
+    setConfigLoadedProject(projectKey || 'global');
   }, [projectKey]);
 
   useEffect(() => {
+    if (configLoadedProject !== (projectKey || 'global')) return;
     try {
       const storageKey = `curtoprazo_gantt_config_${projectKey || 'global'}`;
       const config = {
@@ -317,9 +321,10 @@ export const GanttPlannerView: React.FC<GanttPlannerViewProps> = ({
         customMacroOrder,
         levelSort,
       };
-      localStorage.setItem(storageKey, JSON.stringify(config));
+      cloudStorage.setItem(storageKey, JSON.stringify(config));
     } catch (_) {}
   }, [
+    configLoadedProject,
     projectKey,
     pxPerDay,
     zoomMode,

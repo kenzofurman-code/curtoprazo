@@ -1,3 +1,4 @@
+import { cloudStorage } from './firebaseDocuments';
 import React, { useState, useMemo } from 'react';
 import type {
   BudgetItem,
@@ -36,7 +37,7 @@ interface BudgetLinkingViewProps {
   onSaveWeightsAndCosts: (
     budgetState: ProjectBudgetState,
     updatedFloors?: ScheduleFloor[]
-  ) => void;
+  ) => void | Promise<void>;
 }
 
 export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
@@ -216,7 +217,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
         lastUpdated: new Date().toISOString(),
       };
       try {
-        localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(updated));
+        cloudStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(updated));
       } catch (_) {}
       return updated;
     });
@@ -320,11 +321,11 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
 
           <button
             type="button"
-            onClick={() => {
-              onSaveWeightsAndCosts(budgetState, localFloors);
+            onClick={async () => {
               try {
-                localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(budgetState));
-              } catch (_) {}
+                await cloudStorage.saveItem(`curtoprazo_budget_${projectId}`, JSON.stringify(budgetState));
+                await onSaveWeightsAndCosts(budgetState, localFloors);
+              } catch (error) { alert(error instanceof Error ? error.message : 'Não foi possível salvar o orçamento no Firebase.'); }
             }}
             className="px-4 py-2 bg-slate-900 hover:bg-black text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-sm"
           >
@@ -696,7 +697,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
                 lastUpdated: new Date().toISOString(),
               };
               try {
-                localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(next));
+                cloudStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(next));
               } catch (_) {}
               return next;
             });
@@ -719,7 +720,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
                 lastUpdated: new Date().toISOString(),
               };
               try {
-                localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(next));
+                cloudStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(next));
               } catch (_) {}
               return next;
             });
@@ -760,7 +761,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
             };
             setBudgetState(next);
             try {
-              localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(next));
+              cloudStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(next));
             } catch (_) {}
             setIsImportBudgetOpen(false);
           }}
@@ -778,7 +779,7 @@ export const BudgetLinkingView: React.FC<BudgetLinkingViewProps> = ({
           onApplyLinks={(updatedBudget) => {
             setBudgetState(updatedBudget);
             try {
-              localStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(updatedBudget));
+              cloudStorage.setItem(`curtoprazo_budget_${projectId}`, JSON.stringify(updatedBudget));
             } catch (_) {}
             setIsImportLinksOpen(false);
           }}

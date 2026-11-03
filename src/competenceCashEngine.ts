@@ -26,7 +26,7 @@
 import * as XLSX from 'xlsx';
 import type { BudgetItem } from './budgetLinking';
 import type { MeasurementCycle, PhysicalFinancialRow } from './physicalFinancialEngine';
-import { getLocalDocData, setLocalDocData } from './localDatabase';
+import { getCachedFirebaseDocument, saveFirebaseDocument } from './firebaseDocuments';
 
 // ==============================================================================
 // Tipos e Interfaces
@@ -478,7 +478,7 @@ export function loadCurvasConfig(
 ): Record<string, StageCurveConfig> {
   const allConfigs = getDefaultStageConfigs(budgetItems, params);
   const docId = getCurvasConfigDocId(projectId);
-  const saved = getLocalDocData(docId) as Record<string, StageCurveConfig> | null;
+  const saved = getCachedFirebaseDocument(docId) as Record<string, StageCurveConfig> | null;
 
   if (saved && typeof saved === 'object') {
     for (const [code, sCfg] of Object.entries(saved)) {
@@ -567,10 +567,10 @@ export function loadCurvasConfig(
   return allConfigs;
 }
 
-export function saveCurvasConfig(
+export async function saveCurvasConfig(
   projectId: string,
   configs: Record<string, StageCurveConfig> | StageCurveConfig[]
-): void {
+): Promise<void> {
   const docId = getCurvasConfigDocId(projectId);
   let mapToSave: Record<string, StageCurveConfig> = {};
 
@@ -582,7 +582,7 @@ export function saveCurvasConfig(
     mapToSave = { ...configs };
   }
 
-  setLocalDocData(docId, mapToSave);
+  await saveFirebaseDocument(docId, mapToSave);
 }
 
 // ==============================================================================

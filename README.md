@@ -30,8 +30,11 @@ Aplicativo web/PWA para planejamento semanal, medição física e acompanhamento
 
 - Node.js compatível com as versões usadas no `package-lock.json`.
 - Projeto Firebase com Authentication e Firestore habilitados.
+- Conexão com o Firebase para carregar e salvar os dados. Não existe banco de dados local ou modo de edição offline.
 - Opcional: chave Gemini para análise por IA.
 - Opcional: chave Visual Crossing para previsão do tempo.
+
+Os dados das obras, históricos de versões e configurações são persistidos no Firestore. Cargas grandes usam compressão e documentos em partes. Dados de versões anteriores que existam apenas no navegador não são apagados nem enviados automaticamente ao Firebase.
 
 ## Configuração Local
 

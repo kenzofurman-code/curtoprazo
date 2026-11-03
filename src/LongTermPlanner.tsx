@@ -1,3 +1,4 @@
+import { cloudStorage } from './firebaseDocuments';
 import { useScheduleVersionHistory } from './useScheduleVersionHistory';
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
@@ -144,7 +145,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   const {versions:scheduleVersions,setVersions:setScheduleVersions,busy:versionsBusy,error:versionsError,run:runVersions} = useScheduleVersionHistory(selectedProjectId || 'global',{cronogramaInicial,floors,allFloorsData,weights,teams,matrices});
   const [showGhostBaseline, setShowGhostBaseline] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(`curtoprazo_lob_ghost_${selectedProjectId || 'global'}`) === 'true';
+      return JSON.parse(cloudStorage.getItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`) || '{}').showGhostBaseline === true;
     } catch (_) {}
     return false;
   });
@@ -312,7 +313,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
   // Helper para carregar configurações persistidas da Linha de Balanço
   const loadSavedLobConfig = () => {
     try {
-      const saved = localStorage.getItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`);
+      const saved = cloudStorage.getItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`);
       if (saved) return JSON.parse(saved);
     } catch (_) {}
     return null;
@@ -337,7 +338,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       return initialLobConfig.defaultLinesPerFloor;
     }
     try {
-      const saved = localStorage.getItem(`curtoprazo_lob_lines_per_floor_${selectedProjectId || 'global'}`);
+      const saved = cloudStorage.getItem(`curtoprazo_lob_lines_per_floor_${selectedProjectId || 'global'}`);
       if (saved) {
         const val = Number(saved);
         if (!isNaN(val) && val >= 1 && val <= 10) return val;
@@ -350,7 +351,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       return initialLobConfig.subLineHeight;
     }
     try {
-      const saved = localStorage.getItem(`curtoprazo_lob_subline_height_${selectedProjectId || 'global'}`);
+      const saved = cloudStorage.getItem(`curtoprazo_lob_subline_height_${selectedProjectId || 'global'}`);
       if (saved) {
         const val = Number(saved);
         if ([18, 22, 26, 32].includes(val)) return val;
@@ -369,7 +370,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       return initialLobConfig.hideEmptyFloors;
     }
     try {
-      return localStorage.getItem(`curtoprazo_lob_hide_empty_${selectedProjectId || 'global'}`) === 'true';
+      return cloudStorage.getItem(`curtoprazo_lob_hide_empty_${selectedProjectId || 'global'}`) === 'true';
     } catch (_) {}
     return false;
   });
@@ -379,7 +380,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       return initialLobConfig.showDependencyArrows;
     }
     try {
-      return localStorage.getItem(`curtoprazo_lob_arrows_${selectedProjectId || 'global'}`) === 'true';
+      return cloudStorage.getItem(`curtoprazo_lob_arrows_${selectedProjectId || 'global'}`) === 'true';
     } catch (_) {}
     return false;
   });
@@ -388,7 +389,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
       return initialLobConfig.showCriticalPath;
     }
     try {
-      return localStorage.getItem(`curtoprazo_lob_critical_path_${selectedProjectId || 'global'}`) === 'true';
+      return cloudStorage.getItem(`curtoprazo_lob_critical_path_${selectedProjectId || 'global'}`) === 'true';
     } catch (_) {}
     return false;
   });
@@ -512,7 +513,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
     'structure' | 'timeline' | 'versions' | 'lines' | 'labels' | 'grid' | 'packages' | 'options'
   >('structure');
 
-  // --- Persistência Automática Total no localStorage ---
+  // --- Persistência Automática Total no Firebase ---
   useEffect(() => {
     try {
       const configObj = {
@@ -543,14 +544,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
         gridVerticalStyle,
         enableZebraBands,
       };
-      localStorage.setItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`, JSON.stringify(configObj));
-      // Salva chaves legadas para compatibilidade
-      localStorage.setItem(`curtoprazo_lob_subline_height_${selectedProjectId || 'global'}`, String(subLineHeight));
-      localStorage.setItem(`curtoprazo_lob_lines_per_floor_${selectedProjectId || 'global'}`, String(defaultLinesPerFloor));
-      localStorage.setItem(`curtoprazo_lob_hide_empty_${selectedProjectId || 'global'}`, String(hideEmptyFloors));
-      localStorage.setItem(`curtoprazo_lob_arrows_${selectedProjectId || 'global'}`, String(showDependencyArrows));
-      localStorage.setItem(`curtoprazo_lob_critical_path_${selectedProjectId || 'global'}`, String(showCriticalPath));
-      localStorage.setItem(`curtoprazo_lob_ghost_${selectedProjectId || 'global'}`, String(showGhostBaseline));
+      cloudStorage.setItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`, JSON.stringify(configObj));
     } catch (err) {
       console.warn('Erro ao persistir configurações da Linha de Balanço:', err);
     }
@@ -2126,7 +2120,6 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                     onChange={(e) => {
                       setShowGhostBaseline(e.target.checked);
                       try {
-                        localStorage.setItem(`curtoprazo_lob_ghost_${selectedProjectId || 'global'}`, String(e.target.checked));
                       } catch (_) {}
                     }}
                     className="rounded text-amber-600 focus:ring-0 cursor-pointer"
@@ -2874,7 +2867,6 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
             onToggleGhostBaseline={(val) => {
               setShowGhostBaseline(val);
               try {
-                localStorage.setItem(`curtoprazo_lob_ghost_${selectedProjectId || 'global'}`, String(val));
               } catch (_) {}
             }}
             onOpenVersionDrawer={() => setIsVersionDrawerOpen(true)}
@@ -2940,7 +2932,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
             replicationGroups={activeState.replicationGroups}
             existingWeights={weights}
             onBack={() => setSubView('lob')}
-            onSaveWeightsAndCosts={(budgetState, updatedFloors) => {
+            onSaveWeightsAndCosts={async (budgetState, updatedFloors) => {
               const { updatedActivities, updatedWeights } = applyBudgetWeightsToSchedule(
                 budgetState,
                 activeState.activities,
@@ -2963,7 +2955,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                 teams,
                 matrices
               );
-              onApplySchedule(
+              await onApplySchedule(
                 compiled,
                 'Ponderação de pesos e custos do orçamento aplicada com sucesso!'
               );
@@ -4307,7 +4299,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
               <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
                 <span className="text-emerald-600">✓</span>
-                <span>Configurações salvas automaticamente no navegador para este projeto</span>
+                <span>Configurações salvas automaticamente no Firebase para esta obra</span>
               </span>
               <button
                 type="button"
@@ -4341,13 +4333,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
                       gridVerticalStyle,
                       enableZebraBands,
                     };
-                    localStorage.setItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`, JSON.stringify(configObj));
-                    localStorage.setItem(`curtoprazo_lob_subline_height_${selectedProjectId || 'global'}`, String(subLineHeight));
-                    localStorage.setItem(`curtoprazo_lob_lines_per_floor_${selectedProjectId || 'global'}`, String(defaultLinesPerFloor));
-                    localStorage.setItem(`curtoprazo_lob_hide_empty_${selectedProjectId || 'global'}`, String(hideEmptyFloors));
-                    localStorage.setItem(`curtoprazo_lob_critical_path_${selectedProjectId || 'global'}`, String(showCriticalPath));
-                    localStorage.setItem(`curtoprazo_lob_arrows_${selectedProjectId || 'global'}`, String(showDependencyArrows));
-                    localStorage.setItem(`curtoprazo_lob_ghost_${selectedProjectId || 'global'}`, String(showGhostBaseline));
+                    cloudStorage.setItem(`curtoprazo_lob_config_${selectedProjectId || 'global'}`, JSON.stringify(configObj));
                   } catch (_) {}
                   updateLobMetadataFast((prev) => ({ ...prev }));
                   setActiveModal(null);
@@ -6912,7 +6898,7 @@ export const LongTermPlanner: React.FC<LongTermPlannerProps> = ({
               {/* Rodapé do Drawer */}
               <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
                 <span className="text-[11px] text-slate-500">
-                  {scheduleVersions.length} versões salvas no banco local
+                  {scheduleVersions.length} versões salvas no Firebase
                 </span>
                 <button
                   type="button"

@@ -1,3 +1,4 @@
+import { cloudStorage } from './firebaseDocuments';
 // Componente Visual do Criador de Macrofluxo (Process Mapping com Matriz de Colunas/Etapas)
 // Suporta alinhamento de raias por etapas temporais compartilhadas, vínculos inter-raias e tema claro coerente
 import React, { useState, useRef, useMemo, useEffect } from 'react';
@@ -36,7 +37,7 @@ export const MacroflowCanvasView: React.FC<MacroflowCanvasViewProps> = ({
   const [data, setData] = useState<MacroflowProjectData>(() => {
     const storageKey = `curtoprazo_macroflow_${selectedProjectId || 'global'}`;
     try {
-      const saved = localStorage.getItem(storageKey);
+      const saved = cloudStorage.getItem(storageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && Array.isArray(parsed.swimlanes)) {
@@ -65,12 +66,12 @@ export const MacroflowCanvasView: React.FC<MacroflowCanvasViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasScrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-persistência no localStorage
+  // Auto-persistência no Firebase
   useEffect(() => {
     if (!data) return;
     try {
       const storageKey = `curtoprazo_macroflow_${selectedProjectId || 'global'}`;
-      localStorage.setItem(storageKey, JSON.stringify(data));
+      cloudStorage.setItem(storageKey, JSON.stringify(data));
     } catch (_) {}
   }, [data, selectedProjectId]);
 
