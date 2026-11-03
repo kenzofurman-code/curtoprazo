@@ -1,3 +1,6 @@
+import ModuleVisibilitySettings from './ModuleVisibilitySettings';
+import { APP_MODULES, canAccessModule, resolveVisibleTab } from './moduleVisibility';
+import { useModuleVisibility } from './useModuleVisibility';
 import LocalDatabaseSettings from './LocalDatabaseSettings';
 import ScheduleImportPreview from './ScheduleImportPreview';
 import { SCHEDULE_FIELDS } from './scheduleImport';
@@ -1138,6 +1141,8 @@ const INITIAL_DELAYS = GENERAL_DELAY_REASONS;
 
 const App = () => {
   const [db, setDb] = useState<any>(null);
+  const [globalSettingsDb, setGlobalSettingsDb] = useState<any>(null);
+  const [globalSettingsConnectionError, setGlobalSettingsConnectionError] = useState('');
   const [userId, setUserId] = useState<any>(null);
 
   // Intercepção de modo de equipe (WhatsApp/Mobile)
@@ -1155,7 +1160,7 @@ const App = () => {
   } | null>(null);
   const [isScheduleImportModalOpen, setIsScheduleImportModalOpen] = useState<boolean>(false);
   const [versionUpdateKey, setVersionUpdateKey] = useState<number>(0);
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [requestedTab, setRequestedTab] = useState<string>('dashboard');
   const [dashboardSubView, setDashboardSubView] = useState<'overview' | 'matrix' | 'ppc' | 'history'>('overview');
   const [isWeeklyConfigModalOpen, setIsWeeklyConfigModalOpen] = useState<boolean>(false);
   const [notification, setNotification] = useState<any>({ message: '', type: '' });
@@ -1313,6 +1318,19 @@ const App = () => {
   const [accessUser, setAccessUser] = useState<string>('');
   const [accessPassword, setAccessPassword] = useState<string>('');
   const [isAccessAdmin, setIsAccessAdmin] = useState<boolean>(false);
+  useEffect(() => { setIsAccessAdmin(false); }, [plannerUsername]);
+  const moduleSettings = useModuleVisibility(globalSettingsDb, appId);
+  const canOpenModule = (id: string) => canAccessModule(id, moduleSettings.visibility, isAccessAdmin);
+  const activeTab = resolveVisibleTab(requestedTab, moduleSettings.visibility, isAccessAdmin) || '';
+  const setActiveTab = (id: string) => { if (canOpenModule(id)) setRequestedTab(id); };
+  const openScheduleImport = () => { if (canOpenModule('import')) setIsScheduleImportModalOpen(true); };
+  useEffect(() => {
+    if (!canAccessModule('import', moduleSettings.visibility, isAccessAdmin)) {
+      setIsScheduleImportModalOpen(false);
+      scheduleImportPreview?.resolve(null);
+    }
+  }, [moduleSettings.visibility, isAccessAdmin, scheduleImportPreview]);
+
   const [newAccessUser, setNewAccessUser] = useState<string>('');
   const hasLoggedSession = useRef<boolean>(false);
 
@@ -1450,41 +1468,50 @@ const App = () => {
 
   useEffect(() => {
     let unsubscribe = () => {};
+    const localMode = isLocalModeActive();
+    if (localMode) {
+      setDb(getFirestore()); setUserId('local_user'); setLoading(false);
+    }
     try {
-      if (isLocalModeActive()) {
-        const dbInst = getFirestore();
-        setDb(dbInst);
-        setUserId('local_user');
-        setLoading(false);
-        return;
-      }
       if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+        if (localMode) return;
         throw new Error('Configuração do Firebase não encontrada.');
       }
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
-      const dbInst = getFirestore(app);
-      setDb(dbInst);
-
+      if (!localMode) setDb(fbGetFirestore(app));
       unsubscribe = onAuthStateChanged(auth, async (user) => {
         try {
           if (user) {
-            setUserId(user.uid);
-          } else if (initialAuthToken) {
-            await signInWithCustomToken(auth, initialAuthToken);
+            // Global visibility is always read from Firebase, including in local work mode.
+            setGlobalSettingsDb(fbGetFirestore(app));
+            setGlobalSettingsConnectionError('');
+            if (!localMode) setUserId(user.uid);
           } else {
-            await signInAnonymously(auth);
+            setGlobalSettingsDb(null);
+            if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
+            else await signInAnonymously(auth);
           }
         } catch (authErr) {
           console.error('Auth error:', authErr);
-          setNotification({ message: 'Falha na autenticação do Firebase.', type: 'error' });
-          setLoading(false);
+          setGlobalSettingsConnectionError('Não foi possível autenticar a conexão da configuração global.');
+          if (!localMode) {
+            setNotification({ message: 'Falha na autenticação do Firebase.', type: 'error' });
+            setLoading(false);
+          }
         }
+      }, () => {
+        setGlobalSettingsDb(null);
+        setGlobalSettingsConnectionError('Não foi possível conectar à configuração global.');
+        if (!localMode) setLoading(false);
       });
     } catch (err) {
       console.error('Firebase init error:', err);
-      setNotification({ message: 'Configure o Firebase antes de usar o salvamento em nuvem.', type: 'error' });
-      setLoading(false);
+      setGlobalSettingsConnectionError('Configure o Firebase para salvar a visibilidade dos módulos para todos.');
+      if (!localMode) {
+        setNotification({ message: 'Configure o Firebase antes de usar o salvamento em nuvem.', type: 'error' });
+        setLoading(false);
+      }
     }
     return () => unsubscribe();
   }, []);
@@ -4448,6 +4475,7 @@ const App = () => {
   };
 
   const handleFileUpload = (e: any) => {
+    if (!canOpenModule('import')) return;
     const file = e.target.files[0];
     if (!file) return;
     e.target.value = ''; // Allow retrying the same file after review/cancellation.
@@ -4742,6 +4770,7 @@ const App = () => {
       makeActive: boolean;
     }
   ) => {
+    if (!canOpenModule('import')) return;
     try {
       const activeProjId = selectedProjectId || 'projeto_principal';
 
@@ -6047,7 +6076,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         currentBudgetImport={currentBudgetImport}
         getBudgetImportTooltip={getBudgetImportTooltip}
         handleFileUpload={handleFileUpload}
-        onOpenImportModal={() => setIsScheduleImportModalOpen(true)}
+        onOpenImportModal={canOpenModule('import') ? openScheduleImport : undefined}
         onTriggerClearDB={() =>
           triggerConfirm(
             'Limpar Banco de Dados',
@@ -6319,7 +6348,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             teams,
             matrices,
           }}
-          onOpenImportModal={() => setIsScheduleImportModalOpen(true)}
+          onOpenImportModal={canOpenModule('import') ? openScheduleImport : undefined}
           versionUpdateKey={versionUpdateKey}
           onApplyVersion={async (snap, versionName) => {
             const compiled = compileLobToCronograma(
@@ -8177,6 +8206,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </button>
                   </div>
 
+                  <ModuleVisibilitySettings visibility={moduleSettings.visibility} ready={moduleSettings.ready}
+                    error={moduleSettings.error || globalSettingsConnectionError}
+                    onSave={value => moduleSettings.save(value, isAccessAdmin, plannerUsername || 'Administrador')} />
+
                   {/* Gerenciamento de Usuários */}
                   <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-2xl space-y-3">
                     <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">1. Cadastrar Usuários</h4>
@@ -8186,7 +8219,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         placeholder="Nome do usuário/função (ex: Felipe, Engenharia)..." 
                         value={newAccessUser} 
                         onChange={e => setNewAccessUser(e.target.value)} 
-                        className="flex-1 p-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-650 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        className="min-w-0 flex-1 p-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-650 focus:ring-2 focus:ring-indigo-500 outline-none"
                       />
                       <button 
                         onClick={handleAddUser} 
@@ -8776,6 +8809,13 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
         </div>
 
+        <div className="rounded-2xl border border-slate-200 bg-white p-6">
+          <h3 className="text-base font-bold text-slate-900">Administração do aplicativo</h3>
+          <p className="mt-2 text-sm text-slate-600">O painel de admin permite escolher os módulos visíveis para todos os usuários.</p>
+          <button className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600" onClick={() => {
+            localStorage.removeItem('selected_project_id'); setSelectedProjectId(''); setShowAccessModal(true);
+          }}>Abrir painel de admin</button>
+        </div>
         <LocalDatabaseSettings cloudAvailable={Object.keys(firebaseConfig).length > 0} />
 
         {/* Card: Atalhos para Configurações Operacionais */}
@@ -8785,7 +8825,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             As configurações específicas de pavimentos, pacotes, equipes e motivos de atraso estão integradas diretamente no módulo de Planejamento Semanal (acessível pelo botão ⚙️ no canto superior direito). Você também pode abrir ou gerenciar rapidamente por aqui:
           </p>
           <div className="flex flex-wrap gap-3 pt-1">
-            <button
+            {canOpenModule('planning') && <button
               onClick={() => {
                 setActiveTab('planning');
                 setIsWeeklyConfigModalOpen(true);
@@ -8793,19 +8833,23 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               className="px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
             >
               <span>⚙️</span> Abrir Configurações do Semanal (Pavimentos, Equipes, Motivos)
-            </button>
+            </button>}
+            {canOpenModule('calendar') && (
             <button
               onClick={() => setActiveTab('calendar')}
               className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
             >
               <span>🗓️</span> Calendário do Projeto & Feriados
             </button>
+            )}
+            {canOpenModule('versions') && (
             <button
               onClick={() => setActiveTab('versions')}
               className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
             >
               <span>🏷️</span> Versões de Cronograma & Linha de Base
             </button>
+            )}
           </div>
         </div>
       </div>
@@ -8871,6 +8915,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
         {/* Content Container */}
         <main className="flex-1 max-w-xl w-full mx-auto p-4 md:p-6 space-y-6 pb-20">
+          {!activeTab && <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-700">Nenhum módulo foi liberado para os usuários. Consulte o administrador.</div>}
           {teamSubmitSuccess ? (
             <div className="bg-white p-8 rounded-2xl shadow-md border border-slate-200 text-center space-y-4 animate-in zoom-in-95">
               <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto">✓</div>
@@ -9062,6 +9107,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
       );
     }
+    if (!canOpenModule('planning')) return <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-center text-slate-700">O módulo Semanal não está disponível. Consulte o administrador.</div>;
     return renderTeamInputScreen();
   }
 
@@ -9221,9 +9267,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </div>
             )}
 
+            {canOpenModule('import') && (
             <button
               type="button"
-              onClick={() => setIsScheduleImportModalOpen(true)}
+              onClick={openScheduleImport}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-md hover:shadow-indigo-600/30 transition border border-indigo-400/40 cursor-pointer ml-1"
               title="Abrir o motor inteligente de importação de cronograma (.xlsx / .csv)"
             >
@@ -9231,6 +9278,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               <span className="hidden sm:inline">Importar Cronograma</span>
               <span className="sm:hidden">Importar</span>
             </button>
+            )}
           </div>
         </div>
       </header>
@@ -9240,18 +9288,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         {/* Menu Lateral Esquerdo (Drawer com Ícones e Rótulos Compactos) */}
         <aside className="w-[84px] sm:w-[92px] bg-slate-900 border-r border-slate-800 shrink-0 sticky top-[68px] h-[calc(100vh-68px)] overflow-y-auto no-scrollbar py-3 px-1.5 flex flex-col justify-between z-30 shadow-xl select-none">
           <div className="space-y-1">
-            {[
-              { id: 'calendar', label: 'Calendário', icon: '🗓️', fullLabel: 'Calendário do Projeto e Dias Úteis' },
-              { id: 'dashboard', label: 'Dashboard', icon: '📊', fullLabel: 'Painel e Indicadores' },
-              { id: 'versions', label: 'Versões Crono', icon: '🏷️', fullLabel: 'Versões de Cronograma e Linha de Base' },
-              { id: 'lob', label: 'Linha de Balanço', icon: '📐', fullLabel: 'Linha de Balanço (Longo Prazo)' },
-              { id: 'table', label: 'Gantt', icon: '📋', fullLabel: 'Cronograma Gantt & EAP' },
-              { id: 'budget', label: 'Orçamento & Vínculos', icon: '💰', fullLabel: 'Orçamento, Contas e Vínculos' },
-              { id: 'physical_financial', label: 'Físico-Financ.', icon: '📈', fullLabel: 'Curva S e Replanejamento Físico-Financeiro' },
-              { id: 'competence_cash', label: 'Competência & Caixa', icon: '💵', fullLabel: 'Competência Teórica e Fluxo de Caixa' },
-              { id: 'planning', label: 'Semanal', icon: '📅', fullLabel: 'Planejamento Semanal e Metas' },
-              { id: 'config', label: 'Configurações', icon: '⚙️', fullLabel: 'Configurações e Acessos' },
-            ].map((item) => {
+            {APP_MODULES.filter(item => item.id !== 'import' && canOpenModule(item.id)).map((item) => {
               const isActive = activeTab === item.id;
               return (
                 <button
@@ -9894,7 +9931,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       )}
 
       {/* Importing Loader Spinner Modal */}
-      {scheduleImportPreview && <ScheduleImportPreview fileName={scheduleImportPreview.fileName} sheets={scheduleImportPreview.sheets}
+      {canOpenModule('import') && scheduleImportPreview && <ScheduleImportPreview fileName={scheduleImportPreview.fileName} sheets={scheduleImportPreview.sheets}
         limit={MAX_IMPORTED_CRONOGRAMA_ITEMS} onFinish={result => scheduleImportPreview.resolve(result)} />}
       {isImporting && !scheduleImportPreview && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
@@ -10037,7 +10074,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
       {/* Modal do Motor Inteligente de Importação de Cronograma */}
       <ScheduleImportModal
-        isOpen={isScheduleImportModalOpen}
+        isOpen={isScheduleImportModalOpen && canOpenModule('import')}
         onClose={() => setIsScheduleImportModalOpen(false)}
         projectId={selectedProjectId || 'global'}
         projectName={projects.find((p) => p.id === selectedProjectId)?.name || 'Obra Principal'}

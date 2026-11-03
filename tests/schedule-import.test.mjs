@@ -49,6 +49,7 @@ async function importWorkbook(count, review = preview => analyzeSchedule(preview
   const noop = () => {};
   const context = {
     depsXLSX: XLSX,
+    canOpenModule: () => true,
     SCHEDULE_FIELDS,
     setScheduleImportPreview: preview => { if (preview) preview.resolve(review(preview)); },
     FileReader: class { readAsBinaryString() { this.onload({ target: { result: binary } }); } },
@@ -189,4 +190,9 @@ test('cancelar a prévia não grava nem substitui dados do projeto', async () =>
   const { saved, notification } = await importWorkbook(2, () => null);
   assert.equal(saved, undefined);
   assert.equal(notification, undefined);
+});
+
+test('módulo de importação oculto impede iniciar a leitura ou gravar o cronograma', () => {
+  const upload = extractHandler('handleFileUpload', 'handleAddFloor', { canOpenModule: () => false });
+  assert.equal(upload({ target: { files: [{ name: 'cronograma.xlsx' }] } }), undefined);
 });
