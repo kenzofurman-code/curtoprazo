@@ -1,16 +1,7 @@
-import ScheduleDifferenceModal from './ScheduleDifferenceModal';
-import { buildBudgetDiffs, generatePlanningFromVersions } from './scheduleDifferences';
-import ModuleVisibilitySettings from './ModuleVisibilitySettings';
-import { APP_MODULES, canAccessModule, resolveVisibleTab } from './moduleVisibility';
-import { useModuleVisibility } from './useModuleVisibility';
-import ScheduleImportPreview from './ScheduleImportPreview';
-import { SCHEDULE_FIELDS } from './scheduleImport';
-import type { ScheduleAnalysis, ScheduleSheet } from './scheduleImport';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, writeBatch, runTransaction } from 'firebase/firestore';
-import { configureFirebaseDocuments, primeProjectFirebaseDocuments, CLOUD_STATUS_EVENT, retryFirebaseWrites } from './firebaseDocuments';
 import { preparePayload, resolvePayload, MAX_SAVE_BYTES } from './chunkedPayload';
 import { GENERAL_DELAY_REASONS, DELAY_REASON_REGISTRY_ID, normalizeDelayReason, mergeDelayReasons, projectOnlyDelayReasons, normalizeDelayReasonFields } from './delayReasons';
 import DelayReasonSelect from './DelayReasonSelect';
@@ -19,12 +10,6 @@ import TeamMultiSelect from './TeamMultiSelect';
 import { ppcPeriodWeeks, calculatePpcDetail, getPpcSignal, teamsWithPlannedActivities } from './ppcDetail';
 import PpcVisualBoard from './PpcVisualBoard';
 import type { PpcPeriod } from './ppcDetail';
-import { LongTermPlanner } from './LongTermPlanner';
-import { ScheduleVersionsView } from './ScheduleVersionsView';
-import { CalendarView } from './CalendarView';
-import { compileLobToCronograma, hydrateLobFromCronograma } from './longTermSchedule';
-import { ScheduleImportModal } from './ScheduleImportModal';
-import { createNewScheduleVersion, activateScheduleVersion, loadScheduleVersions } from './scheduleVersions';
 
 declare global {
   interface Window {
@@ -254,6 +239,82 @@ const toLocalDateString = (date = new Date()) => {
 
 const getTodayDateString = () => toLocalDateString(new Date());
 
+const parseExcelDate = (value, fallback = getTodayDateString()) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return toLocalDateString(value);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    epoch.setUTCDate(epoch.getUTCDate() + Math.floor(value));
+    return toLocalDateString(epoch);
+  }
+  const text = String(value).trim();
+  const br = text.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+  if (br) {
+    const [, d, m, y] = br;
+    const yyyy = y.length === 2 ? `20${y}` : y;
+    return `${yyyy}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? fallback : toLocalDateString(parsed);
+};
+
+const parsePercent = (value) => {
+  if (value === undefined || value === null || value === '') return 0;
+  if (typeof value === 'number') return clampPercent(value <= 1 ? value * 100 : value);
+  let normalized = String(value).replace('%', '').replace(/\s/g, '').trim();
+  normalized = normalized.replace(/[^\d,.-]/g, '');
+  const lastComma = normalized.lastIndexOf(',');
+  const lastDot = normalized.lastIndexOf('.');
+  if (lastComma !== -1 && lastDot !== -1) {
+    const decimalSeparator = lastComma > lastDot ? ',' : '.';
+    const thousandsSeparator = decimalSeparator === ',' ? '.' : ',';
+    normalized = normalized
+      .replace(new RegExp(`\\${thousandsSeparator}`, 'g'), '')
+      .replace(decimalSeparator, '.');
+  } else if (lastComma !== -1) {
+    normalized = normalized.replace(',', '.');
+  }
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return 0;
+  return clampPercent(n <= 1 ? n * 100 : n);
+};
+
+const normalizeHeaderText = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim();
+
+const findColumnIndex = (headerRow, candidates, fallback = -1) => {
+  const normalizedHeaders = headerRow.map(normalizeHeaderText);
+  const normalizedCandidates = candidates.map(normalizeHeaderText);
+  const exactIndex = normalizedHeaders.findIndex(header => normalizedCandidates.includes(header));
+  if (exactIndex !== -1) return exactIndex;
+  const partialIndex = normalizedHeaders.findIndex(header =>
+    normalizedCandidates.some(candidate => candidate && header.includes(candidate))
+  );
+  return partialIndex !== -1 ? partialIndex : fallback;
+};
+
+const findGroupedColumnIndex = (headerRow, groupRow, groupCandidates, headerCandidates, fallback = -1) => {
+  let currentGroup = '';
+  const normalizedGroups = groupCandidates.map(normalizeHeaderText);
+  const normalizedHeaders = headerCandidates.map(normalizeHeaderText);
+
+  for (let i = 0; i < headerRow.length; i++) {
+    const groupText = normalizeHeaderText(groupRow[i]);
+    if (groupText) currentGroup = groupText;
+
+    const headerText = normalizeHeaderText(headerRow[i]);
+    const groupMatches = normalizedGroups.some(group => group && currentGroup.includes(group));
+    const headerMatches = normalizedHeaders.some(header => header && headerText === header);
+
+    if (groupMatches && headerMatches) return i;
+  }
+
+  return fallback;
+};
+
 const roundPercentValue = (value) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
@@ -265,6 +326,106 @@ const getTaskAccumulatedProgress = (task) => {
   const previousProgress = clampPercent(task.executedBeforeRaw ?? task.executedBefore ?? 0);
   const measuredProgress = clampPercent(task.progressThisWeek ?? 0);
   return Math.max(previousProgress, measuredProgress);
+};
+
+const getBudgetFamilyKey = (item) => `${item?.floor || ''}||${slugify(item?.macro || item?.sectionId || '')}`;
+
+const isParentBudgetItem = (item) => {
+  if (!item) return false;
+  if (item.isParent !== undefined) return !!item.isParent;
+  return slugify(item.service || item.activityName || '') === slugify(item.macro || item.sectionId || '');
+};
+
+const getFamiliesWithBudgetChildren = (items) => new Set(
+  (Array.isArray(items) ? items : [])
+    .filter(item => item && !isParentBudgetItem(item))
+    .map(item => getBudgetFamilyKey(item))
+);
+
+const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
+  if (!Array.isArray(previousItems) || previousItems.length === 0 || !Array.isArray(nextItems)) return [];
+
+  const importId = `budget_${Date.now()}`;
+  const importedAt = new Date().toISOString();
+  const previousById = new Map();
+  const nextById = new Map();
+  const nextFamiliesWithChildren = getFamiliesWithBudgetChildren(nextItems);
+
+  previousItems.forEach(item => {
+    if (item?.id) previousById.set(item.id, item);
+  });
+  nextItems.forEach(item => {
+    if (item?.id) nextById.set(item.id, item);
+  });
+
+  const diffs = [];
+
+  nextItems.forEach(item => {
+    if (!item?.id) return;
+    if (isParentBudgetItem(item) && nextFamiliesWithChildren.has(getBudgetFamilyKey(item))) return;
+
+    const previous = previousById.get(item.id);
+    const previousProgress = previous ? roundPercentValue(previous.progress || 0) : 0;
+    const newProgress = roundPercentValue(item.progress || 0);
+    const delta = Math.round((newProgress - previousProgress) * 1000) / 1000;
+    const isNew = !previous;
+
+    if (!isNew && Math.abs(delta) < 0.001) return;
+    if (isNew && newProgress <= 0) return;
+
+    diffs.push({
+      id: `${importId}_${slugify(item.id)}`,
+      importId,
+      importedAt,
+      fileName,
+      kind: isNew ? 'new' : (delta > 0 ? 'progress_increase' : 'progress_decrease'),
+      itemId: item.id,
+      floor: item.floor,
+      macro: item.macro,
+      sectionId: slugify(item.macro),
+      service: item.service,
+      responsible: item.responsible,
+      start: item.start,
+      end: item.end,
+      duration: item.duration,
+      cost: item.cost,
+      predecessors: item.predecessors || [],
+      successors: item.successors || [],
+      inheritedDependenciesFrom: item.inheritedDependenciesFrom || '',
+      originalId: item.originalId || '',
+      replicationGroup: item.replicationGroup || '',
+      previousProgress,
+      newProgress,
+      delta
+    });
+  });
+
+  previousItems.forEach(item => {
+    if (!item?.id || nextById.has(item.id)) return;
+    diffs.push({
+      id: `${importId}_removed_${slugify(item.id)}`,
+      importId,
+      importedAt,
+      fileName,
+      kind: 'removed',
+      itemId: item.id,
+      floor: item.floor,
+      macro: item.macro,
+      sectionId: slugify(item.macro),
+      service: item.service,
+      responsible: item.responsible,
+      predecessors: item.predecessors || [],
+      successors: item.successors || [],
+      inheritedDependenciesFrom: item.inheritedDependenciesFrom || '',
+      originalId: item.originalId || '',
+      replicationGroup: item.replicationGroup || '',
+      previousProgress: roundPercentValue(item.progress || 0),
+      newProgress: 0,
+      delta: 0
+    });
+  });
+
+  return diffs;
 };
 
 const getWeekStartDate = (date) => {
@@ -325,6 +486,43 @@ const parseISODateLocal = (dateStr) => {
   return new Date(yyyy, mm, dd, 0, 0, 0, 0);
 };
 
+
+const generateMockWeather = (city, dateStr) => {
+  let seed = 0;
+  const locationStr = String(city || "Curitiba, PR");
+  for (let i = 0; i < dateStr.length; i++) seed += dateStr.charCodeAt(i);
+  for (let i = 0; i < locationStr.length; i++) seed += locationStr.charCodeAt(i);
+  const rand = (seed % 100) / 100;
+  
+  let conditions = "Ensolarado";
+  let icon = "clear-day";
+  let tempMax = 22 + Math.floor(rand * 6) - 3;
+  let tempMin = 12 + Math.floor(rand * 6) - 3;
+  let precip = 0;
+  
+  if (rand < 0.2) {
+    conditions = "Chuva Forte";
+    icon = "rain";
+    precip = 15;
+  } else if (rand < 0.45) {
+    conditions = "Parcialmente Nublado";
+    icon = "partly-cloudy-day";
+  } else if (rand < 0.7) {
+    conditions = "Nublado";
+    icon = "cloudy";
+  } else if (rand < 0.9) {
+    conditions = "Garoa";
+    icon = "showers";
+    precip = 2;
+  }
+  
+  if (locationStr.toLowerCase().includes("curitiba")) {
+    tempMax -= 4;
+    tempMin -= 4;
+  }
+  
+  return { tempMax, tempMin, precip, conditions, icon };
+};
 
 const getWeatherEmoji = (icon) => {
   switch (icon) {
@@ -700,9 +898,7 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
     if (cumulativeProgress[key] === undefined) {
       cumulativeProgress[key] = clampPercent(task.executedBeforeRaw ?? task.executedBefore ?? 0);
     }
-    const exactExecutedBefore = task.source === 'schedule-version-diff'
-      ? clampPercent(task.comparisonPreviousProgress ?? cumulativeProgress[key])
-      : cumulativeProgress[key];
+    const exactExecutedBefore = cumulativeProgress[key];
     const updatedTask = {
       ...task,
       executedBefore: roundDown25(exactExecutedBefore),
@@ -904,15 +1100,18 @@ const firebaseConfig = (import.meta.env.VITE_FIREBASE_CONFIG ? JSON.parse(import
 const appId = import.meta.env.VITE_APP_ID || (typeof window.__app_id !== 'undefined' ? window.__app_id : 'obra-app');
 const initialAuthToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN || (typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null);
 
+const INITIAL_PAVIMENTOS = ['Térreo', 'Pav. Tipo 1', 'Pav. Tipo 2', 'Pav. Cobertura'];
+const INITIAL_STRUCTURE = {
+  'estrutura': { title: 'ESTRUTURA', items: [{ id: 'forma', name: 'FORMA', actualPercent: 0 }, { id: 'armadura', name: 'ARMADURA', actualPercent: 0 }] },
+  'instalacoes': { title: 'INSTALAÇÕES', items: [{ id: 'hidraulica', name: 'HIDRÁULICA', actualPercent: 0 }, { id: 'eletrica', name: 'ELÉTRICA', actualPercent: 0 }] }
+};
+const INITIAL_CRONOGRAMA = [];
 const MAX_IMPORTED_CRONOGRAMA_ITEMS = 15000;
-const INITIAL_TEAMS = [];
+const INITIAL_TEAMS = ['EQUIPE CIVIL', 'EQUIPE ARMADURA', 'EQUIPE HIDRÁULICA', 'EQUIPE ELÉTRICA', 'EQUIPE ACABAMENTO'];
 const INITIAL_DELAYS = GENERAL_DELAY_REASONS;
 
 const App = () => {
   const [db, setDb] = useState<any>(null);
-  const [auxCloudStatus, setAuxCloudStatus] = useState({pending:0,error:'',retryable:false});
-  const [globalSettingsDb, setGlobalSettingsDb] = useState<any>(null);
-  const [globalSettingsConnectionError, setGlobalSettingsConnectionError] = useState('');
   const [userId, setUserId] = useState<any>(null);
 
   // Intercepção de modo de equipe (WhatsApp/Mobile)
@@ -925,14 +1124,7 @@ const App = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importStatus, setImportStatus] = useState<string>('');
-  const [scheduleImportPreview, setScheduleImportPreview] = useState<{
-    fileName: string; sheets: ScheduleSheet[]; resolve: (result: ScheduleAnalysis | null) => void;
-  } | null>(null);
-  const [isScheduleImportModalOpen, setIsScheduleImportModalOpen] = useState<boolean>(false);
-  const [versionUpdateKey, setVersionUpdateKey] = useState<number>(0);
-  const [requestedTab, setRequestedTab] = useState<string>('dashboard');
-  const [dashboardSubView, setDashboardSubView] = useState<'overview' | 'matrix' | 'ppc' | 'history'>('overview');
-  const [isWeeklyConfigModalOpen, setIsWeeklyConfigModalOpen] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [notification, setNotification] = useState<any>({ message: '', type: '' });
 
   useEffect(() => {
@@ -969,7 +1161,6 @@ const App = () => {
   const localDelayReasons = useMemo(() => projectOnlyDelayReasons(projectDelayReasons, generalDelayReasons), [projectDelayReasons, generalDelayReasons]);
   const [ppcHistory, setPpcHistory] = useState<any[]>([]);
   const [matrices, setMatrices] = useState<any[]>([]); 
-  const [isScheduleDifferenceOpen, setIsScheduleDifferenceOpen] = useState(false);
   const [budgetDiffs, setBudgetDiffs] = useState<any[]>([]);
   const [budgetImportVersions, setBudgetImportVersions] = useState<any[]>([]);
   const [teamPhones, setTeamPhones] = useState<Record<string, string>>({});
@@ -978,7 +1169,7 @@ const App = () => {
   const [teamGeneralDelayReason, setTeamGeneralDelayReason] = useState<string>('');
   const [teamGeneralObservations, setTeamGeneralObservations] = useState<string>('');
   const [teamSubmitSuccess, setTeamSubmitSuccess] = useState<boolean>(false);
-  const [projectCity, setProjectCity] = useState<string>("");
+  const [projectCity, setProjectCity] = useState<string>("Curitiba, PR");
   const [weatherApiKey, setWeatherApiKey] = useState<string>("");
   const [weatherCache, setWeatherCache] = useState<Record<string, { tempMax: number, tempMin: number, precip: number, conditions: string, icon: string }>>({});
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
@@ -1089,19 +1280,6 @@ const App = () => {
   const [accessUser, setAccessUser] = useState<string>('');
   const [accessPassword, setAccessPassword] = useState<string>('');
   const [isAccessAdmin, setIsAccessAdmin] = useState<boolean>(false);
-  useEffect(() => { setIsAccessAdmin(false); }, [plannerUsername]);
-  const moduleSettings = useModuleVisibility(globalSettingsDb, appId);
-  const canOpenModule = (id: string) => canAccessModule(id, moduleSettings.visibility, isAccessAdmin);
-  const activeTab = resolveVisibleTab(requestedTab, moduleSettings.visibility, isAccessAdmin) || '';
-  const setActiveTab = (id: string) => { if (canOpenModule(id)) setRequestedTab(id); };
-  const openScheduleImport = () => { if (canOpenModule('import')) setIsScheduleImportModalOpen(true); };
-  useEffect(() => {
-    if (!canAccessModule('import', moduleSettings.visibility, isAccessAdmin)) {
-      setIsScheduleImportModalOpen(false);
-      scheduleImportPreview?.resolve(null);
-    }
-  }, [moduleSettings.visibility, isAccessAdmin, scheduleImportPreview]);
-
   const [newAccessUser, setNewAccessUser] = useState<string>('');
   const hasLoggedSession = useRef<boolean>(false);
 
@@ -1141,21 +1319,6 @@ const App = () => {
   const [drawerSelectedServices, setDrawerSelectedServices] = useState<any[]>([]);
   const [drawerResponsible, setDrawerResponsible] = useState<any>('');
   const [drawerWarning, setDrawerWarning] = useState<any>('');
-
-  // Floating Mini-Drawer: Planejar Próxima Semana a partir de 100% no Curto Prazo
-  const [nextWeekPopover, setNextWeekPopover] = useState<{ taskId: string; x: number; y: number } | null>(null);
-  const [nextWeekMacro, setNextWeekMacro] = useState<string>('');
-  const [nextWeekFloors, setNextWeekFloors] = useState<string[]>([]);
-  const [nextWeekSelectedServices, setNextWeekSelectedServices] = useState<string[]>([]);
-  const [nextWeekResponsible, setNextWeekResponsible] = useState<string>('');
-  const [nextWeekWarning, setNextWeekWarning] = useState<string>('');
-  const nextWeekDragRef = useRef<{ isDragging: boolean; startX: number; startY: number; origX: number; origY: number }>({
-    isDragging: false,
-    startX: 0,
-    startY: 0,
-    origX: 0,
-    origY: 0
-  });
 
   // Config Modals
   const [newFloorName, setNewFloorName] = useState<string>('');
@@ -1240,48 +1403,41 @@ const App = () => {
   useEffect(() => {
     let unsubscribe = () => {};
     try {
-      if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) throw new Error('Configuração do Firebase não encontrada.');
+      if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+        throw new Error('Configuração do Firebase não encontrada.');
+      }
       const app = initializeApp(firebaseConfig);
       const auth = getAuth(app);
-      const cloudDb = getFirestore(app);
-      setDb(cloudDb);
+      const dbInst = getFirestore(app);
+      setDb(dbInst);
+
       unsubscribe = onAuthStateChanged(auth, async (user) => {
         try {
           if (user) {
-            configureFirebaseDocuments(cloudDb, appId);
-            setGlobalSettingsDb(cloudDb); setGlobalSettingsConnectionError('');
             setUserId(user.uid);
+          } else if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
           } else {
-            configureFirebaseDocuments(null, appId);
-            setGlobalSettingsDb(null); setUserId(null);
-            if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
-            else await signInAnonymously(auth);
+            await signInAnonymously(auth);
           }
-        } catch (error) {
-          console.error('Erro de autenticação:', error);
-          setGlobalSettingsConnectionError('Não foi possível autenticar no Firebase.');
-          setNotification({message:'Não foi possível conectar ao Firebase. Verifique a conexão e recarregue a página.',type:'error'});
+        } catch (authErr) {
+          console.error('Auth error:', authErr);
+          setNotification({ message: 'Falha na autenticação do Firebase.', type: 'error' });
           setLoading(false);
         }
-      }, () => { setUserId(null); setLoading(false); });
-    } catch (error) {
-      console.error('Erro ao conectar ao Firebase:', error);
-      setGlobalSettingsConnectionError('Configure o Firebase para utilizar o sistema.');
-      setNotification({message:'A conexão com o Firebase é obrigatória. Verifique a configuração e recarregue a página.',type:'error'});
+      });
+    } catch (err) {
+      console.error('Firebase init error:', err);
+      setNotification({ message: 'Configure o Firebase antes de usar o salvamento em nuvem.', type: 'error' });
       setLoading(false);
     }
     return () => unsubscribe();
-  }, []);
-  useEffect(() => {
-    const onStatus = (event: Event) => setAuxCloudStatus((event as CustomEvent).detail);
-    window.addEventListener(CLOUD_STATUS_EVENT, onStatus);
-    return () => window.removeEventListener(CLOUD_STATUS_EVENT, onStatus);
   }, []);
 
   // Aviso de alterações pendentes ao fechar o navegador
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (dbSavingStatus !== 'saved' || auxCloudStatus.pending > 0 || auxCloudStatus.error) {
+      if (dbSavingStatus !== 'saved') {
         e.preventDefault();
         e.returnValue = 'Existem alterações pendentes que estão sendo salvas no banco de dados. Tem certeza de que deseja sair?';
         return e.returnValue;
@@ -1289,7 +1445,7 @@ const App = () => {
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [dbSavingStatus, auxCloudStatus.pending, auxCloudStatus.error]);
+  }, [dbSavingStatus]);
 
   // Motivos gerais são lidos também nos links de apontamento de campo.
   useEffect(() => {
@@ -1332,11 +1488,55 @@ const App = () => {
         
         setProjects(mappedList);
       } else {
-        setProjects([]);
-        if (!urlUserId) {
-          localStorage.removeItem('selected_project_id');
-          setSelectedProjectId('');
-        }
+        const defaultList = [
+          {
+            id: 'pace',
+            name: 'PACE',
+            type: 'Obra',
+            area: '24170.23',
+            badges: ['WB', 'PE', 'PK', 'PE', 'RT', 'AO', 'GP', 'AS', 'LF'],
+            address: 'Rua Monsenhor Ivo Zanlorenzi, 1230 - Mossunguê, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'glb_partilha',
+            name: 'GLB PARTILHA',
+            type: 'Obra',
+            area: '10984.93',
+            badges: ['WB', 'EL', 'LR', 'PE', 'PK', 'PE', 'RT', 'RF', 'MB', 'GP', 'AS', 'dcfi', 'LF'],
+            address: 'Rua Bispo Dom José, 2423 - Batel, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'icaro_casa_terrea',
+            name: 'ÍCARO CASA TÉRREA',
+            type: 'Obra',
+            area: '53681.76',
+            badges: ['WB', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'GP', 'AS', 'KF', 'LR', 'OB', 'AH', 'AS', 'dcfi', 'LF'],
+            address: 'Rua Catarina Margarida Luvizoto Gobbo, 120 - Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'projeto_principal',
+            name: 'QOYA',
+            type: 'Obra',
+            area: '16777.23',
+            badges: ['PF', 'PE', 'PK', 'RT', 'PF', 'AO', 'MB', 'JM', 'GP', 'AS', 'dcfi', 'LF'],
+            address: 'R. Buenos Aires, 572 - Água Verde, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1582407947304-fd86f028f716?w=600&auto=format&fit=crop&q=60'
+          },
+          {
+            id: 'alberi',
+            name: 'ALBERI',
+            type: 'Obra',
+            area: '24801.92',
+            badges: ['AV', 'CS', 'PE', 'PK', 'WH', 'PE', 'Jd', 'MB', 'GP', 'dcfi', 'LF'],
+            address: 'R. Bom Jesus, 969 - Juvevê, Curitiba - PR',
+            imageUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=600&auto=format&fit=crop&q=60'
+          }
+        ];
+        setDoc(projectsDocRef, { list: defaultList });
+        setProjects(defaultList);
       }
     });
     return () => unsubscribe();
@@ -1560,7 +1760,6 @@ const App = () => {
     let hasLoadedFloors = false;
     let hasLoadedPlanning = false;
     let hasReceivedMeta = false;
-    let hasReceivedAuxiliary = false;
     let hasReceivedCrono = false;
     let hasReceivedFloors = false;
     let hasReceivedPlanning = false;
@@ -1609,7 +1808,7 @@ const App = () => {
     };
 
     const reconcileLoadedProgress = () => {
-      if (!hasReceivedMeta || !hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning || !hasReceivedAuxiliary) return;
+      if (!hasReceivedMeta || !hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning) return;
       if (failedPayloads.size > 0) return;
       if (['cronogramaInicial', 'data', 'planning'].some(field => payloadRevisions[field] !== metaRevision)) return;
 
@@ -1631,10 +1830,6 @@ const App = () => {
       setIsProjectHydrated(true);
       setLoading(false);
     };
-
-    primeProjectFirebaseDocuments(targetId).then(() => {
-      if (!disposed) { hasReceivedAuxiliary = true; reconcileLoadedProgress(); }
-    }).catch(error => { if (!disposed) handlePayloadError(error); });
 
     const unsubMeta = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
@@ -1668,7 +1863,7 @@ const App = () => {
         setTeams(d.teams || []);
         setTeamPhones(d.teamPhones || {});
         setProjectDelayReasons(mergeDelayReasons(d.projectDelayReasons ?? d.delayReasons ?? []));
-        setProjectCity(d.projectCity || "");
+        setProjectCity(d.projectCity || "Curitiba, PR");
         setWeatherApiKey(d.weatherApiKey || "");
         setWeatherCache(d.weatherCache || {});
 
@@ -1874,7 +2069,22 @@ const App = () => {
 
       if (missingDates.length === 0) return;
 
-      if (!weatherApiKey || !projectCity.trim()) return;
+      if (!weatherApiKey) {
+        for (let i = -15; i <= 15; i++) {
+          const dayDate = addDays(today, i);
+          const dayStr = toISODate(dayDate);
+          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+          if (!newCache[cacheKey]) {
+            newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
+            changed = true;
+          }
+        }
+        if (changed) {
+          setWeatherCache(newCache);
+          await saveWeatherCacheOnly(newCache);
+        }
+        return;
+      }
 
       setWeatherLoading(true);
       try {
@@ -1909,7 +2119,19 @@ const App = () => {
         }
       } catch (err) {
         console.error("Error fetching weather:", err);
-        setNotification({ message: "Não foi possível consultar o clima. Os dias sem dados permanecem indisponíveis.", type: "error" });
+        setNotification({ message: "Erro ao consultar clima na API. Usando dados locais.", type: "error" });
+        for (let i = -15; i <= 15; i++) {
+          const dayDate = addDays(today, i);
+          const dayStr = toISODate(dayDate);
+          const cacheKey = `${projectCity.trim().toLowerCase()}_${dayStr}`;
+          if (!newCache[cacheKey]) {
+            newCache[cacheKey] = generateMockWeather(projectCity, dayStr);
+            changed = true;
+          }
+        }
+        if (changed) {
+          setWeatherCache(newCache);
+        }
       } finally {
         setWeatherLoading(false);
       }
@@ -1986,7 +2208,7 @@ const App = () => {
           delayReasons: mergeDelayReasons(generalDelayReasonsRef.current, Array.isArray(delays) ? delays : INITIAL_DELAYS),
           ppcHistory: compressStringUnicode(JSON.stringify(Array.isArray(ppcHist) ? ppcHist.slice(-200) : [])),
           matrices: compressStringUnicode(matricesStr),
-          projectCity: pCity || "",
+          projectCity: pCity || "Curitiba, PR",
           weatherApiKey: wApiKey || "",
           weatherCache: wCache || {},
           budgetDiffs: compressStringUnicode(budgetDiffsStr),
@@ -2093,43 +2315,13 @@ const App = () => {
   };
 
 
-  const [showRawCronoTable, setShowRawCronoTable] = useState(true);
-  const [rawCronoLimit, setRawCronoLimit] = useState(200);
-
-  const cronoLookupMaps = useMemo(() => {
-    const costById = new Map<string, number>();
-    const macroTitleBySlug = new Map<string, string>();
-    const itemById = new Map<string, any>();
-
-    for (const floor of Object.keys(allFloorsData || {})) {
-      const floorData = allFloorsData[floor];
-      if (!floorData) continue;
-      for (const sId of Object.keys(floorData)) {
-        if (!macroTitleBySlug.has(sId) && floorData[sId]?.title) {
-          macroTitleBySlug.set(sId, floorData[sId].title);
-        }
-      }
-    }
-
-    (cronogramaInicial || []).forEach(item => {
-      if (!item) return;
-      if (item.id) {
-        itemById.set(item.id, item);
-        if (typeof item.cost === 'number') costById.set(item.id, item.cost);
-      }
-      if (item.macro) {
-        const sId = slugify(item.macro);
-        if (sId && !macroTitleBySlug.has(sId)) {
-          macroTitleBySlug.set(sId, item.macro.toUpperCase());
-        }
-      }
-    });
-
-    return { costById, macroTitleBySlug, itemById };
-  }, [allFloorsData, cronogramaInicial]);
-
   const getMacroTitle = (sId) => {
-    return cronoLookupMaps.macroTitleBySlug.get(sId) || sId;
+    for (const floor of Object.keys(allFloorsData)) {
+      if (allFloorsData[floor]?.[sId]?.title) return allFloorsData[floor][sId].title;
+    }
+    const match = cronogramaInicial.find(item => slugify(item.macro) === sId);
+    if (match) return match.macro.toUpperCase();
+    return sId;
   };
 
   const allPossibleMacros = useMemo(() => {
@@ -2152,27 +2344,7 @@ const App = () => {
   ), [cronogramaInicial]);
 
   const previousWeekIdForDrawer = toLocalDateString(addDays(currentWeekStart, -7));
-  const currentWeekIdForDrawer = toLocalDateString(currentWeekStart);
   const drawerCandidateActivities = useMemo(() => {
-    const normalizeMacroBase = (raw: string) => {
-      const cleaned = String(raw || '').replace(/^[A-Za-zÀ-ÿ0-9]{2,10}\s*[-–—]\s*/, '').trim();
-      const s = slugify(cleaned);
-      return s.replace(/^[a-z0-9]{2,10}___/, '');
-    };
-    const getImplicitActivityRefs = (item: any) => {
-      const refs = [item?.id, item?.originalId, item?.inheritedDependenciesFrom].filter(Boolean).map(String);
-      const idStr = String(item?.id || '');
-      if (idStr.startsWith('job_')) {
-        const m = idStr.match(/^job_(.+?)_(?:tpl_|j_)/);
-        if (m && m[1]) refs.push(`act_${m[1]}`);
-      }
-      if (item?.floor && item?.macro) {
-        refs.push(`lob_act_${slugify(item.floor)}_${slugify(item.macro)}`);
-        refs.push(`act_${slugify(item.floor)}_${slugify(item.macro)}`);
-      }
-      return Array.from(new Set(refs));
-    };
-
     const isParentCronoItem = (item) => {
       if (!item) return false;
       if (item.isParent !== undefined) return !!item.isParent;
@@ -2184,31 +2356,6 @@ const App = () => {
         .filter(item => item && !isParentCronoItem(item))
         .map(item => familyKey(item))
     );
-
-    // Map real-time progress from planning (including unfinalized 100% tasks in the current week)
-    const planningProgressById = new Map<string, number>();
-    const planningProgressByFloorService = new Map<string, number>();
-    (planning || []).forEach(t => {
-      if (!t) return;
-      const prog = Math.max(getTaskAccumulatedProgress(t), clampPercent(t.progressThisWeek ?? 0));
-      if (t.itemId) {
-        planningProgressById.set(String(t.itemId), Math.max(planningProgressById.get(String(t.itemId)) || 0, prog));
-      }
-      if (t.floor && t.activityName) {
-        const fsKey = `${t.floor}||${slugify(t.activityName)}`;
-        planningProgressByFloorService.set(fsKey, Math.max(planningProgressByFloorService.get(fsKey) || 0, prog));
-      }
-    });
-
-    const getEffectiveItemProgress = (item: any) => {
-      const floorProg = getActivityProgressFromFloors(item, allFloorsData);
-      const byId = item?.id ? (planningProgressById.get(String(item.id)) || 0) : 0;
-      const byFs = item?.floor && item?.service
-        ? (planningProgressByFloorService.get(`${item.floor}||${slugify(item.service)}`) || 0)
-        : 0;
-      return Math.max(floorProg, byId, byFs);
-    };
-
     const openCronoItems = cronogramaInicial
       .filter(item => item && (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item))))
       .map(item => ({ ...item, progress: getActivityProgressFromFloors(item, allFloorsData) }))
@@ -2220,128 +2367,41 @@ const App = () => {
 
     const parentByFamily = new Map<string, any>();
     cronogramaInicial.forEach(item => {
-      if (isParentCronoItem(item)) {
-        parentByFamily.set(familyKey(item), item);
-        parentByFamily.set(`${item?.floor || ''}||${normalizeMacroBase(item?.macro || '')}`, item);
-      }
+      if (isParentCronoItem(item)) parentByFamily.set(familyKey(item), item);
     });
 
     const successorIds = new Set<string>();
-    const sourceRefIds = new Set<string>();
-    const finishedFamilyKeys = new Set<string>();
-    const releasedNormalizedMacros = new Map<string, Set<string>>();
-
-    // Consider tasks completed (>= 100%) in EITHER the current week (even before finalizing!) OR the previous week
     planning
       .filter(task => {
-        if (!task) return false;
-        if (task.weekId !== currentWeekIdForDrawer && task.weekId !== previousWeekIdForDrawer) return false;
-        const cumulativeProgress = Math.max(getTaskAccumulatedProgress(task), clampPercent(task.progressThisWeek ?? 0));
-        return cumulativeProgress >= 100;
+        if (!task || task.weekId !== previousWeekIdForDrawer) return false;
+        const cumulativeProgress = getTaskAccumulatedProgress(task);
+        return task.finalized || cumulativeProgress >= 100;
       })
       .forEach(task => {
-        let cronoItem = cronoLookupMaps.itemById.get(task.itemId);
-        const taskNormMacro = normalizeMacroBase(task.sectionId || cronoItem?.macro || '');
-        if (!cronoItem) {
-          const taskNameNorm = slugify(task.activityName || '');
-          cronoItem = cronogramaInicial.find(it =>
-            it && it.floor === task.floor && (
-              slugify(it.service || '') === taskNameNorm ||
-              normalizeMacroBase(it.macro || '') === taskNormMacro
-            )
-          );
-        }
-        if (taskNormMacro) {
-          if (!releasedNormalizedMacros.has(taskNormMacro)) {
-            releasedNormalizedMacros.set(taskNormMacro, new Set());
-          }
-          releasedNormalizedMacros.get(taskNormMacro)!.add(task.floor);
-          finishedFamilyKeys.add(`${task.floor}||${taskNormMacro}`);
-        }
-        finishedFamilyKeys.add(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
-
-        const parentItem =
-          parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`) ||
-          parentByFamily.get(`${task.floor}||${taskNormMacro}`);
-        const familyItems = cronogramaInicial.filter(it =>
-          it && it.floor === task.floor && (
-            slugify(it.macro || '') === slugify(task.sectionId || cronoItem?.macro || '') ||
-            normalizeMacroBase(it.macro || '') === taskNormMacro
-          )
-        );
-        [
-          task.itemId,
-          ...(cronoItem ? getImplicitActivityRefs(cronoItem) : []),
-          ...(parentItem ? getImplicitActivityRefs(parentItem) : []),
-          ...familyItems.flatMap(it => getImplicitActivityRefs(it))
-        ].forEach(ref => {
-          const v = String(ref || '').trim();
-          if (v) sourceRefIds.add(v);
-        });
-
+        const cronoItem = cronogramaInicial.find(item => item.id === task.itemId);
+        const parentItem = parentByFamily.get(`${task.floor}||${slugify(task.sectionId || cronoItem?.macro || '')}`);
         const successors = [
           ...(task.successors || []),
           ...(cronoItem?.successors || []),
-          ...(parentItem?.successors || []),
-          ...familyItems.flatMap(it => it?.successors || [])
+          ...(parentItem?.successors || [])
         ];
-        successors.forEach(entry => {
-          const rawVal = typeof entry === 'object' && entry !== null ? (entry.id || entry.targetId || entry.code || '') : entry;
-          const value = String(rawVal || '').trim();
-          if (!value) return;
-          successorIds.add(value);
-          const matchPrefix = value.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
-          if (matchPrefix && matchPrefix[1]) successorIds.add(matchPrefix[1]);
+        successors.forEach(id => {
+          const value = String(id || '').trim();
+          if (value) successorIds.add(value);
         });
       });
 
-    // Reverse predecessors check
-    cronogramaInicial.forEach(item => {
-      if (!item || !Array.isArray(item.predecessors)) return;
-      const pointsToSource = item.predecessors.some((pred: any) => {
-        const rawPred = typeof pred === 'object' && pred !== null ? (pred.id || pred.sourceId || pred.code || '') : pred;
-        const clean = String(rawPred || '').trim();
-        if (!clean) return false;
-        if (sourceRefIds.has(clean)) return true;
-        const matchPrefix = clean.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
-        return Boolean(matchPrefix && matchPrefix[1] && sourceRefIds.has(matchPrefix[1]));
-      });
-      if (pointsToSource) {
-        getImplicitActivityRefs(item).forEach(ref => successorIds.add(ref));
-      }
-    });
-
+    if (successorIds.size === 0) return [];
     const directSuccessorRefs = cronogramaInicial.filter(item => {
-      const candidates = getImplicitActivityRefs(item);
+      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
       return candidates.some(id => successorIds.has(id));
     });
-    const successorMacroKeys = new Set(
-      directSuccessorRefs
-        .flatMap(item => [
-          `${item.floor}||${slugify(item.macro)}`,
-          `${item.floor}||${normalizeMacroBase(item.macro || '')}`
-        ])
-        .filter(k => !finishedFamilyKeys.has(k))
-    );
-    const matchedExplicit = openCronoItems.filter(item => {
-      const k1 = `${item.floor}||${slugify(item.macro)}`;
-      const k2 = `${item.floor}||${normalizeMacroBase(item.macro || '')}`;
-      if (finishedFamilyKeys.has(k1) || finishedFamilyKeys.has(k2)) return false;
-      const candidates = getImplicitActivityRefs(item);
-      return (
-        candidates.some(id => successorIds.has(id)) ||
-        successorMacroKeys.has(k1) ||
-        successorMacroKeys.has(k2)
-      );
-    });
-    if (matchedExplicit.length > 0) return matchedExplicit;
-
+    const successorMacroKeys = new Set(directSuccessorRefs.map(item => `${item.floor}||${slugify(item.macro)}`));
     return openCronoItems.filter(item => {
-      const itemNormMacro = normalizeMacroBase(item.macro || '');
-      const finishedFloors = releasedNormalizedMacros.get(itemNormMacro);
-      return Boolean(finishedFloors && !finishedFloors.has(item.floor));
+      const candidates = [item.id, item.originalId].filter(Boolean).map(String);
+      return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
     });
-  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer, currentWeekIdForDrawer, cronoLookupMaps]);
+  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer]);
 
   const drawerMacroOptions = useMemo(() => (
     Array.from(new Set(drawerCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
@@ -2584,325 +2644,6 @@ const App = () => {
     if (drawerMacro && !drawerMacroOptions.includes(drawerMacro)) setDrawerMacro('');
   }, [drawerSourceMode, drawerMacroOptions]);
 
-  const nextWeekIdForPopover = toLocalDateString(addDays(currentWeekStart, 7));
-
-  const getReleasedFrontsForTask = (sourceTask: any) => {
-    if (!sourceTask) return [];
-    const normalizeMacroBase = (raw: string) => {
-      const cleaned = String(raw || '').replace(/^[A-Za-zÀ-ÿ0-9]{2,10}\s*[-–—]\s*/, '').trim();
-      const s = slugify(cleaned);
-      return s.replace(/^[a-z0-9]{2,10}___/, '');
-    };
-    const getImplicitActivityRefs = (item: any) => {
-      const refs = [item?.id, item?.originalId, item?.inheritedDependenciesFrom].filter(Boolean).map(String);
-      const idStr = String(item?.id || '');
-      if (idStr.startsWith('job_')) {
-        const m = idStr.match(/^job_(.+?)_(?:tpl_|j_)/);
-        if (m && m[1]) refs.push(`act_${m[1]}`);
-      }
-      if (item?.floor && item?.macro) {
-        refs.push(`lob_act_${slugify(item.floor)}_${slugify(item.macro)}`);
-        refs.push(`act_${slugify(item.floor)}_${slugify(item.macro)}`);
-      }
-      return Array.from(new Set(refs));
-    };
-
-    const isParentCronoItem = (item: any) => {
-      if (!item) return false;
-      if (item.isParent !== undefined) return !!item.isParent;
-      return slugify(item.service || '') === slugify(item.macro || '');
-    };
-    const familyKey = (item: any) => `${item?.floor || ''}||${slugify(item?.macro || '')}`;
-    const normFamilyKey = (item: any) => `${item?.floor || ''}||${normalizeMacroBase(item?.macro || '')}`;
-    const familiesWithChildren = new Set(
-      (cronogramaInicial || [])
-        .filter(item => item && !isParentCronoItem(item))
-        .flatMap(item => [familyKey(item), normFamilyKey(item)])
-    );
-    // Real-time progress from planning (including unfinalized 100% tasks in the current week)
-    const planningProgressById = new Map<string, number>();
-    const planningProgressByFloorService = new Map<string, number>();
-    (planning || []).forEach(t => {
-      if (!t) return;
-      const prog = Math.max(getTaskAccumulatedProgress(t), clampPercent(t.progressThisWeek ?? 0));
-      if (t.itemId) {
-        planningProgressById.set(String(t.itemId), Math.max(planningProgressById.get(String(t.itemId)) || 0, prog));
-      }
-      if (t.floor && t.activityName) {
-        const fsKey = `${t.floor}||${slugify(t.activityName)}`;
-        planningProgressByFloorService.set(fsKey, Math.max(planningProgressByFloorService.get(fsKey) || 0, prog));
-      }
-    });
-
-    const getEffectiveItemProgress = (item: any) => {
-      const floorProg = getActivityProgressFromFloors(item, allFloorsData);
-      const byId = item?.id ? (planningProgressById.get(String(item.id)) || 0) : 0;
-      const byFs = item?.floor && item?.service
-        ? (planningProgressByFloorService.get(`${item.floor}||${slugify(item.service)}`) || 0)
-        : 0;
-      return Math.max(floorProg, byId, byFs);
-    };
-
-    const openCronoItems = (cronogramaInicial || [])
-      .filter(item => item && (!isParentCronoItem(item) || !familiesWithChildren.has(familyKey(item))))
-      .map(item => ({ ...item, progress: getEffectiveItemProgress(item) }))
-      .filter(item => (item.progress ?? 0) < 100);
-
-    let cronoItem = cronoLookupMaps.itemById.get(sourceTask.itemId);
-    const sourceMacroRaw = sourceTask.sectionId || cronoItem?.macro || '';
-    const sourceMacroSlug = slugify(sourceMacroRaw);
-    const sourceMacroNorm = normalizeMacroBase(sourceMacroRaw);
-    const sourceServiceSlug = slugify(sourceTask.activityName || '');
-
-    if (!cronoItem) {
-      cronoItem = (cronogramaInicial || []).find(it =>
-        it &&
-        it.floor === sourceTask.floor &&
-        !isParentCronoItem(it) &&
-        (slugify(it.service || '') === sourceServiceSlug || normalizeMacroBase(it.macro || '') === sourceMacroNorm)
-      ) || (cronogramaInicial || []).find(it =>
-        it &&
-        it.floor === sourceTask.floor &&
-        (slugify(it.macro || '') === sourceMacroSlug || normalizeMacroBase(it.macro || '') === sourceMacroNorm)
-      );
-    }
-
-    const matchesSourceMacro = (macroVal: string) => {
-      const mSlug = slugify(macroVal || '');
-      const mNorm = normalizeMacroBase(macroVal || '');
-      return Boolean(
-        (sourceMacroSlug && mSlug === sourceMacroSlug) ||
-        (sourceMacroNorm && mNorm === sourceMacroNorm)
-      );
-    };
-
-    // Collect all items belonging to the source task or its mother macroactivity on the same floor
-    const sourceFamilyItems = (cronogramaInicial || []).filter(
-      item => item && item.floor === sourceTask.floor && matchesSourceMacro(item.macro || '')
-    );
-    const parentItem = sourceFamilyItems.find(item => isParentCronoItem(item));
-
-    const sourceRefIds = new Set<string>();
-    [
-      sourceTask.itemId,
-      ...(cronoItem ? getImplicitActivityRefs(cronoItem) : []),
-      ...(parentItem ? getImplicitActivityRefs(parentItem) : []),
-      ...sourceFamilyItems.flatMap(it => getImplicitActivityRefs(it))
-    ].forEach(ref => {
-      const v = String(ref || '').trim();
-      if (v) sourceRefIds.add(v);
-    });
-
-    const successorIds = new Set<string>();
-    const rawSuccessors = [
-      ...(sourceTask.successors || []),
-      ...(cronoItem?.successors || []),
-      ...(parentItem?.successors || []),
-      ...sourceFamilyItems.flatMap(it => it?.successors || [])
-    ];
-    rawSuccessors.forEach(entry => {
-      const rawVal = typeof entry === 'object' && entry !== null ? (entry.id || entry.targetId || entry.code || '') : entry;
-      const clean = String(rawVal || '').trim();
-      if (!clean) return;
-      successorIds.add(clean);
-      const matchPrefix = clean.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
-      if (matchPrefix && matchPrefix[1]) successorIds.add(matchPrefix[1]);
-    });
-
-    // Also check reverse predecessors pointing to this task or its mother macroactivity
-    (cronogramaInicial || []).forEach(item => {
-      if (!item || !Array.isArray(item.predecessors)) return;
-      const pointsToSource = item.predecessors.some((pred: any) => {
-        const rawPred = typeof pred === 'object' && pred !== null ? (pred.id || pred.sourceId || pred.code || '') : pred;
-        const clean = String(rawPred || '').trim();
-        if (!clean) return false;
-        if (sourceRefIds.has(clean)) return true;
-        const matchPrefix = clean.match(/^([A-Za-z0-9_-]+?)(?:FS|SS|FF|SF|[+-]\d|$)/i);
-        return Boolean(matchPrefix && matchPrefix[1] && sourceRefIds.has(matchPrefix[1]));
-      });
-      if (pointsToSource) {
-        getImplicitActivityRefs(item).forEach(ref => successorIds.add(ref));
-      }
-    });
-
-    const directSuccessorRefs = (cronogramaInicial || []).filter(item => {
-      if (!item) return false;
-      const candidates = getImplicitActivityRefs(item);
-      return candidates.some(id => successorIds.has(id));
-    });
-
-    const successorMacroKeys = new Set(
-      directSuccessorRefs
-        .filter(item => !(item.floor === sourceTask.floor && matchesSourceMacro(item.macro || '')))
-        .flatMap(item => [
-          `${item.floor}||${slugify(item.macro)}`,
-          `${item.floor}||${normalizeMacroBase(item.macro || '')}`
-        ])
-    );
-
-    // 1. Explicit schedule successors (horizontal on same floor for downstream macros + vertical/inter-lane)
-    const explicitSuccessorItems = openCronoItems.filter(item => {
-      if (item.floor === sourceTask.floor && matchesSourceMacro(item.macro || '')) return false;
-      const candidates = getImplicitActivityRefs(item);
-      return (
-        candidates.some(id => successorIds.has(id)) ||
-        successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`) ||
-        successorMacroKeys.has(`${item.floor}||${normalizeMacroBase(item.macro || '')}`)
-      );
-    });
-
-    // 2. Vertical continuity (escadinha): open floors of the same macroactivity on other floors,
-    // ordered so floors immediately after sourceTask.floor appear first.
-    const sameMacroOtherFloors = openCronoItems.filter(item =>
-      item.floor !== sourceTask.floor && matchesSourceMacro(item.macro || '')
-    );
-
-    const floorOrderList = floors && floors.length > 0
-      ? floors
-      : Array.from(new Set((cronogramaInicial || []).map(it => it?.floor).filter(Boolean)));
-    const sourceFloorIdx = floorOrderList.indexOf(sourceTask.floor);
-
-    const sortFloorsAfterSource = (items: any[]) => {
-      if (sourceFloorIdx < 0) return items;
-      return [...items].sort((a, b) => {
-        const idxA = floorOrderList.indexOf(a.floor);
-        const idxB = floorOrderList.indexOf(b.floor);
-        const relA = idxA > sourceFloorIdx ? idxA - sourceFloorIdx : (idxA >= 0 ? idxA + floorOrderList.length : 9999);
-        const relB = idxB > sourceFloorIdx ? idxB - sourceFloorIdx : (idxB >= 0 ? idxB + floorOrderList.length : 9999);
-        return relA - relB;
-      });
-    };
-
-    const sortedExplicitSuccessors = sortFloorsAfterSource(explicitSuccessorItems);
-    const hasExplicitVerticalSameMacro = sortedExplicitSuccessors.some(item => matchesSourceMacro(item.macro || ''));
-    const sortedSameMacroOtherFloors = hasExplicitVerticalSameMacro
-      ? sortedExplicitSuccessors.filter(item => matchesSourceMacro(item.macro || ''))
-      : sortFloorsAfterSource(sameMacroOtherFloors);
-
-    const combined: any[] = [];
-    const seenIds = new Set<string>();
-    [...sortedSameMacroOtherFloors, ...sortedExplicitSuccessors].forEach(item => {
-      const key = String(item.id || `${item.floor}||${item.macro}||${item.service}`);
-      if (!seenIds.has(key)) {
-        seenIds.add(key);
-        combined.push(item);
-      }
-    });
-
-    return combined;
-  };
-
-  const nextWeekSourceTask = useMemo(() => {
-    if (!nextWeekPopover?.taskId) return null;
-    return planning.find(t => t.id === nextWeekPopover.taskId) || null;
-  }, [nextWeekPopover, planning]);
-
-  const nextWeekCandidateActivities = useMemo(() => {
-    if (!nextWeekSourceTask) return [];
-    return getReleasedFrontsForTask(nextWeekSourceTask);
-  }, [nextWeekSourceTask, cronogramaInicial, allFloorsData, cronoLookupMaps, floors, planning]);
-
-  const nextWeekMacroOptions = useMemo(() => (
-    Array.from(new Set(nextWeekCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
-  ), [nextWeekCandidateActivities]);
-
-  const nextWeekAvailableFloors = useMemo(() => {
-    if (!nextWeekMacro) return [];
-    return Array.from(new Set(
-      nextWeekCandidateActivities
-        .filter(item => slugify(item.macro) === nextWeekMacro && (item.progress ?? 0) < 100)
-        .map(item => item.floor)
-    )).filter(Boolean);
-  }, [nextWeekCandidateActivities, nextWeekMacro]);
-
-  const nextWeekAvailableServices = useMemo(() => {
-    if (!nextWeekMacro || nextWeekFloors.length === 0) return [];
-    return nextWeekCandidateActivities.filter(item =>
-      slugify(item.macro) === nextWeekMacro &&
-      nextWeekFloors.includes(item.floor) &&
-      (item.progress ?? 0) < 100
-    );
-  }, [nextWeekCandidateActivities, nextWeekMacro, nextWeekFloors]);
-
-  const handleOpenNextWeekPopover = (e: React.MouseEvent, task: any) => {
-    e.stopPropagation();
-    if (nextWeekPopover?.taskId === task.id) {
-      setNextWeekPopover(null);
-      return;
-    }
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const panelWidth = 380;
-    const estimatedHeight = Math.min(580, window.innerHeight - 32);
-    // Centralizado verticalmente na tela
-    const y = Math.max(16, Math.round((window.innerHeight - estimatedHeight) / 2));
-    // Posicionamento horizontal inteligente: próximo ao botão clicado, ou centralizado se couber melhor
-    let x = rect.right + 12;
-    if (x + panelWidth > window.innerWidth - 16) {
-      x = Math.max(16, rect.left - panelWidth - 12);
-    }
-    if (x + panelWidth > window.innerWidth - 16 || x < 16) {
-      x = Math.max(16, Math.round((window.innerWidth - panelWidth) / 2));
-    }
-
-    const normalizeMacroBase = (raw: string) => {
-      const cleaned = String(raw || '').replace(/^[A-Za-zÀ-ÿ0-9]{2,10}\s*[-–—]\s*/, '').trim();
-      const s = slugify(cleaned);
-      return s.replace(/^[a-z0-9]{2,10}___/, '');
-    };
-
-    const candidates = getReleasedFrontsForTask(task);
-    const macros = Array.from(new Set(candidates.map(item => slugify(item.macro)).filter(Boolean)));
-    const sourceMacroSlug = slugify(task.sectionId || '');
-    const sourceMacroNorm = normalizeMacroBase(task.sectionId || '');
-    const matchingMacroOption = macros.find(
-      m => m === sourceMacroSlug || normalizeMacroBase(m) === sourceMacroNorm
-    );
-    const initialMacro = matchingMacroOption || macros[0] || '';
-    const floorsForMacro = Array.from(new Set(
-      candidates
-        .filter(item => slugify(item.macro) === initialMacro && (item.progress ?? 0) < 100)
-        .map(item => item.floor)
-    )).filter(Boolean);
-    const initialFloors = floorsForMacro.length > 0 ? [floorsForMacro[0]] : [];
-    const servicesForInitialFloor = candidates
-      .filter(item => slugify(item.macro) === initialMacro && initialFloors.includes(item.floor) && (item.progress ?? 0) < 100);
-    // Prefer pre-selecting the service with the same name as the finished task, or all services in that floor
-    const sameNameServices = servicesForInitialFloor.filter(
-      item => String(item.service || '').trim().toUpperCase() === String(task.activityName || '').trim().toUpperCase()
-    );
-    const initialServices = sameNameServices.length > 0
-      ? sameNameServices.map(s => s.id)
-      : servicesForInitialFloor.map(s => s.id);
-
-    setNextWeekMacro(initialMacro);
-    setNextWeekFloors(initialFloors);
-    setNextWeekSelectedServices(initialServices);
-    setNextWeekResponsible(task.responsible || '');
-    setNextWeekWarning('');
-    setNextWeekPopover({ taskId: task.id, x, y });
-  };
-
-  useEffect(() => {
-    if (!nextWeekPopover) return;
-    const handleMouseMove = (ev: MouseEvent) => {
-      if (!nextWeekDragRef.current.isDragging) return;
-      const dx = ev.clientX - nextWeekDragRef.current.startX;
-      const dy = ev.clientY - nextWeekDragRef.current.startY;
-      const nextX = Math.max(8, Math.min(window.innerWidth - 380, nextWeekDragRef.current.origX + dx));
-      const nextY = Math.max(8, Math.min(window.innerHeight - 200, nextWeekDragRef.current.origY + dy));
-      setNextWeekPopover(prev => prev ? { ...prev, x: nextX, y: nextY } : null);
-    };
-    const handleMouseUp = () => {
-      nextWeekDragRef.current.isDragging = false;
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [nextWeekPopover]);
-
 
   const currentWeekId = toLocalDateString(currentWeekStart);
   const weeklyTasks = planning.filter(t => t.weekId === currentWeekId);
@@ -2910,6 +2651,18 @@ const App = () => {
   const hasFinalizedTasks = weeklyTasks.some(t => t.finalized);
   const isWeekFinalized = weeklyTasks.length > 0 && weeklyTasks.every(t => t.finalized);
   const isTaskLocked = (task) => Boolean(task?.finalized && !isWeekBeingEdited);
+  const pendingBudgetDiffs = useMemo(() => {
+    const cronoFamiliesWithChildren = getFamiliesWithBudgetChildren(cronogramaInicial);
+    return budgetDiffs.filter(diff => (
+      diff &&
+      !diff.appliedWeekId &&
+      Number(diff.delta) > 0 &&
+      (!isParentBudgetItem(diff) || !cronoFamiliesWithChildren.has(getBudgetFamilyKey(diff)))
+    ));
+  }, [budgetDiffs, cronogramaInicial]);
+  const pendingBudgetDiffProgress = useMemo(() => (
+    Math.round(pendingBudgetDiffs.reduce((sum, diff) => sum + (Number(diff.delta) || 0), 0) * 100) / 100
+  ), [pendingBudgetDiffs]);
   const previousBudgetImport = budgetImportVersions.length > 1 ? budgetImportVersions[budgetImportVersions.length - 2] : null;
   const currentBudgetImport = budgetImportVersions.length > 0 ? budgetImportVersions[budgetImportVersions.length - 1] : null;
   const getBudgetImportTooltip = (version) => {
@@ -2948,7 +2701,8 @@ const App = () => {
   }, [matrixSelection, matrices, allPossibleMacros, floors]);
 
   const getItemCost = (itemId: string) => {
-    return cronoLookupMaps.costById.get(itemId) || 0;
+    const match = cronogramaInicial.find(c => c && c.id === itemId);
+    return match && typeof match.cost === 'number' ? match.cost : 0;
   };
 
   const getPackageProgress = (floor: string, macroId: string, itemsList: any[]) => {
@@ -3325,7 +3079,6 @@ const App = () => {
   }, [planning, giantSearch, giantFloorFilter, giantMacroFilter, giantStatusFilter, giantSortKey, giantSortDir]);
 
   const filteredCronograma = useMemo(() => {
-    if (!showRawCronoTable) return [];
     let items = (cronogramaInicial || []).filter(item => {
       if (!item) return false;
       const matchesSearch = !cronoSearch ||
@@ -3357,8 +3110,8 @@ const App = () => {
         return String(aVal).localeCompare(String(bVal)) * dir;
       });
     }
-    return items.slice(0, rawCronoLimit);
-  }, [showRawCronoTable, rawCronoLimit, cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
+    return items;
+  }, [cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
 
   const cronogramaOrderMap = useMemo(() => {
     const groupOrder = new Map<string, number>();
@@ -3469,15 +3222,95 @@ const App = () => {
   const selectableFilteredWeeklyTasks = filteredWeeklyTasks.filter(task => !isTaskLocked(task));
 
   // --- Handlers de Ações ---
-  const handleGeneratePlanningFromBudgetDiffs = async (previous, latest) => {
-    const result = generatePlanningFromVersions(previous, latest, planning, currentWeekId, plannerUsername, budgetDiffs);
-    if (!result.diffs.length) throw new Error('Não há novos avanços positivos entre essas versões para aplicar. A comparação pode já ter sido aplicada.');
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(result.planning, allFloorsData, cronogramaInicial);
-    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, result.budgetDiffs);
+  const handleGeneratePlanningFromBudgetDiffs = async () => {
+    if (pendingBudgetDiffs.length === 0) {
+      setNotification({ message: 'Nao ha diferencas de orcamento pendentes para aplicar.', type: 'error' });
+      return;
+    }
+
+    const diffsByItem = new Map<string, any>();
+    pendingBudgetDiffs.forEach(diff => {
+      const existing = diffsByItem.get(diff.itemId);
+      if (!existing) {
+        diffsByItem.set(diff.itemId, { ...diff });
+        return;
+      }
+      const existingTime = new Date(existing.importedAt || 0).getTime();
+      const diffTime = new Date(diff.importedAt || 0).getTime();
+      if (diffTime >= existingTime) diffsByItem.set(diff.itemId, { ...diff });
+    });
+
+    let mergedCount = 0;
+    let createdCount = 0;
+    const appliedDiffIds = new Set(pendingBudgetDiffs.map(diff => diff.id));
+    let updatedPlanning = [...planning];
+
+    diffsByItem.forEach(diff => {
+      const itemDiffIds = pendingBudgetDiffs.filter(d => d.itemId === diff.itemId).map(d => d.id);
+      const delta = Math.round((Number(diff.delta) || 0) * 1000) / 1000;
+      if (delta <= 0) return;
+      const importedProgress = roundPercentValue(diff.newProgress ?? 0);
+
+      const existingIndex = updatedPlanning.findIndex(t => t.weekId === currentWeekId && t.itemId === diff.itemId && !t.finalized);
+      if (existingIndex !== -1) {
+        const task = updatedPlanning[existingIndex];
+        const executedBefore = roundPercentValue(task.executedBefore || 0);
+        const nextProgressThisWeek = importedProgress > 0
+          ? importedProgress
+          : Math.max(roundPercentValue(task.progressThisWeek || 0), roundPercentValue(executedBefore + delta));
+        updatedPlanning[existingIndex] = {
+          ...task,
+          progressThisWeek: Math.min(100, nextProgressThisWeek),
+          budgetDiffIds: Array.from(new Set([...(task.budgetDiffIds || []), ...itemDiffIds])),
+          observations: task.observations || 'Avanço preenchido por diferença entre versões de orçamento',
+          lastUpdatedBy: plannerUsername || 'Sistema'
+        };
+        mergedCount++;
+        return;
+      }
+
+      const cronoMatch = cronogramaInicial.find(item => item.id === diff.itemId);
+      const previousProgress = roundPercentValue(diff.previousProgress ?? Math.max(0, (Number(diff.newProgress) || 0) - delta));
+      updatedPlanning.push({
+        id: crypto.randomUUID(),
+        weekId: currentWeekId,
+        floor: diff.floor || cronoMatch?.floor || 'Geral',
+        sectionId: diff.sectionId || slugify(diff.macro || cronoMatch?.macro),
+        itemId: diff.itemId,
+        activityName: diff.service || cronoMatch?.service || 'Atividade importada',
+        responsible: diff.responsible || cronoMatch?.responsible || teams[0] || 'Equipe Geral',
+        weight: 100,
+        executedBefore: previousProgress,
+        plannedThisWeek: 0,
+        progressThisWeek: importedProgress,
+        finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
+        dailyWork: [0, 0, 0, 0, 0],
+        observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
+        delayReason: '',
+        finalized: false,
+        isUnplannedDetected: true,
+        source: 'budget-diff',
+        budgetDiffIds: itemDiffIds,
+        predecessors: diff.predecessors || cronoMatch?.predecessors || [],
+        successors: diff.successors || cronoMatch?.successors || [],
+        inheritedDependenciesFrom: diff.inheritedDependenciesFrom || cronoMatch?.inheritedDependenciesFrom || '',
+        originalId: diff.originalId || cronoMatch?.originalId || ''
+      });
+      createdCount++;
+    });
+
+    const updatedBudgetDiffs = budgetDiffs.map(diff => (
+      appliedDiffIds.has(diff.id)
+        ? { ...diff, appliedWeekId: currentWeekId, appliedAt: new Date().toISOString() }
+        : diff
+    ));
+
+    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
     setPlanning(recalculatedPlanning);
     setAllFloorsData(updatedFloorsData);
-    setBudgetDiffs(result.budgetDiffs);
-    setNotification({message: result.diffs.length + ' atividades atualizadas na semana selecionada por diferença entre "' + previous.name + '" e "' + latest.name + '".', type: 'success'});
+    setBudgetDiffs(updatedBudgetDiffs);
+    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
+    setNotification({ message: `${createdCount} atividades fora do planejado criadas e ${mergedCount} atividades existentes atualizadas para a semana selecionada.`, type: 'success' });
   };
 
   const handleClearProjectData = async () => {
@@ -3561,80 +3394,9 @@ const App = () => {
     if (newTasks.length > 0) {
       const updatedPlanning = [...planning, ...newTasks];
       const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-      setPlanning(recalculatedPlanning);
-      setAllFloorsData(updatedFloorsData);
-      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
+      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
       if (duplicates.length === 0) { setDrawerSelectedServices([]); setIsDrawerOpen(false); }
       setNotification({ message: `${newTasks.length} Novas atividades adicionadas à semana!`, type: 'success' });
-    }
-  };
-
-  const handleLaunchNextWeekActivities = async () => {
-    if (!nextWeekMacro || nextWeekFloors.length === 0) {
-      setNotification({ message: 'Selecione a Macroatividade, os Pavimentos e pelo menos um Serviço!', type: 'error' });
-      return;
-    }
-    if (nextWeekSelectedServices.length === 0) {
-      setNotification({ message: 'Selecione pelo menos um Serviço para lançar na próxima semana!', type: 'error' });
-      return;
-    }
-    const targetWeekId = nextWeekIdForPopover;
-    const nextWeekExistingTasks = planning.filter(t => t.weekId === targetWeekId && !t.finalized);
-    const newTasks: any[] = [];
-    const duplicates: string[] = [];
-
-    nextWeekSelectedServices.forEach(serviceId => {
-      const match = nextWeekCandidateActivities.find(item => item.id === serviceId);
-      if (match) {
-        const exists = nextWeekExistingTasks.some(t => t.itemId === match.id && t.floor === match.floor);
-        if (exists) {
-          duplicates.push(`${match.service} (${match.floor})`);
-        } else {
-          newTasks.push({
-            id: crypto.randomUUID(),
-            weekId: targetWeekId,
-            floor: match.floor,
-            sectionId: slugify(match.macro),
-            itemId: match.id,
-            activityName: match.service,
-            responsible: nextWeekResponsible || nextWeekSourceTask?.responsible || match.responsible || (teams[0] || 'Equipe Geral'),
-            isParent: !!match.isParent,
-            weight: 100,
-            executedBefore: roundDown25(match.progress || 0),
-            executedBeforeRaw: roundPercentValue(match.progress || 0),
-            plannedThisWeek: 100,
-            progressThisWeek: 0,
-            finishDate: match.end,
-            dailyWork: [0, 0, 0, 0, 0],
-            observations: '',
-            delayReason: '',
-            finalized: false,
-            launchedFromTaskId: nextWeekSourceTask?.id
-          });
-        }
-      }
-    });
-
-    if (duplicates.length > 0) {
-      setNextWeekWarning(`⚠️ Já lançadas na próxima semana (${formatDateBR(targetWeekId)}): ${duplicates.join('; ')}`);
-    } else {
-      setNextWeekWarning('');
-    }
-
-    if (newTasks.length > 0) {
-      const updatedPlanning = [...planning, ...newTasks];
-      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-      setPlanning(recalculatedPlanning);
-      setAllFloorsData(updatedFloorsData);
-      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
-      if (duplicates.length === 0) {
-        setNextWeekSelectedServices([]);
-        setNextWeekPopover(null);
-      }
-      setNotification({
-        message: `${newTasks.length} atividade(s) lançada(s) para a próxima semana (${formatDateBR(targetWeekId)})!`,
-        type: 'success'
-      });
     }
   };
 
@@ -3677,8 +3439,7 @@ const App = () => {
     };
 
     const updatedPlanning = [...planning, newTask];
-    setPlanning(updatedPlanning);
-    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true);
+    await saveToDB(floors, allFloorsData, history, weights, updatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
     
     setManualServiceName('');
     setManualFloor('');
@@ -4150,10 +3911,8 @@ const App = () => {
   };
 
   const handleFileUpload = (e: any) => {
-    if (!canOpenModule('import')) return;
     const file = e.target.files[0];
     if (!file) return;
-    e.target.value = ''; // Allow retrying the same file after review/cancellation.
 
     setIsImporting(true);
     setImportStatus('Lendo e analisando planilha Excel...');
@@ -4164,32 +3923,65 @@ const App = () => {
         try {
           const XLSX = await import('xlsx');
           const bstr = evt.target.result as string;
-          const workbook = XLSX.read(bstr, { type: 'binary', cellNF: true });
-          const sheets: ScheduleSheet[] = workbook.SheetNames.map(name => {
-            const ws = workbook.Sheets[name];
-            const formats = {};
-            Object.keys(ws).filter(key => !key.startsWith('!') && ws[key].z).forEach(key => { formats[key] = ws[key].z; });
-            return { name, rows: XLSX.utils.sheet_to_json(ws, { header: 1, range: 0, blankrows: true }),
-              merges: ws['!merges'], formats, date1904: !!workbook.Workbook?.WBProps?.date1904 };
-          });
-          if (!sheets.length) throw new Error('O arquivo não contém abas para importar.');
-          setImportStatus('Aguardando revisão da importação...');
-          const reviewed = await new Promise<ScheduleAnalysis | null>(resolve => {
-            setScheduleImportPreview({ fileName: file.name, sheets, resolve });
-          });
-          setScheduleImportPreview(null);
-          if (!reviewed) {
+          const workbook = XLSX.read(bstr, { type: 'binary' });
+          const wsname = workbook.SheetNames[0];
+          const ws = workbook.Sheets[wsname];
+          const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+          
+          if (data.length < 2) {
+            setNotification({ message: "Planilha sem linhas suficientes.", type: "error" });
             setIsImporting(false);
             setImportStatus('');
             return;
           }
-          if (reviewed.errors.length) throw new Error('Resolva as pendências da prévia antes de importar.');
-          const importFields = Object.keys(SCHEDULE_FIELDS);
-          const colIdx = Object.fromEntries(importFields.map((field, index) => [field, index]));
-          const data = reviewed.records.map(record => importFields.map(field => record.values[field]));
-          const headerIndex = -1;
 
-          // Review has validated values and resolved repeated source identifiers.
+          let headerIndex = 3; 
+          for (let i = 0; i < Math.min(10, data.length); i++) {
+            const rowStr = (data[i] || []).join('').toLowerCase();
+            // Exclude 'id' to prevent matching rows above header containing 'unidade' (which contains 'id')
+            if (rowStr.includes('pacote de trabalho') || rowStr.includes('serviço') || rowStr.includes('macroatividade')) {
+              headerIndex = i; 
+              break;
+            }
+          }
+
+          if (data.length <= headerIndex + 1) {
+            setNotification({ message: "Não há dados abaixo da linha de cabeçalho.", type: "error" });
+            setIsImporting(false);
+            setImportStatus('');
+            return;
+          }
+
+          const headerRow = data[headerIndex].map(h => String(h || '').trim());
+          const groupRow = headerIndex > 0 ? data[headerIndex - 1].map(h => String(h || '').trim()) : [];
+          const progressColumn = findGroupedColumnIndex(
+            headerRow,
+            groupRow,
+            ['Avanço físico (%)', 'Avanco fisico (%)'],
+            ['Realizado']
+          );
+          
+          const colIdx = {
+            id: findColumnIndex(headerRow, ['ID', 'Identificador']),
+            macro: findColumnIndex(headerRow, ['Pacote de trabalho/tarefas', 'Pacote de trabalho', 'Macroatividade'], 2),
+            service: findColumnIndex(headerRow, ['Serviço', 'Servico'], 3),
+            replicationGroup: findColumnIndex(headerRow, ['Grupo de replicação', 'Grupo de replicacao', 'Grupo Replicacao']),
+            floor: findColumnIndex(headerRow, ['Lote', 'Local do serviço', 'Local do servico'], 5),
+            duration: findColumnIndex(headerRow, ['Duração', 'Duracao', 'Prazo', 'Dias'], 12),
+            start: findColumnIndex(headerRow, ['Data de Início', 'Data de Inicio'], 10),
+            end: findColumnIndex(headerRow, ['Data de Término', 'Data de Termino'], 11),
+            cost: findColumnIndex(headerRow, ['Custo Vinculado Atual'], 15),
+            responsible: findColumnIndex(headerRow, ['Responsáveis', 'Responsaveis', 'Responsável', 'Responsavel'], 14),
+            predecessors: findColumnIndex(headerRow, ['Predecessoras', 'Predecessores', 'Predecessora', 'Predecessor']),
+            successors: findColumnIndex(headerRow, ['Sucessoras', 'Sucessores', 'Sucessora', 'Sucessor']),
+            progress: progressColumn !== -1
+              ? progressColumn
+              : findGroupedColumnIndex(headerRow, groupRow, ['Última Medição do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
+          };
+
+          // Two-pass import: 1st pass collects all detail rows (with explicit service names).
+          // 2nd pass collects package-only rows (service = '-') using the macro name as the service name.
+          // Deduplication is handled by the unique item ID key.
           const seenItemKeys = new Set<string>();
           let parsedItems = [];
           const rawParsedRows = [];
@@ -4214,19 +4006,19 @@ const App = () => {
             const floorName = String(rawFloor || 'Térreo').trim();
             const itemKey = `xls_${slugify(floorName)}_${slugify(rawMacro)}_${slugify(rawService)}${rawId ? '_' + rawId : ''}`;
 
-            if (seenItemKeys.has(itemKey)) throw new Error(`Há atividades com nomes que geram a mesma identificação: ${rawMacro} / ${rawService} / ${floorName}. Diferencie seus identificadores na planilha.`);
+            if (seenItemKeys.has(itemKey)) return; // skip duplicates
             seenItemKeys.add(itemKey);
 
-            const rawDuration = Number(row[colIdx.duration]);
-            const rawStart = String(row[colIdx.start]);
-            const rawEnd = String(row[colIdx.end]);
-            const rawCost = Number(row[colIdx.cost]);
+            const rawDuration = colIdx.duration !== -1 && row[colIdx.duration] !== undefined ? parseInt(row[colIdx.duration], 10) : 10;
+            const rawStart = parseExcelDate(colIdx.start !== -1 && row[colIdx.start] !== undefined ? row[colIdx.start] : undefined);
+            const rawEnd = parseExcelDate(colIdx.end !== -1 && row[colIdx.end] !== undefined ? row[colIdx.end] : undefined, rawStart);
+            const rawCost = colIdx.cost !== -1 && row[colIdx.cost] !== undefined ? parseFloat(String(row[colIdx.cost]).replace(/[^\d.-]/g, '')) : 0;
             const rawResp = colIdx.responsible !== -1 && row[colIdx.responsible] !== undefined && row[colIdx.responsible] !== null ? String(row[colIdx.responsible]).trim().toUpperCase() : 'EQUIPE GERAL';
             const rawPredecessors = colIdx.predecessors !== -1 && row[colIdx.predecessors] !== undefined ? parseDependencyList(row[colIdx.predecessors]) : [];
             const rawSuccessors = colIdx.successors !== -1 && row[colIdx.successors] !== undefined ? parseDependencyList(row[colIdx.successors]) : [];
             let rawProgress = 0;
             if (colIdx.progress !== -1 && row[colIdx.progress] !== undefined) {
-              rawProgress = Number(row[colIdx.progress]); // Already validated and scaled in the review.
+              rawProgress = parsePercent(row[colIdx.progress]);
             }
 
             if (rawResp && rawResp !== 'UNDEFINED' && rawResp !== '' && rawResp !== '-') importedTeams.add(rawResp);
@@ -4381,13 +4173,6 @@ const App = () => {
 
 
           setImportStatus('Gravando dados no Firebase (Aguarde)...');
-          await loadScheduleVersions(selectedProjectId || 'projeto_principal', { cronogramaInicial, floors, allFloorsData, weights, teams: teamsRef.current, matrices });
-          const { created: importedVersion } = await createNewScheduleVersion(
-            selectedProjectId || 'projeto_principal', file.name, 'Cronograma importado por planilha', false,
-            { cronogramaInicial: parsedItems, floors: updatedFloorsList, allFloorsData: syncedFloors,
-              weights: updatedWeights, teams: updatedTeams, matrices: updatedMatrices },
-            { sourceFileName: file.name, author: plannerUsername, type: 'forecast', makeActive: false }
-          );
 
           saveToDB(
             updatedFloorsList,
@@ -4409,9 +4194,7 @@ const App = () => {
             updatedBudgetDiffs,
             updatedBudgetImportVersions
           )
-            .then(async () => {
-              await activateScheduleVersion(selectedProjectId || 'projeto_principal', importedVersion.id);
-              setVersionUpdateKey(prev => prev + 1);
+            .then(() => {
               setBudgetDiffs(updatedBudgetDiffs);
               setBudgetImportVersions(updatedBudgetImportVersions);
               setNotification({ message: `${parsedItems.length} atividades importadas. ${importedBudgetDiffs.length} diferenças registradas para o curto prazo.`, type: "success" });
@@ -4428,9 +4211,8 @@ const App = () => {
 
         } catch (err) {
           console.error(err);
-          setNotification({ message: err instanceof Error ? err.message : "Falha ao analisar a planilha Excel.", type: "error" });
+          setNotification({ message: "Falha ao analisar a planilha Excel.", type: "error" });
           setIsImporting(false);
-          setImportStatus('');
         }
       }, 100);
     };
@@ -4441,103 +4223,6 @@ const App = () => {
     reader.readAsBinaryString(file);
   };
 
-  const handleCompleteScheduleImport = async (
-    parsedResult: any,
-    versionMeta: {
-      name: string;
-      description: string;
-      type: any;
-      author: string;
-      referenceDate: string;
-      sourceFileName: string;
-      isBaseline: boolean;
-      makeActive: boolean;
-    }
-  ) => {
-    if (!canOpenModule('import')) return;
-    try {
-      const activeProjId = selectedProjectId || 'projeto_principal';
-      // Preserve an existing schedule on projects created before version history existed.
-      await loadScheduleVersions(activeProjId, { cronogramaInicial, floors, allFloorsData, weights, teams, matrices });
-
-      // 1. Cria a versão em scheduleVersions com os metadados de rastreabilidade
-      const { created } = await createNewScheduleVersion(
-        activeProjId,
-        versionMeta.name,
-        versionMeta.description,
-        versionMeta.isBaseline,
-        {
-          cronogramaInicial: parsedResult.parsedItems,
-          floors: parsedResult.floors,
-          allFloorsData: parsedResult.allFloorsData,
-          weights: parsedResult.weights,
-          teams: parsedResult.teams,
-          matrices: parsedResult.matrices,
-        },
-        {
-          type: versionMeta.type,
-          author: versionMeta.author,
-          sourceFileName: versionMeta.sourceFileName,
-          referenceDate: versionMeta.referenceDate,
-          totalActivities: parsedResult.stats.totalActivities,
-          totalFloors: parsedResult.stats.totalFloors,
-          notes: versionMeta.description,
-          makeActive: false,
-        }
-      );
-
-      // 3. Se deve ser a versão Ativa, aplica ao cronograma da aplicação
-      if (versionMeta.makeActive) {
-        const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
-          planning,
-          parsedResult.allFloorsData,
-          parsedResult.parsedItems
-        );
-
-        await saveToDB(
-          parsedResult.floors,
-          updatedFloorsData,
-          history,
-          parsedResult.weights,
-          recalculatedPlanning,
-          parsedResult.parsedItems,
-          parsedResult.teams,
-          delayReasons,
-          ppcHistory,
-          parsedResult.matrices,
-          teamPhones,
-          undefined,
-          projectCity,
-          weatherApiKey,
-          weatherCache,
-          true
-        );
-        await activateScheduleVersion(activeProjId, created.id);
-        setFloors(parsedResult.floors);
-        setAllFloorsData(updatedFloorsData);
-        setWeights(parsedResult.weights);
-        setCronogramaInicial(parsedResult.parsedItems);
-        setTeams(parsedResult.teams);
-        setMatrices(parsedResult.matrices);
-        setPlanning(recalculatedPlanning);
-      }
-
-      setVersionUpdateKey((prev) => prev + 1);
-
-      setNotification({
-        message: `Importação concluída! ${parsedResult.stats.totalActivities.toLocaleString('pt-BR')} atividades carregadas na versão "${versionMeta.name}".`,
-        type: 'success',
-      });
-    } catch (err: any) {
-      console.error('Erro na finalização da importação:', err);
-      setNotification({
-        message: `Erro ao salvar cronograma importado: ${err?.message || 'Falha inesperada'}`,
-        type: 'error',
-      });
-      throw err;
-    }
-  };
-
   const handleAddFloor = async () => {
     if (!newFloorName.trim()) return;
     const floor = newFloorName.trim();
@@ -4545,8 +4230,8 @@ const App = () => {
     const updatedFloors = [...floors, floor];
     const updatedData = cloneDeep(allFloorsData);
     const updatedWeights = cloneDeep(weights);
-    updatedData[floor] = {};
-    updatedWeights[floor] = {};
+    updatedData[floor] = cloneDeep(INITIAL_STRUCTURE);
+    updatedWeights[floor] = { estrutura: 50, instalacoes: 50 };
     const updatedMats = matrices.map(m => ({
       ...m,
       floors: !(m.floors || []).includes(floor) ? [...(m.floors || []), floor] : m.floors
@@ -5742,356 +5427,223 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   };
 
-  const renderCronograma = (subViewOverride?: 'lob' | 'table' | 'budget' | 'physical_financial' | 'competence_cash' | 'raw_crono' | 'import') => (
+  const renderCronograma = () => (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <LongTermPlanner
-        projectName={projects.find(project => project.id === selectedProjectId)?.name || ''}
-        activeSubView={subViewOverride}
-        hideSubNav={Boolean(subViewOverride)}
-        selectedProjectId={selectedProjectId}
-        cronogramaInicial={cronogramaInicial}
-        floors={floors}
-        allFloorsData={allFloorsData}
-        weights={weights}
-        teams={teams}
-        matrices={matrices}
-        previousBudgetImport={previousBudgetImport}
-        currentBudgetImport={currentBudgetImport}
-        getBudgetImportTooltip={getBudgetImportTooltip}
-        handleFileUpload={handleFileUpload}
-        onOpenImportModal={canOpenModule('import') ? openScheduleImport : undefined}
-        onTriggerClearDB={() =>
-          triggerConfirm(
-            'Limpar Banco de Dados',
-            'Deseja limpar o cronograma importado, planejamento aberto, pesos, paineis e diferencas de orcamento? O historico semanal e o PPC serao preservados.',
-            handleClearProjectData
-          )
-        }
-        onApplySchedule={async (compiled, message) => {
-          const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
-            planning,
-            compiled.allFloorsData,
-            compiled.cronogramaInicial
-          );
-          setFloors(compiled.floors);
-          setAllFloorsData(updatedFloorsData);
-          setWeights(compiled.weights);
-          setCronogramaInicial(compiled.cronogramaInicial);
-          setTeams(compiled.teams);
-          setMatrices(compiled.matrices);
-          setPlanning(recalculatedPlanning);
-          await saveToDB(
-            compiled.floors,
-            updatedFloorsData,
-            history,
-            compiled.weights,
-            recalculatedPlanning,
-            compiled.cronogramaInicial,
-            compiled.teams,
-            delayReasons,
-            ppcHistory,
-            compiled.matrices
-          );
-          setNotification({
-            message: message || 'Planejamento de Longo Prazo sincronizado com sucesso!',
-            type: 'success',
-          });
-        }}
-        onUpdateSingleItemProgress={async (item, rawVal) => {
-          const newProgress = roundPercentValue(rawVal);
-          const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
-          const updatedFloorsData = cloneDeep(allFloorsData);
-          const macroKey = slugify(item.macro);
-          if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
-            const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
-            const existingItem = itemsList.find(it => it && it.id === item.id);
-            if (existingItem) {
-              existingItem.actualPercent = newProgress;
-            }
-          }
-          setCronogramaInicial(updatedCrono);
-          setAllFloorsData(updatedFloorsData);
-          await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
-          setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
-        }}
-        rawCronoSlot={
-          <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-              <h3 className="text-sm font-black text-slate-800 uppercase">
-                Atividades do Cronograma Ativo
-                <span className="ml-2 text-indigo-600">({filteredCronograma.length}/{cronogramaInicial.length})</span>
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {filteredCronograma.length >= rawCronoLimit && (
-                  <button
-                    type="button"
-                    onClick={() => setRawCronoLimit(prev => prev + 200)}
-                    className="px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-[10px] font-black uppercase tracking-wider text-amber-800 transition-colors"
-                  >
-                    Carregar +200 linhas ({rawCronoLimit})
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={!previousBudgetImport}
-                  title={getBudgetImportTooltip(previousBudgetImport)}
-                  className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 disabled:opacity-45 disabled:cursor-not-allowed"
-                >
-                  Orcamento anterior
-                </button>
-                <button
-                  type="button"
-                  disabled={!currentBudgetImport}
-                  title={getBudgetImportTooltip(currentBudgetImport)}
-                  className="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-[10px] font-black uppercase tracking-wider text-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed"
-                >
-                  Orcamento atual
-                </button>
-              </div>
-            </div>
-
-            {/* Filter Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
-              <div>
-                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
-                <input
-                  type="text"
-                  className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
-                  placeholder="Serviço, macro, equipe..."
-                  value={cronoSearch}
-                  onChange={e => setCronoSearch(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label>
-                <select
-                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
-                  value={cronoFloorFilter}
-                  onChange={e => setCronoFloorFilter(e.target.value)}
-                >
-                  <option value="">-- Todos --</option>
-                  {(floors || []).map(f => <option key={f} value={f}>{f}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label>
-                <select
-                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
-                  value={cronoMacroFilter}
-                  onChange={e => setCronoMacroFilter(e.target.value)}
-                >
-                  <option value="">-- Todas --</option>
-                  {(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Progresso</label>
-                <select
-                  className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
-                  value={cronoProgressFilter}
-                  onChange={e => setCronoProgressFilter(e.target.value)}
-                >
-                  <option value="">-- Todos --</option>
-                  <option value="notstarted">⬜ Não iniciado (0%)</option>
-                  <option value="inprogress">🔵 Em andamento</option>
-                  <option value="done">✅ Concluído (100%)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="overflow-auto rounded-xl border border-slate-200 max-h-[640px]">
-              <table className="min-w-[1520px] w-full text-xs text-left">
-                <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
-                  <tr>
-                    {[
-                      { label: 'Etapa (Macro)', key: 'macro' },
-                      { label: 'Pavimento (Lote)', key: 'floor' },
-                      { label: 'Serviço', key: 'service' },
-                      { label: 'Dias', key: 'duration', center: true },
-                      { label: 'Fim Planeado', key: 'end', center: true },
-                      { label: 'Realizado', key: 'progress', center: true },
-                      { label: 'Equipe', key: null, center: true },
-                      { label: 'Custo Estimado', key: 'cost', right: true },
-                      { label: 'Grupo Replicacao', key: null },
-                      { label: 'Predecessoras', key: null },
-                      { label: 'Sucessoras', key: null },
-                      { label: 'Depend. herdada de', key: null },
-                    ].map(({ label, key, center, right }) => (
-                      <th
-                        key={label}
-                        className={`p-3 select-none ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''} ${center ? 'text-center' : right ? 'text-right' : ''}`}
-                        onClick={() => {
-                          if (!key) return;
-                          if (cronoSortKey === key) {
-                            setCronoSortDir(d => d === 'asc' ? 'desc' : 'asc');
-                          } else {
-                            setCronoSortKey(key);
-                            setCronoSortDir('asc');
-                          }
-                        }}
-                      >
-                        <span className="flex items-center gap-1 justify-inherit">
-                          {label}
-                          {key && (
-                            <span className={`text-[10px] transition-opacity ${cronoSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
-                              {cronoSortKey === key ? (cronoSortDir === 'asc' ? '▲' : '▼') : '⇕'}
-                            </span>
-                          )}
-                        </span>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
-                  {filteredCronograma.map((item) => {
-                    const progressValue = roundPercentValue(item.progress ?? 0);
-                    const activityKey = `${selectedProjectId}||${item.floor}||${item.id}`;
-                    return (
-                    <tr key={activityKey} className="hover:bg-slate-50">
-                      <td className="p-3 font-bold text-indigo-900">{item.macro}</td>
-                      <td className="p-3 text-slate-600">{item.floor}</td>
-                      <td className="p-3 font-bold text-slate-800">{item.service}</td>
-                      <td className="p-3 text-center text-slate-500">{item.duration}</td>
-                      <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
-                      <td className="p-3 text-center">
-                        <input
-                          key={`${activityKey}||${progressValue}`}
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          className="w-20 p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs text-center focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none"
-                          defaultValue={progressValue}
-                          onBlur={async (e) => {
-                            const newProgress = roundPercentValue(e.target.value);
-                            e.currentTarget.value = String(newProgress);
-                            const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
-                            const updatedFloorsData = cloneDeep(allFloorsData);
-                            const macroKey = slugify(item.macro);
-                            if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
-                              const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
-                              const existingItem = itemsList.find(it => it && it.id === item.id);
-                              if (existingItem) {
-                                existingItem.actualPercent = newProgress;
-                              }
-                            }
-                            setCronogramaInicial(updatedCrono);
-                            setAllFloorsData(updatedFloorsData);
-                            await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
-                            setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') e.currentTarget.blur();
-                          }}
-                        />
-                      </td>
-                      <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
-                      <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                      <td className="p-3 text-slate-700 font-bold text-[10px] uppercase">{item.replicationGroup || '-'}</td>
-                      <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.predecessors || []).join(', ')}>
-                        {(item.predecessors || []).length > 0 ? item.predecessors.join(', ') : '-'}
-                      </td>
-                      <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.successors || []).join(', ')}>
-                        {(item.successors || []).length > 0 ? item.successors.join(', ') : '-'}
-                      </td>
-                      <td className="p-3 text-slate-500 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={item.inheritedDependenciesFrom || ''}>
-                        {item.inheritedDependenciesFrom || '-'}
-                      </td>
-                    </tr>
-                    );
-                  })}
-                  {filteredCronograma.length === 0 && (
-                    <tr>
-                      <td colSpan={12} className="p-10 text-center text-slate-400 italic font-medium">
-                        Nenhuma atividade encontrada com os filtros aplicados.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+          <div>
+            <h2 className="text-lg font-black text-indigo-900 uppercase tracking-tight mb-1">Importação Directa de Planilha</h2>
+            <p className="text-xs text-slate-500">Envie o arquivo de planejamento gerado pelo seu software (Excel ou CSV).</p>
           </div>
-        }
-      />
+          <button 
+            onClick={() => triggerConfirm(
+              'Limpar Banco de Dados', 
+              'Deseja limpar o cronograma importado, planejamento aberto, pesos, paineis e diferencas de orcamento? O historico semanal e o PPC serao preservados.', 
+              handleClearProjectData
+            )}
+            className="px-4 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-black rounded-xl text-xs uppercase tracking-wider transition active:scale-95 whitespace-nowrap"
+          >
+            🗑️ Limpar BD
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-6">O sistema localiza automaticamente os cabeçalhos (ex: Linha 4) e mapeia colunas como "Pacote de trabalho", "Lote" e "Serviço".</p>
+        <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 bg-slate-50 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500 transition relative">
+          <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+          <span className="text-4xl mb-2">📊</span>
+          <p className="text-xs font-black text-slate-700">CLIQUE OU ARRASTE O SEU EXCEL AQUI</p>
+          <p className="text-[10px] text-slate-400 mt-1 uppercase">Aceita formatos .xlsx, .xls ou .csv</p>
+        </div>
+      </div>
+      <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+          <h3 className="text-sm font-black text-slate-800 uppercase">
+            Atividades do Cronograma Ativo
+            <span className="ml-2 text-indigo-600">({filteredCronograma.length}/{cronogramaInicial.length})</span>
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={!previousBudgetImport}
+              title={getBudgetImportTooltip(previousBudgetImport)}
+              className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              Orcamento anterior
+            </button>
+            <button
+              type="button"
+              disabled={!currentBudgetImport}
+              title={getBudgetImportTooltip(currentBudgetImport)}
+              className="px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-[10px] font-black uppercase tracking-wider text-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              Orcamento atual
+            </button>
+          </div>
+        </div>
+
+        {/* Filter Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
+            <input
+              type="text"
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-400 outline-none"
+              placeholder="Serviço, macro, equipe..."
+              value={cronoSearch}
+              onChange={e => setCronoSearch(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Pavimento</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={cronoFloorFilter}
+              onChange={e => setCronoFloorFilter(e.target.value)}
+            >
+              <option value="">-- Todos --</option>
+              {(floors || []).map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Macroatividade</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={cronoMacroFilter}
+              onChange={e => setCronoMacroFilter(e.target.value)}
+            >
+              <option value="">-- Todas --</option>
+              {(allPossibleMacros || []).map(sId => <option key={sId} value={sId}>{getMacroTitle(sId)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Progresso</label>
+            <select
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-400 outline-none"
+              value={cronoProgressFilter}
+              onChange={e => setCronoProgressFilter(e.target.value)}
+            >
+              <option value="">-- Todos --</option>
+              <option value="notstarted">⬜ Não iniciado (0%)</option>
+              <option value="inprogress">🔵 Em andamento</option>
+              <option value="done">✅ Concluído (100%)</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="overflow-auto rounded-xl border border-slate-200 max-h-[520px]">
+          <table className="min-w-[1520px] w-full text-xs text-left">
+            <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
+              <tr>
+                {[
+                  { label: 'Etapa (Macro)', key: 'macro' },
+                  { label: 'Pavimento (Lote)', key: 'floor' },
+                  { label: 'Serviço', key: 'service' },
+                  { label: 'Dias', key: 'duration', center: true },
+                  { label: 'Fim Planeado', key: 'end', center: true },
+                  { label: 'Realizado', key: 'progress', center: true },
+                  { label: 'Equipe', key: null, center: true },
+                  { label: 'Custo Estimado', key: 'cost', right: true },
+                  { label: 'Grupo Replicacao', key: null },
+                  { label: 'Predecessoras', key: null },
+                  { label: 'Sucessoras', key: null },
+                  { label: 'Depend. herdada de', key: null },
+                ].map(({ label, key, center, right }) => (
+                  <th
+                    key={label}
+                    className={`p-3 select-none ${key ? 'cursor-pointer hover:bg-slate-700 transition-colors' : ''} ${center ? 'text-center' : right ? 'text-right' : ''}`}
+                    onClick={() => {
+                      if (!key) return;
+                      if (cronoSortKey === key) {
+                        setCronoSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                      } else {
+                        setCronoSortKey(key);
+                        setCronoSortDir('asc');
+                      }
+                    }}
+                  >
+                    <span className="flex items-center gap-1 justify-inherit">
+                      {label}
+                      {key && (
+                        <span className={`text-[10px] transition-opacity ${cronoSortKey === key ? 'opacity-100 text-indigo-300' : 'opacity-30'}`}>
+                          {cronoSortKey === key ? (cronoSortDir === 'asc' ? '▲' : '▼') : '⇕'}
+                        </span>
+                      )}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 font-medium">
+              {filteredCronograma.map((item) => {
+                const progressValue = roundPercentValue(item.progress ?? 0);
+                const activityKey = `${selectedProjectId}||${item.floor}||${item.id}`;
+                return (
+                <tr key={activityKey} className="hover:bg-slate-50">
+                  <td className="p-3 font-bold text-indigo-900">{item.macro}</td>
+                  <td className="p-3 text-slate-600">{item.floor}</td>
+                  <td className="p-3 font-bold text-slate-800">{item.service}</td>
+                  <td className="p-3 text-center text-slate-500">{item.duration}</td>
+                  <td className="p-3 text-center text-slate-500">{formatDateBR(item.end)}</td>
+                  <td className="p-3 text-center">
+                    <input
+                      key={`${activityKey}||${progressValue}`}
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.01"
+                      className="w-20 p-1 bg-white border border-slate-200 rounded font-bold text-slate-700 text-xs text-center focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none"
+                      defaultValue={progressValue}
+                      onBlur={async (e) => {
+                        const newProgress = roundPercentValue(e.target.value);
+                        e.currentTarget.value = String(newProgress);
+                        const updatedCrono = cronogramaInicial.map(c => c.id === item.id ? { ...c, progress: newProgress } : c);
+                        const updatedFloorsData = cloneDeep(allFloorsData);
+                        const macroKey = slugify(item.macro);
+                        if (updatedFloorsData[item.floor] && updatedFloorsData[item.floor][macroKey]) {
+                          const itemsList = updatedFloorsData[item.floor][macroKey].items || [];
+                          const existingItem = itemsList.find(it => it && it.id === item.id);
+                          if (existingItem) {
+                            existingItem.actualPercent = newProgress;
+                          }
+                        }
+                        setCronogramaInicial(updatedCrono);
+                        setAllFloorsData(updatedFloorsData);
+                        await saveToDB(floors, updatedFloorsData, history, weights, planning, updatedCrono, teams, delayReasons, ppcHistory, matrices);
+                        setNotification({ message: 'Progresso do cronograma atualizado!', type: 'success' });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                      }}
+                    />
+                  </td>
+                  <td className="p-3 text-center"><span className="px-2 py-0.5 bg-slate-100 rounded text-[9px] font-black text-slate-600">{item.responsible || 'EQUIPE GERAL'}</span></td>
+                  <td className="p-3 text-right text-emerald-600 font-mono">R$ {item.cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                  <td className="p-3 text-slate-700 font-bold text-[10px] uppercase">{item.replicationGroup || '-'}</td>
+                  <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.predecessors || []).join(', ')}>
+                    {(item.predecessors || []).length > 0 ? item.predecessors.join(', ') : '-'}
+                  </td>
+                  <td className="p-3 text-slate-600 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={(item.successors || []).join(', ')}>
+                    {(item.successors || []).length > 0 ? item.successors.join(', ') : '-'}
+                  </td>
+                  <td className="p-3 text-slate-500 font-mono text-[10px] max-w-[180px] whitespace-normal break-words" title={item.inheritedDependenciesFrom || ''}>
+                    {item.inheritedDependenciesFrom || '-'}
+                  </td>
+                </tr>
+                );
+              })}
+              {filteredCronograma.length === 0 && (
+                <tr>
+                  <td colSpan={12} className="p-10 text-center text-slate-400 italic font-medium">
+                    Nenhuma atividade encontrada com os filtros aplicados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 
-  const renderScheduleVersions = () => {
-    const activeProject = projects.find(p => p.id === selectedProjectId);
-    return (
-      <div className="space-y-6 animate-in fade-in duration-300">
-        <ScheduleVersionsView
-          projectId={selectedProjectId || 'global'}
-          projectName={activeProject?.name || 'Obra Principal'}
-          currentSnapshot={{
-            cronogramaInicial,
-            floors,
-            allFloorsData,
-            weights,
-            teams,
-            matrices,
-          }}
-          onOpenImportModal={canOpenModule('import') ? openScheduleImport : undefined}
-          versionUpdateKey={versionUpdateKey}
-          onApplyVersion={async (snap, versionName) => {
-            const compiled = compileLobToCronograma(
-              hydrateLobFromCronograma(snap.cronogramaInicial, snap.floors, snap.allFloorsData),
-              snap.allFloorsData,
-              snap.weights || weights,
-              snap.teams || teams,
-              snap.matrices || matrices
-            );
-            const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
-              planning,
-              compiled.allFloorsData,
-              compiled.cronogramaInicial
-            );
-            setFloors(compiled.floors);
-            setAllFloorsData(updatedFloorsData);
-            setWeights(compiled.weights);
-            setCronogramaInicial(compiled.cronogramaInicial);
-            setTeams(compiled.teams);
-            setMatrices(compiled.matrices);
-            setPlanning(recalculatedPlanning);
-            await saveToDB(
-              compiled.floors,
-              updatedFloorsData,
-              history,
-              compiled.weights,
-              recalculatedPlanning,
-              compiled.cronogramaInicial,
-              compiled.teams,
-              delayReasons,
-              ppcHistory,
-              compiled.matrices
-            );
-            setNotification({
-              message: `Cronograma "${versionName}" carregado e salvo no Firebase.`,
-              type: 'success',
-            });
-          }}
-        />
-      </div>
-    );
-  };
-
-  const renderCalendar = () => {
-    const activeProject = projects.find(p => p.id === selectedProjectId);
-    return (
-      <div className="space-y-6 animate-in fade-in duration-300">
-        <CalendarView
-          projectId={selectedProjectId || 'global'}
-          projectName={activeProject?.name || 'Obra Principal'}
-          onSaveCalendar={async () => {
-            setNotification({
-              message: 'Configurações de calendário atualizadas com sucesso!',
-              type: 'success',
-            });
-          }}
-        />
-      </div>
-    );
-  };
 
   const renderPlanning = () => (
     <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300 pb-6">
@@ -6101,20 +5653,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <h2 className="text-xl font-black">PPC - Percentual de Planos Concluídos</h2>
           <p className="text-xs text-indigo-200">Percentual de serviços planejados executados integralmente conforme a meta semanal ativa.</p>
         </div>
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-6">
           <div className="text-center bg-indigo-950/50 p-4 rounded-xl border border-indigo-800">
             <div className="text-3xl font-black text-emerald-400">{currentWeekPpcStats.percent.toFixed(1)}%</div>
             <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-tight mt-1">{currentWeekPpcStats.completedCount} de {currentWeekPpcStats.totalPlannedCount} Concluídos</div>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsWeeklyConfigModalOpen(true)}
-            className="p-3 bg-indigo-800/80 hover:bg-indigo-700 border border-indigo-600/50 rounded-2xl text-white transition shadow-md flex items-center gap-2 cursor-pointer group hover:scale-105 active:scale-95"
-            title="Configurações do Planejamento Semanal (Pavimentos, Pacotes, Equipes, Motivos, Clima)"
-          >
-            <span className="text-xl group-hover:rotate-90 transition-transform duration-300">⚙️</span>
-            <span className="text-xs font-black uppercase tracking-wider hidden sm:inline">Configurações</span>
-          </button>
         </div>
       </div>
 
@@ -6147,12 +5690,12 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </button>
             )}
             <button
-              onClick={() => setIsScheduleDifferenceOpen(true)}
-              disabled={isWeekFinalized && !isWeekBeingEdited}
+              onClick={handleGeneratePlanningFromBudgetDiffs}
+              disabled={pendingBudgetDiffs.length === 0}
               className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
-              title="Escolher uma versão para comparar com o último cronograma importado"
+              title={`Aplica ${pendingBudgetDiffProgress}% de avanco pendente do ultimo orcamento na semana selecionada`}
             >
-              Gerar por Diferença
+              <span>Delta</span> Gerar por Dif. {pendingBudgetDiffs.length > 0 ? `(${pendingBudgetDiffs.length})` : ''}
             </button>
             {isWeekBeingEdited ? (
               <button
@@ -6169,18 +5712,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <span>Editar</span> Editar Semana
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setIsWeeklyConfigModalOpen(true)}
-              className="flex-1 md:flex-none px-4 py-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-black rounded-xl shadow-sm transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"
-              title="Configurações do Planejamento Semanal (Pavimentos, Pacotes, Equipes, Motivos, Clima)"
-            >
-              <span>⚙️</span> Configurações
-            </button>
             <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0 || isWeekFinalized} hidden={hasFinalizedTasks} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>🏁</span> Finalizar Semana
             </button>
-            <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(drawerMacroOptions[0] || allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
+            <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>➕</span> Adicionar Atividades
             </button>
           </div>
@@ -6336,121 +5871,92 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 return (
                   <tr key={t.id} className={`hover:bg-slate-50 transition ${isTaskLocked(t) ? 'bg-slate-100/70 opacity-75' : showDelayAlert && (progVal > 0 || currentPlan > 0) ? 'bg-red-50/40' : ''}`}>
                     <td className="p-3 border-r">
-                      <div className="flex items-center flex-wrap gap-1.5">
-                        {t.finalized && <span className="text-[10px] text-slate-500" title="Semana Finalizada">🔒</span>}
+                      <div className="flex items-start space-x-1.5">
+                        {t.finalized && <span className="text-[10px] text-slate-500 mt-0.5" title="Semana Finalizada">🔒</span>}
                         {t.isManual && (
-                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0">
+                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
                             Extra
                           </span>
                         )}
                         {t.isUnplannedDetected && (
-                          <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0">
+                          <span className="px-1.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[8px] font-black rounded-md uppercase tracking-tight select-none shrink-0 mt-0.5">
                             Fora do planejado
                           </span>
                         )}
-                        <span className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight" title={t.activityName}>
-                          {t.activityName}
-                        </span>
-
-                        {(t.serviceComplement || editingComplementTaskId === t.id) && (
-                          <div className="inline-flex items-center gap-1">
-                            <span className="text-indigo-400 font-bold text-[10px]">-</span>
-                            <input
-                              type="text"
-                              disabled={isTaskLocked(t)}
-                              placeholder="Complemento..."
-                              className="py-0.5 px-1.5 bg-slate-50 border border-slate-300 rounded text-[10px] font-bold text-slate-800 uppercase tracking-tight leading-tight w-32 focus:bg-white focus:border-indigo-500"
-                              value={t.serviceComplement || ''}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setPlanning(planning.map(p => p.id === t.id ? { ...p, serviceComplement: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
-                              }}
-                              onBlur={() => {
-                                saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
-                                if (!t.serviceComplement) setEditingComplementTaskId(null);
-                              }}
-                              autoFocus={editingComplementTaskId === t.id}
-                            />
-                            {!isTaskLocked(t) && (
-                              <button
-                                disabled={isTaskLocked(t)}
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleServiceComplementVoiceInput(t.id);
-                                }}
-                                className={`p-1 rounded-full transition active:scale-95 text-[10px] shrink-0 cursor-pointer ${
-                                  listeningComplementTaskId === t.id 
-                                    ? 'bg-red-600 text-white animate-pulse p-1' 
-                                    : micConnectingComplementTaskId === t.id
-                                    ? 'bg-amber-500 text-white animate-pulse p-1'
-                                    : 'bg-indigo-550/10 text-indigo-700 hover:bg-indigo-200'
-                                }`}
-                                title={
-                                  listeningComplementTaskId === t.id 
-                                    ? "Microfone ativo (Pode falar)" 
-                                    : micConnectingComplementTaskId === t.id
-                                    ? "Inicializando microfone..."
-                                    : "Ditar complemento"
-                                }
-                              >
-                                🎙️
-                              </button>
-                            )}
-                            {!isTaskLocked(t) && t.serviceComplement && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleUpdateTaskField(t.id, 'serviceComplement', '');
-                                  setEditingComplementTaskId(null);
-                                }}
-                                className="text-slate-400 hover:text-red-500 font-bold text-xs cursor-pointer ml-0.5"
-                                title="Limpar complemento"
-                              >
-                                &times;
-                              </button>
-                            )}
-                          </div>
+                        <div className="font-black text-slate-800 uppercase tracking-tight text-[11px] leading-tight line-clamp-2 break-words whitespace-normal flex-1" title={t.activityName}>{t.activityName}</div>
+                        {!isTaskLocked(t) && !t.serviceComplement && editingComplementTaskId !== t.id && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingComplementTaskId(t.id);
+                            }}
+                            className="w-4 h-4 rounded-full border border-slate-350 hover:border-indigo-650 hover:bg-indigo-50 text-slate-500 hover:text-indigo-650 flex items-center justify-center font-bold text-[10px] cursor-pointer shrink-0 mt-0.5"
+                            title="Adicionar complemento"
+                          >
+                            +
+                          </button>
                         )}
-
-                        <div className="inline-flex items-center gap-1 shrink-0">
-                          {!isTaskLocked(t) && !t.serviceComplement && editingComplementTaskId !== t.id && (
+                      </div>
+                      {(t.serviceComplement || editingComplementTaskId === t.id) && (
+                        <div className="text-[11px] font-black text-slate-800 uppercase tracking-tight leading-tight mt-1.5 flex items-center gap-1">
+                          <span className="text-indigo-550 font-black">↳</span>
+                          <input
+                            type="text"
+                            disabled={isTaskLocked(t)}
+                            placeholder="Complemento..."
+                            className="p-1 bg-slate-50 border border-slate-200 rounded text-[11px] font-black text-slate-800 uppercase tracking-tight leading-tight w-32 focus:bg-white focus:border-indigo-500"
+                            value={t.serviceComplement || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setPlanning(planning.map(p => p.id === t.id ? { ...p, serviceComplement: val, lastUpdatedBy: plannerUsername || 'Sistema' } : p));
+                            }}
+                            onBlur={() => {
+                              saveToDB(floors, allFloorsData, history, weights, planning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
+                              if (!t.serviceComplement) setEditingComplementTaskId(null);
+                            }}
+                            autoFocus={editingComplementTaskId === t.id}
+                          />
+                          {!isTaskLocked(t) && (
                             <button
-                              type="button"
+                              disabled={isTaskLocked(t)}
+                              onMouseDown={(e) => e.preventDefault()}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setEditingComplementTaskId(t.id);
+                                handleServiceComplementVoiceInput(t.id);
                               }}
-                              className="w-5 h-5 rounded-md border border-indigo-300 bg-indigo-50/90 hover:border-indigo-600 hover:bg-indigo-600 text-indigo-700 hover:text-white flex items-center justify-center font-black text-xs cursor-pointer shrink-0 shadow-2xs transition active:scale-95"
-                              title="Adicionar complemento"
+                              className={`p-1 rounded-full transition active:scale-95 text-[10px] shrink-0 cursor-pointer ${
+                                listeningComplementTaskId === t.id 
+                                  ? 'bg-red-600 text-white animate-pulse p-1' 
+                                  : micConnectingComplementTaskId === t.id
+                                  ? 'bg-amber-500 text-white animate-pulse p-1'
+                                  : 'bg-indigo-550/10 text-indigo-700 hover:bg-indigo-200'
+                              }`}
+                              title={
+                                listeningComplementTaskId === t.id 
+                                  ? "Microfone ativo (Pode falar)" 
+                                  : micConnectingComplementTaskId === t.id
+                                  ? "Inicializando microfone..."
+                                  : "Ditar complemento"
+                              }
                             >
-                              +
+                              🎙️
                             </button>
                           )}
-                          {!isTaskLocked(t) && (progressDisplayVal >= 100 || getTaskAccumulatedProgress(t) >= 100) && (() => {
-                            const isPopoverOpen = nextWeekPopover?.taskId === t.id;
-                            const hasLaunchedNextWeek = planning.some(
-                              nt => nt.weekId === nextWeekIdForPopover && !nt.finalized && nt.launchedFromTaskId === t.id
-                            );
-                            return (
-                              <button
-                                type="button"
-                                onClick={(e) => handleOpenNextWeekPopover(e, t)}
-                                className={`w-5 h-5 rounded-md border flex items-center justify-center font-black text-xs cursor-pointer shrink-0 shadow-2xs transition active:scale-95 ${
-                                  isPopoverOpen
-                                    ? 'bg-emerald-600 border-emerald-600 text-white ring-2 ring-emerald-200'
-                                    : hasLaunchedNextWeek
-                                    ? 'bg-emerald-100 border-emerald-400 text-emerald-800 hover:bg-emerald-600 hover:text-white'
-                                    : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-600 hover:border-emerald-600 hover:text-white'
-                                }`}
-                                title={`Planejar próxima semana (${formatDateBR(nextWeekIdForPopover)}) a partir das frentes liberadas desta atividade`}
-                              >
-                                →
-                              </button>
-                            );
-                          })()}
+                          {!isTaskLocked(t) && t.serviceComplement && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUpdateTaskField(t.id, 'serviceComplement', '');
+                                setEditingComplementTaskId(null);
+                              }}
+                              className="text-slate-400 hover:text-red-500 font-bold text-xs cursor-pointer ml-0.5"
+                              title="Limpar complemento"
+                            >
+                              &times;
+                            </button>
+                          )}
                         </div>
-                      </div>
+                      )}
                       <div className="text-[9px] font-bold text-indigo-600 uppercase mt-0.5">{t.floor}</div>
                     </td>
                     <td className="p-3 border-r text-center align-middle">
@@ -6705,50 +6211,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           )}
         </div>
       </div>
-
-      {/* Modal de Configurações do Planejamento Semanal */}
-      {isWeeklyConfigModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="bg-slate-100 border border-slate-300 rounded-3xl shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-            {/* Header */}
-            <div className="bg-slate-900 text-white p-4 sm:p-5 flex justify-between items-center border-b border-slate-800 shrink-0">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl p-2 bg-indigo-600/40 rounded-xl border border-indigo-500/40">⚙️</span>
-                <div>
-                  <h3 className="font-black text-sm uppercase tracking-wider text-white">
-                    Configurações do Planejamento Semanal
-                  </h3>
-                  <p className="text-[10px] text-indigo-300 font-bold uppercase tracking-wider">
-                    Pavimentos, Pacotes & Serviços, Equipes, Motivos de Atraso e Clima
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsWeeklyConfigModalOpen(false)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase tracking-wider rounded-xl transition shadow cursor-pointer"
-                >
-                  Concluir
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsWeeklyConfigModalOpen(false)}
-                  className="text-slate-400 hover:text-white text-2xl font-bold px-2 cursor-pointer leading-none"
-                  title="Fechar"
-                >
-                  &times;
-                </button>
-              </div>
-            </div>
-
-            {/* Body */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-50">
-              {renderWeeklyConfigCards()}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 
@@ -7222,7 +6684,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       setNotification({ message: 'Um projeto com esse nome já existe.', type: 'error' });
       return;
     }
-    const defaultImage = '';
+    const defaultImage = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
     const newProj = {
       id: cleanId,
       name: newProjName.trim().toUpperCase(),
@@ -7440,12 +6902,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
 
           {/* Grid of Projects */}
-
-          {projects.length === 0 && <div className="rounded-2xl border border-slate-700 bg-slate-900 p-6 text-sm text-slate-200">
-            <h2 className="text-lg font-bold text-white">Nenhuma obra cadastrada</h2>
-              <p className="mt-2">Nenhuma obra foi encontrada no Firebase. Cadastre a primeira obra para começar.</p>
-            <button onClick={() => setShowAddProjectModal(true)} className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400">Cadastrar primeira obra</button>
-          </div>}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             
             {filteredProjects.map((p) => {
@@ -7493,8 +6949,14 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     
                     {/* Site Render image */}
                     <div className="h-44 w-full overflow-hidden bg-slate-950 relative">
-                      {p.imageUrl ? <img src={p.imageUrl} alt={p.name} className="h-full w-full object-cover" onError={event => { event.currentTarget.hidden = true; }} />
-                        : <div className="flex h-full items-center justify-center text-sm text-slate-400">Sem imagem cadastrada</div>}
+                      <img 
+                        src={p.imageUrl} 
+                        alt={p.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-85 group-hover:opacity-100"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=600&auto=format&fit=crop&q=60';
+                        }}
+                      />
                     </div>
                     
                     {/* Project Specs */}
@@ -7566,7 +7028,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
           </div>
 
-          {projects.length > 0 && filteredProjects.length === 0 && !isSystemAdmin && (
+          {filteredProjects.length === 0 && !isSystemAdmin && (
             <div className="bg-slate-900/40 border border-slate-800/80 p-12 rounded-3xl text-center max-w-md mx-auto space-y-4 my-8">
               <span className="text-4xl block">📭</span>
               <h3 className="text-sm font-black uppercase text-slate-300 tracking-wider">Nenhuma Obra Associada</h3>
@@ -7601,7 +7063,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <input
                     type="text"
                     required
-                    placeholder="Nome da obra"
+                    placeholder="Ex: QOYA, PACE..."
                     value={newProjName}
                     onChange={e => setNewProjName(e.target.value)}
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
@@ -7709,7 +7171,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <input
                     type="text"
                     required
-                    placeholder="Nome da obra"
+                    placeholder="Ex: QOYA, PACE..."
                     value={editProjName}
                     onChange={e => setEditProjName(e.target.value)}
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-600 focus:ring-2 focus:ring-indigo-500 outline-none transition"
@@ -7886,10 +7348,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </button>
                   </div>
 
-                  <ModuleVisibilitySettings visibility={moduleSettings.visibility} ready={moduleSettings.ready}
-                    error={moduleSettings.error || globalSettingsConnectionError}
-                    onSave={value => moduleSettings.save(value, isAccessAdmin, plannerUsername || 'Administrador')} />
-
                   {/* Gerenciamento de Usuários */}
                   <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-2xl space-y-3">
                     <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-350">1. Cadastrar Usuários</h4>
@@ -7899,7 +7357,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                         placeholder="Nome do usuário/função (ex: Felipe, Engenharia)..." 
                         value={newAccessUser} 
                         onChange={e => setNewAccessUser(e.target.value)} 
-                        className="min-w-0 flex-1 p-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-650 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        className="flex-1 p-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold text-white placeholder-slate-650 focus:ring-2 focus:ring-indigo-500 outline-none"
                       />
                       <button 
                         onClick={handleAddUser} 
@@ -8262,10 +7720,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     </div>
   );
 
-  function renderWeeklyConfigCards() {
-    return (
-      <div className="space-y-6 animate-in fade-in duration-300 pb-20">
-        {/* 2-Column responsive grid for main config cards, aligning items at the start to allow variable heights */}
+  const renderConfig = () => (
+    <div className="space-y-6 animate-in fade-in duration-300 pb-20">
+      {/* 2-Column responsive grid for main config cards, aligning items at the start to allow variable heights */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         
         {/* Card 1: Gestão de Pavimentos / Lotes */}
@@ -8425,115 +7882,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       </div>
     </div>
   );
-}
-
-  const renderConfig = () => (
-    <div className="space-y-6 animate-in fade-in duration-300 pb-20">
-      {/* Header das Configurações do Sistema */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <span className="px-3 py-1 bg-indigo-800 text-[10px] font-black tracking-wider uppercase rounded-full border border-indigo-700 text-indigo-300">Sistema & Acessos</span>
-          <h2 className="text-xl font-black mt-2">Configurações Gerais e Controle de Acessos</h2>
-          <p className="text-xs text-slate-300">Gestão de operadores, segurança, backup de dados locais e permissões de acesso por obra.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              setAccessUser('');
-              setAccessPassword('');
-              setShowAccessModal(true);
-            }}
-            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg transition active:scale-95 flex items-center gap-2 cursor-pointer"
-          >
-            <span>🔐</span> Abrir Painel de Permissões
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        {/* Card: Controle de Operador e Acesso */}
-        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4">
-          <div className="flex justify-between items-center border-b pb-3">
-            <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">👤 Operador e Identificação</h3>
-            <span className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-[10px] font-mono font-bold">
-              {plannerUsername || 'Não identificado'}
-            </span>
-          </div>
-          <p className="text-xs text-slate-600">
-            A identificação do operador é registrada em cada alteração salva no Firebase.
-          </p>
-          <div className="space-y-2">
-            <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Alterar Nome do Operador</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Seu nome ou função..."
-                defaultValue={plannerUsername}
-                id="change-planner-input"
-                className="flex-1 p-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-slate-50 focus:bg-white font-bold text-slate-800 outline-none"
-              />
-              <button
-                onClick={() => {
-                  const input = document.getElementById('change-planner-input') as HTMLInputElement;
-                  if (input && input.value.trim()) {
-                    setPlannerUsername(input.value.trim());
-                    localStorage.setItem('planner_username', input.value.trim());
-                    setNotification({ message: 'Identificação do operador atualizada!', type: 'success' });
-                  }
-                }}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-black uppercase tracking-wider rounded-xl transition cursor-pointer shadow-sm"
-              >
-                Salvar
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-6">
-          <h3 className="text-base font-bold text-slate-900">Administração do aplicativo</h3>
-          <p className="mt-2 text-sm text-slate-600">O painel de admin permite escolher os módulos visíveis para todos os usuários.</p>
-          <button className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600" onClick={() => {
-            localStorage.removeItem('selected_project_id'); setSelectedProjectId(''); setShowAccessModal(true);
-          }}>Abrir painel de admin</button>
-        </div>
-
-        {/* Card: Atalhos para Configurações Operacionais */}
-        <div className="bg-white p-6 rounded-2xl shadow-md border border-slate-200 space-y-4 lg:col-span-2">
-          <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider border-b pb-3">⚙️ Configurações Operacionais da Obra</h3>
-          <p className="text-xs text-slate-600">
-            As configurações específicas de pavimentos, pacotes, equipes e motivos de atraso estão integradas diretamente no módulo de Planejamento Semanal (acessível pelo botão ⚙️ no canto superior direito). Você também pode abrir ou gerenciar rapidamente por aqui:
-          </p>
-          <div className="flex flex-wrap gap-3 pt-1">
-            {canOpenModule('planning') && <button
-              onClick={() => {
-                setActiveTab('planning');
-                setIsWeeklyConfigModalOpen(true);
-              }}
-              className="px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
-            >
-              <span>⚙️</span> Abrir Configurações do Semanal (Pavimentos, Equipes, Motivos)
-            </button>}
-            {canOpenModule('calendar') && (
-            <button
-              onClick={() => setActiveTab('calendar')}
-              className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
-            >
-              <span>🗓️</span> Calendário do Projeto & Feriados
-            </button>
-            )}
-            {canOpenModule('versions') && (
-            <button
-              onClick={() => setActiveTab('versions')}
-              className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer"
-            >
-              <span>🏷️</span> Versões de Cronograma & Linha de Base
-            </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 
   const renderTeamInputScreen = () => {
     const weekId = toLocalDateString(currentWeekStart);
@@ -8594,7 +7942,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
 
         {/* Content Container */}
         <main className="flex-1 max-w-xl w-full mx-auto p-4 md:p-6 space-y-6 pb-20">
-          {!activeTab && <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-700">Nenhum módulo foi liberado para os usuários. Consulte o administrador.</div>}
           {teamSubmitSuccess ? (
             <div className="bg-white p-8 rounded-2xl shadow-md border border-slate-200 text-center space-y-4 animate-in zoom-in-95">
               <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto">✓</div>
@@ -8775,15 +8122,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   };
 
-  if (!loading && (!db || !userId || (selectedProjectId && !isProjectHydrated))) {
-    return <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
-      <div className="max-w-md space-y-4"><h1 className="text-xl font-bold">Não foi possível carregar os dados do Firebase</h1>
-        <p className="text-sm text-slate-300">Verifique a conexão e a configuração do Firebase. O sistema só permite editar após carregar os dados da nuvem.</p>
-        <button className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white" onClick={() => window.location.reload()}>Recarregar</button>
-      </div>
-    </div>;
-  }
-
   if (isTeamMode) {
     if (loading) {
       return (
@@ -8795,7 +8133,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
       );
     }
-    if (!canOpenModule('planning')) return <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 text-center text-slate-700">O módulo Semanal não está disponível. Consulte o administrador.</div>;
     return renderTeamInputScreen();
   }
 
@@ -8876,7 +8213,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       <header className="bg-slate-900 p-4 text-white shadow-xl sticky top-0 z-40">
         <div className="max-w-[1600px] w-full mx-auto flex flex-col sm:flex-row justify-between items-center gap-3">
           <div className="flex items-center space-x-3">
-            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
+            <div><h1 className="text-lg font-black tracking-tight leading-none">PLANEJAMENTO DE CURTO PRAZO</h1><span className="text-[9px] uppercase tracking-wider text-emerald-400 font-bold">Gestão e controle de obras</span></div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 bg-slate-800 rounded-full text-[9px] font-mono border border-slate-700 text-slate-350">
@@ -8912,7 +8249,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 </button>
               </div>
             )}
-            {(dbSavingStatus === 'saving' || auxCloudStatus.pending > 0) && (
+            {dbSavingStatus === 'saving' && (
               <span className="px-3 py-1 bg-blue-900/80 border border-blue-700/50 rounded-full text-[9px] font-bold text-blue-200 animate-pulse flex items-center gap-1">
                 💾 Gravando...
               </span>
@@ -8922,7 +8259,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 ⏳ Alterações pendentes...
               </span>
             )}
-            {dbSavingStatus === 'saved' && !auxCloudStatus.pending && !auxCloudStatus.error && (
+            {dbSavingStatus === 'saved' && (
               <span className="px-3 py-1 bg-emerald-950/50 border border-emerald-800/40 rounded-full text-[9px] font-bold text-emerald-300 flex items-center gap-1">
                 ✅ Sincronizado
               </span>
@@ -8932,142 +8269,29 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 Último avanço: {dbLastUpdatedBy}
               </span>
             )}
-            {canOpenModule('import') && (
-            <button
-              type="button"
-              onClick={openScheduleImport}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-md hover:shadow-indigo-600/30 transition border border-indigo-400/40 cursor-pointer ml-1"
-              title="Abrir o motor inteligente de importação de cronograma (.xlsx / .csv)"
-            >
-              <span className="text-xs">📥</span>
-              <span className="hidden sm:inline">Importar Cronograma</span>
-              <span className="sm:hidden">Importar</span>
-            </button>
-            )}
           </div>
         </div>
       </header>
 
-      {auxCloudStatus.error && <div role="alert" className="flex flex-wrap items-center gap-3 bg-red-50 px-5 py-3 text-sm text-red-900">
-        <span>Não foi possível salvar no Firebase: {auxCloudStatus.error} Mantenha esta página aberta e tente novamente.</span>
-        {auxCloudStatus.retryable && <button className="rounded-lg border border-red-300 px-3 py-1 font-semibold" onClick={() => { void retryFirebaseWrites().catch(() => {}); }}>Tentar salvar novamente</button>}
-      </div>}
-      {/* Layout Flex com Sidebar Drawer Lateral na Esquerda */}
-      <div className="flex min-h-[calc(100vh-68px)]">
-        {/* Menu Lateral Esquerdo (Drawer com Ícones e Rótulos Compactos) */}
-        <aside className="w-[84px] sm:w-[92px] bg-slate-900 border-r border-slate-800 shrink-0 sticky top-[68px] h-[calc(100vh-68px)] overflow-y-auto no-scrollbar py-3 px-1.5 flex flex-col justify-between z-30 shadow-xl select-none">
-          <div className="space-y-1">
-            {APP_MODULES.filter(item => item.id !== 'import' && canOpenModule(item.id)).map((item) => {
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  title={item.fullLabel}
-                  className={`group relative w-full flex flex-col items-center justify-center py-2 px-1 rounded-xl transition-all duration-200 text-center cursor-pointer ${
-                    isActive
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-950/60 font-black'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800/80 font-bold'
-                  }`}
-                >
-                  <span className="text-xl leading-none mb-1 group-hover:scale-110 transition-transform">
-                    {item.icon}
-                  </span>
-                  <span className="text-[9px] leading-tight uppercase tracking-tight text-center break-words line-clamp-2 px-0.5">
-                    {item.label}
-                  </span>
-                  {isActive && (
-                    <span className="absolute left-0 top-2 bottom-2 w-1 bg-emerald-400 rounded-r-full" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+      <main className="max-w-[1600px] w-full mx-auto p-4 md:p-6 pb-24">
+        <nav className="flex gap-1 border-b border-slate-300 mb-6 overflow-x-auto pb-1 no-scrollbar sticky top-[68px] bg-slate-50 z-30 pt-2">
+          <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Painel</button>
+          <button onClick={() => setActiveTab('cronograma-inicial')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'cronograma-inicial' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Cronograma</button>
+          <button onClick={() => setActiveTab('planning')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'planning' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Planejamento Semanal</button>
+          <button onClick={() => setActiveTab('visualization')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'visualization' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Matriz Geral</button>
+          <button onClick={() => setActiveTab('detalhamento-ppc')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'detalhamento-ppc' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Detalhamento PPC</button>
+          <button onClick={() => setActiveTab('historico-andamento')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'historico-andamento' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Histórico andamento</button>
+          <button onClick={() => setActiveTab('config')} className={`px-4 py-3 text-xs font-black uppercase tracking-wider rounded-t-xl transition-all duration-300 whitespace-nowrap ${activeTab === 'config' ? 'bg-indigo-600 text-white shadow-lg -translate-y-1' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}>Configurações</button>
+        </nav>
 
-          <div className="pt-2 border-t border-slate-800 text-center">
-            <span className="text-[8px] font-mono text-slate-500 block leading-tight">v2.5</span>
-          </div>
-        </aside>
-
-        {/* Área de Conteúdo Principal */}
-        <main className={`flex-1 min-w-0 ${['lob', 'table', 'budget', 'physical_financial', 'competence_cash', 'cronograma-inicial'].includes(activeTab) ? 'px-2 md:px-4 pt-2 pb-12' : 'max-w-[1600px] p-4 md:p-6 pb-24 mx-auto'}`}>
-          {activeTab === 'calendar' && renderCalendar()}
-          {activeTab === 'dashboard' && (
-            <div className="space-y-6">
-              {/* Abas Integradas do Dashboard: Visão Geral, Matriz Geral, Detalhamento PPC, Histórico */}
-              <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-2.5 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setDashboardSubView('overview')}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
-                      dashboardSubView === 'overview'
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    <span>📊</span> Visão Geral
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDashboardSubView('matrix')}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
-                      dashboardSubView === 'matrix'
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    <span>🧩</span> Matriz Geral
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDashboardSubView('ppc')}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
-                      dashboardSubView === 'ppc'
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    <span>🎯</span> Detalhamento PPC
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDashboardSubView('history')}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
-                      dashboardSubView === 'history'
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    <span>📜</span> Histórico & Andamento
-                  </button>
-                </div>
-
-                <div className="text-[11px] font-bold text-slate-400 px-2 hidden sm:block">
-                  Dashboard Integrado
-                </div>
-              </div>
-
-              {dashboardSubView === 'overview' && renderDashboard()}
-              {dashboardSubView === 'matrix' && renderVisualization()}
-              {dashboardSubView === 'ppc' && renderDetalhamentoPpc()}
-              {dashboardSubView === 'history' && renderInfographic()}
-            </div>
-          )}
-          {activeTab === 'versions' && renderScheduleVersions()}
-          {activeTab === 'lob' && renderCronograma('lob')}
-          {activeTab === 'table' && renderCronograma('table')}
-          {activeTab === 'budget' && renderCronograma('budget')}
-          {activeTab === 'physical_financial' && renderCronograma('physical_financial')}
-          {activeTab === 'competence_cash' && renderCronograma('competence_cash')}
-          {activeTab === 'planning' && renderPlanning()}
-          {activeTab === 'config' && renderConfig()}
-          {activeTab === 'cronograma-inicial' && renderCronograma()}
-          {activeTab === 'visualization' && renderVisualization()}
-          {activeTab === 'detalhamento-ppc' && renderDetalhamentoPpc()}
-          {activeTab === 'historico-andamento' && renderInfographic()}
-        </main>
-      </div>
+        {activeTab === 'dashboard' && renderDashboard()}
+        {activeTab === 'cronograma-inicial' && renderCronograma()}
+        {activeTab === 'planning' && renderPlanning()}
+        {activeTab === 'visualization' && renderVisualization()}
+        {activeTab === 'detalhamento-ppc' && renderDetalhamentoPpc()}
+        {activeTab === 'historico-andamento' && renderInfographic()}
+        {activeTab === 'config' && renderConfig()}
+      </main>
 
       {/* Drawer */}
       {isDrawerOpen && (
@@ -9172,7 +8396,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       </div>
                     )
                   ) : (
-                    <div className="overflow-visible">
+                    <div className={`overflow-visible transition-all duration-300 group-hover:max-h-72 group-hover:opacity-100 group-focus-within:max-h-72 group-focus-within:opacity-100 ${drawerMacro ? 'max-h-0 opacity-0' : 'max-h-72 opacity-100'}`}>
                       {isDrawerMacroDropdownOpen && (
                         <div className="fixed inset-0 z-40" onClick={() => setIsDrawerMacroDropdownOpen(false)} />
                       )}
@@ -9216,24 +8440,13 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </div>
                   )}
                 </div>}
-                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 rounded-xl border border-indigo-100 bg-white p-3">
+                {drawerSourceMode !== 'unfinished' && <div className="space-y-2 group rounded-xl border border-indigo-100 bg-white p-3">
                   <div className="flex justify-between items-center">
                     <label className="block text-[10px] font-black uppercase text-indigo-600">2. Marque os Pavimentos</label>
                     {drawerFloors.length > 0 && <span className="text-[9px] font-bold text-slate-500">{drawerFloors.length} selecionado(s)</span>}
-                    {availableFloorsForMacro.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (drawerFloors.length === availableFloorsForMacro.length) setDrawerFloors([]);
-                          else setDrawerFloors([...availableFloorsForMacro]);
-                        }}
-                        className="text-[9px] font-bold text-indigo-700 hover:underline uppercase"
-                      >
-                        {drawerFloors.length === availableFloorsForMacro.length ? 'Desmarcar' : 'Todos'}
-                      </button>
-                    )}
+                    {availableFloorsForMacro.length > 0 && <button onClick={() => { if(drawerFloors.length === availableFloorsForMacro.length) setDrawerFloors([]); else setDrawerFloors([...availableFloorsForMacro]); }} className="text-[9px] font-bold text-indigo-700 hover:underline uppercase">Todos</button>}
                   </div>
-                  <div className={`grid grid-cols-2 gap-2 max-h-48 overflow-y-auto custom-scrollbar p-1 ${!drawerMacro ? 'pointer-events-none opacity-50' : ''}`}>
+                  <div className={`grid grid-cols-2 gap-2 transition-opacity duration-300 ${drawerFloors.length === 0 ? 'opacity-100' : 'opacity-0 hidden group-hover:grid group-hover:opacity-100 group-focus-within:grid group-focus-within:opacity-100'} ${!drawerMacro ? 'pointer-events-none' : ''}`}>
                     {availableFloorsForMacro.map(floor => (
                       <label key={floor} className="flex items-center space-x-2 p-2 bg-slate-50 rounded-lg border hover:border-indigo-300 transition cursor-pointer">
                         <input type="checkbox" className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" checked={drawerFloors.includes(floor)} onChange={(e) => { if (e.target.checked) setDrawerFloors([...drawerFloors, floor]); else setDrawerFloors(drawerFloors.filter(f => f !== floor)); }} />
@@ -9274,277 +8487,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <button onClick={handleIncludeDrawerActivities} disabled={drawerSelectedServices.length === 0} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-black uppercase tracking-wider rounded-xl shadow-md transition transform active:scale-95">Confirmar Atividades</button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Floating Mini-Drawer: Planejar Próxima Semana (Frentes Liberadas da Atividade 100%) */}
-      {nextWeekPopover && nextWeekSourceTask && (
-        <div
-          style={{ left: `${nextWeekPopover.x}px`, top: `${nextWeekPopover.y}px` }}
-          className="fixed z-50 w-[380px] max-w-[calc(100vw-24px)] max-h-[calc(100vh-32px)] bg-white rounded-2xl shadow-2xl border-2 border-indigo-900/20 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Draggable Header */}
-          <div
-            onMouseDown={(e) => {
-              if ((e.target as HTMLElement).closest('button')) return;
-              nextWeekDragRef.current = {
-                isDragging: true,
-                startX: e.clientX,
-                startY: e.clientY,
-                origX: nextWeekPopover.x,
-                origY: nextWeekPopover.y
-              };
-            }}
-            className="px-4 py-3 bg-indigo-950 text-white flex justify-between items-start gap-2 cursor-move select-none shrink-0"
-            title="Arraste para mover esta janela"
-          >
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[9px] font-black rounded uppercase tracking-wider">→ Próx. Semana</span>
-                <span className="text-[10px] font-black text-indigo-200 uppercase tracking-wider">{formatDateBR(nextWeekIdForPopover)}</span>
-              </div>
-              <h3 className="font-black text-xs uppercase tracking-wider mt-1 truncate" title={nextWeekSourceTask.activityName}>
-                {nextWeekSourceTask.activityName}
-              </h3>
-              <p className="text-[10px] text-indigo-300 font-bold truncate">
-                Concluída em {nextWeekSourceTask.floor} • Frentes liberadas
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setNextWeekPopover(null)}
-              className="text-xl leading-none font-bold text-indigo-200 hover:text-white px-1 cursor-pointer"
-              title="Fechar"
-            >
-              &times;
-            </button>
-          </div>
-
-          {/* Body */}
-          <div className="p-3.5 space-y-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar bg-white">
-            {nextWeekWarning && (
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold p-2.5 rounded-lg">
-                {nextWeekWarning}
-              </div>
-            )}
-
-            {/* 1. Macroatividade */}
-            <div className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-              <div className="flex justify-between items-center gap-2">
-                <label className="block text-[10px] font-black uppercase text-indigo-600">1. Macroatividade Liberada</label>
-                {nextWeekMacro && (
-                  <span className="text-[9px] font-bold text-slate-500 truncate max-w-[160px]">
-                    {getMacroTitle(nextWeekMacro)}
-                  </span>
-                )}
-              </div>
-              {nextWeekMacroOptions.length > 0 ? (
-                <div className="max-h-28 overflow-y-auto custom-scrollbar rounded-lg border border-slate-200 bg-white p-1.5 space-y-1">
-                  {nextWeekMacroOptions.map(macro => (
-                    <button
-                      key={macro}
-                      type="button"
-                      onClick={() => {
-                        setNextWeekMacro(macro);
-                        const floorsForM = Array.from(new Set(
-                          nextWeekCandidateActivities
-                            .filter(item => slugify(item.macro) === macro && (item.progress ?? 0) < 100)
-                            .map(item => item.floor)
-                        )).filter(Boolean);
-                        const initFloors = floorsForM.length > 0 ? [floorsForM[0]] : [];
-                        const initServices = nextWeekCandidateActivities
-                          .filter(item => slugify(item.macro) === macro && initFloors.includes(item.floor) && (item.progress ?? 0) < 100)
-                          .map(s => s.id);
-                        setNextWeekFloors(initFloors);
-                        setNextWeekSelectedServices(initServices);
-                        setNextWeekWarning('');
-                      }}
-                      className={`w-full text-left px-2.5 py-1.5 rounded-md border text-[11px] font-black uppercase transition cursor-pointer ${
-                        nextWeekMacro === macro
-                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                          : 'border-transparent text-slate-700 hover:border-indigo-200 hover:bg-indigo-50/60'
-                      }`}
-                    >
-                      {getMacroTitle(macro)}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="p-2 text-[10px] text-slate-400 italic text-center font-bold bg-white rounded-lg border border-slate-200">
-                  Nenhuma frente aberta encontrada para esta atividade.
-                </p>
-              )}
-            </div>
-
-            {/* 2. Pavimentos Sucessores */}
-            <div className="space-y-1.5 rounded-xl border border-indigo-100 bg-white p-2.5">
-              <div className="flex justify-between items-center">
-                <label className="block text-[10px] font-black uppercase text-indigo-600">2. Pavimentos Sucessores</label>
-                <div className="flex items-center gap-2">
-                  {nextWeekFloors.length > 0 && (
-                    <span className="text-[9px] font-bold text-slate-500">{nextWeekFloors.length} selecionado(s)</span>
-                  )}
-                  {nextWeekAvailableFloors.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (nextWeekFloors.length === nextWeekAvailableFloors.length) {
-                          setNextWeekFloors([]);
-                          setNextWeekSelectedServices([]);
-                        } else {
-                          const allFl = [...nextWeekAvailableFloors];
-                          setNextWeekFloors(allFl);
-                          const allSvcs = nextWeekCandidateActivities
-                            .filter(item => slugify(item.macro) === nextWeekMacro && allFl.includes(item.floor) && (item.progress ?? 0) < 100)
-                            .map(s => s.id);
-                          setNextWeekSelectedServices(allSvcs);
-                        }
-                      }}
-                      className="text-[9px] font-bold text-indigo-700 hover:underline uppercase cursor-pointer"
-                    >
-                      Todos
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto custom-scrollbar pr-0.5">
-                {nextWeekAvailableFloors.map(floor => {
-                  const isChecked = nextWeekFloors.includes(floor);
-                  return (
-                    <label
-                      key={floor}
-                      className={`flex items-center space-x-2 p-1.5 rounded-lg border transition cursor-pointer ${
-                        isChecked ? 'bg-indigo-50/70 border-indigo-300' : 'bg-slate-50 border-slate-200 hover:border-indigo-300'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500"
-                        checked={isChecked}
-                        onChange={(e) => {
-                          const updatedFloors = e.target.checked
-                            ? [...nextWeekFloors, floor]
-                            : nextWeekFloors.filter(f => f !== floor);
-                          setNextWeekFloors(updatedFloors);
-                          const floorServiceIds = nextWeekCandidateActivities
-                            .filter(item => slugify(item.macro) === nextWeekMacro && item.floor === floor && (item.progress ?? 0) < 100)
-                            .map(s => s.id);
-                          if (e.target.checked) {
-                            setNextWeekSelectedServices(prev => Array.from(new Set([...prev, ...floorServiceIds])));
-                          } else {
-                            setNextWeekSelectedServices(prev => prev.filter(id => !floorServiceIds.includes(id)));
-                          }
-                        }}
-                      />
-                      <span className="text-[10px] font-bold text-slate-700 truncate" title={floor}>{floor}</span>
-                    </label>
-                  );
-                })}
-                {nextWeekAvailableFloors.length === 0 && nextWeekMacro && (
-                  <p className="text-[10px] text-slate-400 italic col-span-2">Nenhum pavimento sucessor aberto.</p>
-                )}
-              </div>
-            </div>
-
-            {/* 3. Serviços */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="block text-[10px] font-black uppercase text-indigo-600">3. Atividades / Serviços</label>
-                {nextWeekAvailableServices.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (nextWeekSelectedServices.length === nextWeekAvailableServices.length) {
-                        setNextWeekSelectedServices([]);
-                      } else {
-                        setNextWeekSelectedServices(nextWeekAvailableServices.map(s => s.id));
-                      }
-                    }}
-                    className="text-[9px] font-bold text-indigo-700 hover:underline uppercase cursor-pointer"
-                  >
-                    Todos
-                  </button>
-                )}
-              </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 max-h-40 overflow-y-auto custom-scrollbar space-y-1.5">
-                {nextWeekAvailableServices.map(item => {
-                  const alreadyInNextWeek = planning.some(
-                    t => t.weekId === nextWeekIdForPopover && !t.finalized && t.itemId === item.id && t.floor === item.floor
-                  );
-                  return (
-                    <label
-                      key={item.id}
-                      className={`flex items-center space-x-2.5 p-2 bg-white rounded-lg border transition cursor-pointer ${
-                        nextWeekSelectedServices.includes(item.id)
-                          ? 'border-indigo-400 bg-indigo-50/30'
-                          : 'border-slate-200 hover:border-indigo-300'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="w-3.5 h-3.5 text-indigo-600 rounded focus:ring-indigo-500 shrink-0"
-                        checked={nextWeekSelectedServices.includes(item.id)}
-                        onChange={(e) => {
-                          if (e.target.checked) setNextWeekSelectedServices([...nextWeekSelectedServices, item.id]);
-                          else setNextWeekSelectedServices(nextWeekSelectedServices.filter(id => id !== item.id));
-                        }}
-                      />
-                      <div className="min-w-0 flex-1 text-xs">
-                        <p className="font-bold text-slate-800 text-[11px] leading-tight truncate" title={item.service}>{item.service}</p>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[9px] text-slate-500 font-bold">{item.floor}</span>
-                          {alreadyInNextWeek && (
-                            <span className="px-1.5 py-0.2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[8px] font-black uppercase">
-                              Já na próx. semana
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </label>
-                  );
-                })}
-                {nextWeekAvailableServices.length === 0 && (
-                  <p className="p-2.5 text-[10px] text-slate-400 italic text-center font-bold">
-                    Selecione um pavimento acima para ver os serviços.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* 4. Empreiteiro / Equipe */}
-            <div className="space-y-1 border-t border-slate-200 pt-2.5">
-              <label className="block text-[10px] font-black uppercase text-slate-500">4. Empreiteiro / Equipe</label>
-              <select
-                className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-bold uppercase cursor-pointer focus:bg-white focus:border-indigo-500 outline-none"
-                value={nextWeekResponsible}
-                onChange={e => setNextWeekResponsible(e.target.value)}
-              >
-                <option value="">-- Padrão --</option>
-                {teams.map(team => <option key={team} value={team}>{team}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {/* Footer: Lançar */}
-          <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setNextWeekPopover(null)}
-              className="px-3 py-2.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer"
-            >
-              Fechar
-            </button>
-            <button
-              type="button"
-              onClick={handleLaunchNextWeekActivities}
-              disabled={nextWeekSelectedServices.length === 0}
-              className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-md transition transform active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span>Lançar na Próxima Semana</span>
-              <span>→</span>
-            </button>
           </div>
         </div>
       )}
@@ -9600,9 +8542,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       )}
 
       {/* Importing Loader Spinner Modal */}
-      {canOpenModule('import') && scheduleImportPreview && <ScheduleImportPreview fileName={scheduleImportPreview.fileName} sheets={scheduleImportPreview.sheets}
-        limit={MAX_IMPORTED_CRONOGRAMA_ITEMS} onFinish={result => scheduleImportPreview.resolve(result)} />}
-      {isImporting && !scheduleImportPreview && (
+      {isImporting && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-[100] animate-in fade-in duration-300">
           <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl flex flex-col items-center space-y-6 max-w-sm text-center">
             <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
@@ -9740,28 +8680,6 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-[6px] border-transparent border-t-slate-900"></div>
         </div>
       )}
-
-      {isScheduleDifferenceOpen && <ScheduleDifferenceModal
-        projectId={selectedProjectId || 'projeto_principal'} weekId={currentWeekId}
-        onClose={() => setIsScheduleDifferenceOpen(false)} onConfirm={handleGeneratePlanningFromBudgetDiffs}
-      />}
-
-      {/* Modal do Motor Inteligente de Importação de Cronograma */}
-      <ScheduleImportModal
-        isOpen={isScheduleImportModalOpen && canOpenModule('import')}
-        onClose={() => setIsScheduleImportModalOpen(false)}
-        projectId={selectedProjectId || 'global'}
-        projectName={projects.find((p) => p.id === selectedProjectId)?.name || 'Obra Principal'}
-        currentSnapshot={{
-          cronogramaInicial,
-          floors,
-          allFloorsData,
-          weights,
-          teams,
-          matrices,
-        }}
-        onImportComplete={handleCompleteScheduleImport}
-      />
 
       <Notification {...notification} onClose={() => setNotification({ message: '', type: '' })} />
     </div>
