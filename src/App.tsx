@@ -12,6 +12,8 @@ import PpcVisualBoard from './PpcVisualBoard';
 import type { PpcPeriod } from './ppcDetail';
 import { toLocalDateString, getTodayDateString, parseExcelDate, formatDateBR, formatTimestamp } from './dates';
 import { requestWeeklyAnalysis } from './weeklyAnalysis';
+import { snapshotImport, pendingComparisonDiffs } from './importComparison';
+import type { ImportSnapshot } from './importComparison';
 
 declare global {
   interface Window {
@@ -314,10 +316,10 @@ const getFamiliesWithBudgetChildren = (items) => new Set(
     .map(item => getBudgetFamilyKey(item))
 );
 
-const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
+const buildBudgetDiffs = (previousItems, nextItems, fileName = '', comparison = { id: `budget_${Date.now()}`, previousId: '' }) => {
   if (!Array.isArray(previousItems) || previousItems.length === 0 || !Array.isArray(nextItems)) return [];
 
-  const importId = `budget_${Date.now()}`;
+  const importId = comparison.id;
   const importedAt = new Date().toISOString();
   const previousById = new Map();
   const nextById = new Map();
@@ -348,6 +350,7 @@ const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
     diffs.push({
       id: `${importId}_${slugify(item.id)}`,
       importId,
+      previousImportId: comparison.previousId,
       importedAt,
       fileName,
       kind: isNew ? 'new' : (delta > 0 ? 'progress_increase' : 'progress_decrease'),
@@ -380,6 +383,7 @@ const buildBudgetDiffs = (previousItems, nextItems, fileName = '') => {
       importedAt,
       fileName,
       kind: 'removed',
+      previousImportId: comparison.previousId,
       itemId: item.id,
       floor: item.floor,
       macro: item.macro,
@@ -1113,6 +1117,9 @@ const App = () => {
   const [matrices, setMatrices] = useState<any[]>([]); 
   const [budgetDiffs, setBudgetDiffs] = useState<any[]>([]);
   const [budgetImportVersions, setBudgetImportVersions] = useState<any[]>([]);
+  const budgetImportSnapshotRef = useRef<ImportSnapshot | null>(null);
+  const generatingDiffsRef = useRef(false);
+  const [isGeneratingDiffs, setIsGeneratingDiffs] = useState(false);
   const [teamPhones, setTeamPhones] = useState<Record<string, string>>({});
   const [whatsappModal, setWhatsappModal] = useState<{ isOpen: boolean, teamName: string, text: string }>({ isOpen: false, teamName: '', text: '' });
   const [teamInputs, setTeamInputs] = useState<Record<string, { progress: number, delayReason: string, observations: string }>>({});
@@ -1717,11 +1724,13 @@ const App = () => {
     setIsProjectHydrated(false);
     setProjectDelayReasons([]);
     setAiAnalysesHistory({});
+    budgetImportSnapshotRef.current = null;
     setLoading(true);
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
     const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_crono`);
     const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_floors`);
     const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_planning`);
+    const comparisonRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_import_comparison`);
 
     let hasLoadedCrono = false;
     let hasLoadedFloors = false;
@@ -1730,12 +1739,16 @@ const App = () => {
     let hasReceivedCrono = false;
     let hasReceivedFloors = false;
     let hasReceivedPlanning = false;
+    let hasReceivedComparison = false;
+    let requiresComparison = false;
+    let loadedComparison: { snapshot: ImportSnapshot | null; diffs: any[] } = { snapshot: null, diffs: [] };
     let loadedFloorNames: any[] = [];
     let loadedCronoSnapshot: any[] = [];
     let loadedFloorsSnapshot: any = {};
     let loadedPlanningSnapshot: any[] = [];
     let disposed = false;
     let metaRevision: string | undefined;
+    let comparisonRevision: string | undefined;
     const payloadRevisions: Record<string, string | undefined> = {};
     const failedPayloads = new Set<string>();
 
@@ -1776,6 +1789,7 @@ const App = () => {
 
     const reconcileLoadedProgress = () => {
       if (!hasReceivedMeta || !hasReceivedCrono || !hasReceivedFloors || !hasReceivedPlanning) return;
+      if (requiresComparison && (!hasReceivedComparison || payloadRevisions.importComparison !== comparisonRevision)) return;
       if (failedPayloads.size > 0) return;
       if (['cronogramaInicial', 'data', 'planning'].some(field => payloadRevisions[field] !== metaRevision)) return;
 
@@ -1793,6 +1807,11 @@ const App = () => {
       setPlanning(recalculatedPlanning);
       setAllFloorsData(updatedFloorsData);
       setCronogramaInicial(syncedCrono);
+      if (requiresComparison) {
+        budgetImportSnapshotRef.current = loadedComparison.snapshot;
+        setBudgetDiffs(loadedComparison.diffs);
+        budgetDiffsRef.current = loadedComparison.diffs;
+      }
       hydratedProjectIdsRef.current.add(targetId);
       setIsProjectHydrated(true);
       setLoading(false);
@@ -1802,6 +1821,8 @@ const App = () => {
       if (snap.exists()) {
         const d = snap.data();
         metaRevision = d.payloadRevision;
+        comparisonRevision = d.importComparisonRevision ?? d.payloadRevision;
+        requiresComparison = d.importComparisonFormat === 1;
         const loadedFloors = Array.isArray(d.floors) ? d.floors : [];
         loadedFloorNames = loadedFloors;
         setFloors(loadedFloors);
@@ -1838,7 +1859,7 @@ const App = () => {
         if (typeof loadedBudgetDiffs === 'string') {
           try { loadedBudgetDiffs = JSON.parse(decompressIfNeeded(loadedBudgetDiffs)); } catch { loadedBudgetDiffs = []; }
         }
-        setBudgetDiffs(Array.isArray(loadedBudgetDiffs) ? loadedBudgetDiffs : []);
+        if (!requiresComparison) setBudgetDiffs(Array.isArray(loadedBudgetDiffs) ? loadedBudgetDiffs : []);
 
         let loadedBudgetImportVersions = d.budgetImportVersions || [];
         if (typeof loadedBudgetImportVersions === 'string') {
@@ -1990,12 +2011,21 @@ const App = () => {
       reconcileLoadedProgress();
     });
 
+    const unsubComparison = subscribePayload(comparisonRef, 'importComparison', snap => {
+      const value = snap.data().importComparison;
+      const parsed = typeof value === 'string' ? JSON.parse(decompressIfNeeded(value)) : value;
+      loadedComparison = parsed && Array.isArray(parsed.diffs) ? parsed : { snapshot: null, diffs: [] };
+      hasReceivedComparison = true;
+      reconcileLoadedProgress();
+    });
+
     return () => {
       disposed = true;
       unsubMeta();
       unsubCrono();
       unsubFloors();
       unsubPlanning();
+      unsubComparison();
     };
   }, [db, userId, isTeamMode, urlUserId, selectedProjectId]);
 
@@ -2127,7 +2157,8 @@ const App = () => {
       wApiKey,
       wCache,
       bDiffs,
-      bImportVersions
+      bImportVersions,
+      bImportSnapshot
     } = args;
 
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
@@ -2144,6 +2175,7 @@ const App = () => {
     const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_crono`);
     const floorsRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_floors`);
     const planningRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_planning`);
+    const comparisonRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${resolvedTargetId}_import_comparison`);
 
     const trimmedHistory = normalizeDelayReasonFields((hist || []).slice(-100));
     const syncedCrono = syncCronogramaWithFloorsData(crono, fls, data);
@@ -2156,13 +2188,14 @@ const App = () => {
       const weightsStr = typeof wts === 'string' ? wts : JSON.stringify(wts || {});
       const historyStr = JSON.stringify(trimmedHistory);
       const matricesStr = typeof mats === 'string' ? mats : JSON.stringify(Array.isArray(mats) ? mats : []);
-      const budgetDiffsStr = typeof bDiffs === 'string' ? bDiffs : JSON.stringify(Array.isArray(bDiffs) ? bDiffs.slice(-1200) : []);
+      const comparisonStr = JSON.stringify({ snapshot: bImportSnapshot || null, diffs: Array.isArray(bDiffs) ? bDiffs : [] });
       const budgetImportVersionsStr = typeof bImportVersions === 'string' ? bImportVersions : JSON.stringify(Array.isArray(bImportVersions) ? bImportVersions.slice(-2) : []);
 
       const payloads = await Promise.all([
         preparePayload(compressStringUnicode(cronoStr), cronoRef.id),
         preparePayload(compressStringUnicode(dataStr), floorsRef.id),
-        preparePayload(compressStringUnicode(planningStr), planningRef.id)
+        preparePayload(compressStringUnicode(planningStr), planningRef.id),
+        preparePayload(compressStringUnicode(comparisonStr), comparisonRef.id)
       ]);
       const payloadRevision = crypto.randomUUID();
       const batch = writeBatch(db);
@@ -2178,7 +2211,9 @@ const App = () => {
           projectCity: pCity || "Curitiba, PR",
           weatherApiKey: wApiKey || "",
           weatherCache: wCache || {},
-          budgetDiffs: compressStringUnicode(budgetDiffsStr),
+          budgetDiffs: compressStringUnicode('[]'),
+          importComparisonFormat: 1,
+          importComparisonRevision: payloadRevision,
           budgetImportVersions: compressStringUnicode(budgetImportVersionsStr),
           lastUpdatedBy: isTeamMode ? (urlTeamName ? `Equipe: ${urlTeamName}` : 'Equipe de Campo') : (plannerUsername || 'Sistema'),
           lastUpdated: new Date(),
@@ -2193,7 +2228,8 @@ const App = () => {
       const destinations = [
         { ref: cronoRef, field: 'cronogramaInicial' },
         { ref: floorsRef, field: 'data' },
-        { ref: planningRef, field: 'planning' }
+        { ref: planningRef, field: 'planning' },
+        { ref: comparisonRef, field: 'importComparison' }
       ];
       payloads.forEach((payload, index) => {
         const { ref, field } = destinations[index];
@@ -2232,7 +2268,8 @@ const App = () => {
     wCache = weatherCache,
     forceImmediate = false,
     bDiffs = budgetDiffsRef.current,
-    bImportVersions = budgetImportVersionsRef.current
+    bImportVersions = budgetImportVersionsRef.current,
+    bImportSnapshot: ImportSnapshot | null = budgetImportSnapshotRef.current
   ) => {
     const resolvedTargetId = targetUserId || urlUserId || selectedProjectId || 'projeto_principal';
     if (!db || !resolvedTargetId) return;
@@ -2254,7 +2291,8 @@ const App = () => {
       wApiKey,
       wCache,
       bDiffs,
-      bImportVersions
+      bImportVersions,
+      bImportSnapshot
     };
 
     if (forceImmediate) {
@@ -2643,17 +2681,8 @@ const App = () => {
   const isWeekFinalized = weeklyTasks.length > 0 && weeklyTasks.every(t => t.finalized);
   const isTaskLocked = (task) => Boolean(task?.finalized && !isWeekBeingEdited);
   const pendingBudgetDiffs = useMemo(() => {
-    const cronoFamiliesWithChildren = getFamiliesWithBudgetChildren(cronogramaInicial);
-    return budgetDiffs.filter(diff => (
-      diff &&
-      !diff.appliedWeekId &&
-      Number(diff.delta) > 0 &&
-      (!isParentBudgetItem(diff) || !cronoFamiliesWithChildren.has(getBudgetFamilyKey(diff)))
-    ));
-  }, [budgetDiffs, cronogramaInicial]);
-  const pendingBudgetDiffProgress = useMemo(() => (
-    Math.round(pendingBudgetDiffs.reduce((sum, diff) => sum + (Number(diff.delta) || 0), 0) * 100) / 100
-  ), [pendingBudgetDiffs]);
+    return pendingComparisonDiffs(budgetDiffs, budgetImportVersions);
+  }, [budgetDiffs, budgetImportVersions]);
   const previousBudgetImport = budgetImportVersions.length > 1 ? budgetImportVersions[budgetImportVersions.length - 2] : null;
   const currentBudgetImport = budgetImportVersions.length > 0 ? budgetImportVersions[budgetImportVersions.length - 1] : null;
   const getBudgetImportTooltip = (version) => {
@@ -3230,94 +3259,108 @@ const App = () => {
 
   // --- Handlers de Ações ---
   const handleGeneratePlanningFromBudgetDiffs = async () => {
+    if (generatingDiffsRef.current || !isProjectHydrated) return;
     if (pendingBudgetDiffs.length === 0) {
       setNotification({ message: 'Nao ha diferencas de orcamento pendentes para aplicar.', type: 'error' });
       return;
     }
 
-    const diffsByItem = new Map<string, any>();
-    pendingBudgetDiffs.forEach(diff => {
-      const existing = diffsByItem.get(diff.itemId);
-      if (!existing) {
-        diffsByItem.set(diff.itemId, { ...diff });
-        return;
-      }
-      const existingTime = new Date(existing.importedAt || 0).getTime();
-      const diffTime = new Date(diff.importedAt || 0).getTime();
-      if (diffTime >= existingTime) diffsByItem.set(diff.itemId, { ...diff });
-    });
-
-    let mergedCount = 0;
-    let createdCount = 0;
-    const appliedDiffIds = new Set(pendingBudgetDiffs.map(diff => diff.id));
-    let updatedPlanning = [...planning];
-
-    diffsByItem.forEach(diff => {
-      const itemDiffIds = pendingBudgetDiffs.filter(d => d.itemId === diff.itemId).map(d => d.id);
-      const delta = Math.round((Number(diff.delta) || 0) * 1000) / 1000;
-      if (delta <= 0) return;
-      const importedProgress = roundPercentValue(diff.newProgress ?? 0);
-
-      const existingIndex = updatedPlanning.findIndex(t => t.weekId === currentWeekId && t.itemId === diff.itemId && !t.finalized);
-      if (existingIndex !== -1) {
-        const task = updatedPlanning[existingIndex];
-        const executedBefore = roundPercentValue(task.executedBefore || 0);
-        const nextProgressThisWeek = importedProgress > 0
-          ? importedProgress
-          : Math.max(roundPercentValue(task.progressThisWeek || 0), roundPercentValue(executedBefore + delta));
-        updatedPlanning[existingIndex] = {
-          ...task,
-          progressThisWeek: Math.min(100, nextProgressThisWeek),
-          budgetDiffIds: Array.from(new Set([...(task.budgetDiffIds || []), ...itemDiffIds])),
-          observations: task.observations || 'Avanço preenchido por diferença entre versões de orçamento',
-          lastUpdatedBy: plannerUsername || 'Sistema'
-        };
-        mergedCount++;
-        return;
-      }
-
-      const cronoMatch = cronogramaInicial.find(item => item.id === diff.itemId);
-      const previousProgress = roundPercentValue(diff.previousProgress ?? Math.max(0, (Number(diff.newProgress) || 0) - delta));
-      updatedPlanning.push({
-        id: crypto.randomUUID(),
-        weekId: currentWeekId,
-        floor: diff.floor || cronoMatch?.floor || 'Geral',
-        sectionId: diff.sectionId || slugify(diff.macro || cronoMatch?.macro),
-        itemId: diff.itemId,
-        activityName: diff.service || cronoMatch?.service || 'Atividade importada',
-        responsible: diff.responsible || cronoMatch?.responsible || teams[0] || 'Equipe Geral',
-        weight: 100,
-        executedBefore: previousProgress,
-        plannedThisWeek: 0,
-        progressThisWeek: importedProgress,
-        finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
-        dailyWork: [0, 0, 0, 0, 0],
-        observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
-        delayReason: '',
-        finalized: false,
-        isUnplannedDetected: true,
-        source: 'budget-diff',
-        budgetDiffIds: itemDiffIds,
-        predecessors: diff.predecessors || cronoMatch?.predecessors || [],
-        successors: diff.successors || cronoMatch?.successors || [],
-        inheritedDependenciesFrom: diff.inheritedDependenciesFrom || cronoMatch?.inheritedDependenciesFrom || '',
-        originalId: diff.originalId || cronoMatch?.originalId || ''
+    generatingDiffsRef.current = true;
+    setIsGeneratingDiffs(true);
+    const comparisonVersionId = budgetImportSnapshotRef.current?.versionId;
+    try {
+      const diffsByItem = new Map<string, any>();
+      pendingBudgetDiffs.forEach(diff => {
+        const existing = diffsByItem.get(diff.itemId);
+        if (!existing) {
+          diffsByItem.set(diff.itemId, { ...diff });
+          return;
+        }
+        const existingTime = new Date(existing.importedAt || 0).getTime();
+        const diffTime = new Date(diff.importedAt || 0).getTime();
+        if (diffTime >= existingTime) diffsByItem.set(diff.itemId, { ...diff });
       });
-      createdCount++;
-    });
 
-    const updatedBudgetDiffs = budgetDiffs.map(diff => (
-      appliedDiffIds.has(diff.id)
-        ? { ...diff, appliedWeekId: currentWeekId, appliedAt: new Date().toISOString() }
-        : diff
-    ));
+      let mergedCount = 0;
+      let createdCount = 0;
+      const appliedDiffIds = new Set(pendingBudgetDiffs.map(diff => diff.id));
+      let updatedPlanning = [...planning];
 
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
-    setPlanning(recalculatedPlanning);
-    setAllFloorsData(updatedFloorsData);
-    setBudgetDiffs(updatedBudgetDiffs);
-    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
-    setNotification({ message: `${createdCount} atividades fora do planejado criadas e ${mergedCount} atividades existentes atualizadas para a semana selecionada.`, type: 'success' });
+      diffsByItem.forEach(diff => {
+        const itemDiffIds = pendingBudgetDiffs.filter(d => d.itemId === diff.itemId).map(d => d.id);
+        const delta = Math.round((Number(diff.delta) || 0) * 1000) / 1000;
+        if (delta <= 0) return;
+        const importedProgress = roundPercentValue(diff.newProgress ?? 0);
+
+        const existingIndex = updatedPlanning.findIndex(t => t.weekId === currentWeekId && t.itemId === diff.itemId && !t.finalized);
+        if (existingIndex !== -1) {
+          const task = updatedPlanning[existingIndex];
+          const executedBefore = roundPercentValue(task.executedBefore || 0);
+          const nextProgressThisWeek = importedProgress > 0
+            ? importedProgress
+            : Math.max(roundPercentValue(task.progressThisWeek || 0), roundPercentValue(executedBefore + delta));
+          updatedPlanning[existingIndex] = {
+            ...task,
+            progressThisWeek: Math.min(100, nextProgressThisWeek),
+            budgetDiffIds: Array.from(new Set([...(task.budgetDiffIds || []), ...itemDiffIds])),
+            observations: task.observations || 'Avanço preenchido por diferença entre versões de orçamento',
+            lastUpdatedBy: plannerUsername || 'Sistema'
+          };
+          mergedCount++;
+          return;
+        }
+
+        const cronoMatch = cronogramaInicial.find(item => item.id === diff.itemId);
+        const previousProgress = roundPercentValue(diff.previousProgress ?? Math.max(0, (Number(diff.newProgress) || 0) - delta));
+        updatedPlanning.push({
+          id: crypto.randomUUID(),
+          weekId: currentWeekId,
+          floor: diff.floor || cronoMatch?.floor || 'Geral',
+          sectionId: diff.sectionId || slugify(diff.macro || cronoMatch?.macro),
+          itemId: diff.itemId,
+          activityName: diff.service || cronoMatch?.service || 'Atividade importada',
+          responsible: diff.responsible || cronoMatch?.responsible || teams[0] || 'Equipe Geral',
+          weight: 100,
+          executedBefore: previousProgress,
+          plannedThisWeek: 0,
+          progressThisWeek: importedProgress,
+          finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
+          dailyWork: [0, 0, 0, 0, 0],
+          observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
+          delayReason: '',
+          finalized: false,
+          isUnplannedDetected: true,
+          source: 'budget-diff',
+          budgetDiffIds: itemDiffIds,
+          predecessors: diff.predecessors || cronoMatch?.predecessors || [],
+          successors: diff.successors || cronoMatch?.successors || [],
+          inheritedDependenciesFrom: diff.inheritedDependenciesFrom || cronoMatch?.inheritedDependenciesFrom || '',
+          originalId: diff.originalId || cronoMatch?.originalId || ''
+        });
+        createdCount++;
+      });
+
+      const updatedBudgetDiffs = budgetDiffs.map(diff => (
+        appliedDiffIds.has(diff.id)
+          ? { ...diff, appliedWeekId: currentWeekId, appliedAt: new Date().toISOString() }
+          : diff
+      ));
+
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(updatedPlanning, allFloorsData, cronogramaInicial);
+      await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices, teamPhones, undefined, projectCity, weatherApiKey, weatherCache, true, updatedBudgetDiffs);
+      if (budgetImportSnapshotRef.current?.versionId !== comparisonVersionId) return;
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      setBudgetDiffs(updatedBudgetDiffs);
+      budgetDiffsRef.current = updatedBudgetDiffs;
+      setNotification({ message: `${createdCount} atividades fora do planejado criadas e ${mergedCount} atividades existentes atualizadas para a semana selecionada.`, type: 'success' });
+    } catch (error) {
+      console.error('Erro ao aplicar diferenças do cronograma:', error);
+      setNotification({ message: 'Não foi possível salvar a geração por diferença. As pendências foram preservadas para tentar novamente.', type: 'error' });
+    } finally {
+      generatingDiffsRef.current = false;
+      setIsGeneratingDiffs(false);
+    }
   };
 
   const handleClearProjectData = async () => {
@@ -3348,7 +3391,8 @@ const App = () => {
       weatherCache,
       true,
       emptyBudgetDiffs,
-      emptyBudgetImportVersions
+      emptyBudgetImportVersions,
+      null
     );
 
     setFloors(emptyFloors);
@@ -3359,6 +3403,7 @@ const App = () => {
     setMatrices(emptyMatrices);
     setBudgetDiffs(emptyBudgetDiffs);
     setBudgetImportVersions(emptyBudgetImportVersions);
+    budgetImportSnapshotRef.current = null;
     setActiveFloor('');
     setSelectedDashboardFloor('');
     setNotification({ message: 'Cronograma importado limpo sem apagar o histórico semanal!', type: 'success' });
@@ -4099,13 +4144,21 @@ const App = () => {
             return;
           }
 
-          const importedBudgetDiffs = buildBudgetDiffs(cronogramaInicial, parsedItems, file.name);
-          const updatedBudgetDiffs = [...budgetDiffsRef.current, ...importedBudgetDiffs].slice(-1200);
+          const importVersionId = `budget_${crypto.randomUUID()}`;
+          const previousImportVersion = budgetImportVersionsRef.current.at(-1);
+          const previousSnapshot = budgetImportSnapshotRef.current?.versionId === previousImportVersion?.id
+            ? budgetImportSnapshotRef.current : null;
+          const importedBudgetDiffs = buildBudgetDiffs(previousSnapshot?.items || [], parsedItems, file.name, {
+            id: importVersionId, previousId: previousSnapshot?.versionId || ''
+          });
+          const updatedBudgetDiffs = importedBudgetDiffs;
+          const updatedImportSnapshot = snapshotImport(parsedItems, importVersionId);
           const importedAt = new Date().toISOString();
           const updatedBudgetImportVersions = [
             ...budgetImportVersionsRef.current,
             {
-              id: `budget_import_${Date.now()}`,
+              id: importVersionId,
+              previousVersionId: previousSnapshot?.versionId || '',
               fileName: file.name,
               importedAt,
               activityCount: parsedItems.length,
@@ -4199,11 +4252,15 @@ const App = () => {
             weatherCache,
             true,
             updatedBudgetDiffs,
-            updatedBudgetImportVersions
+            updatedBudgetImportVersions,
+            updatedImportSnapshot
           )
             .then(() => {
               setBudgetDiffs(updatedBudgetDiffs);
               setBudgetImportVersions(updatedBudgetImportVersions);
+              budgetImportVersionsRef.current = updatedBudgetImportVersions;
+              budgetImportSnapshotRef.current = updatedImportSnapshot;
+              budgetDiffsRef.current = updatedBudgetDiffs;
               setNotification({ message: `${parsedItems.length} atividades importadas. ${importedBudgetDiffs.length} diferenças registradas para o curto prazo.`, type: "success" });
               setActiveTab('planning');
             })
@@ -5656,11 +5713,13 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             )}
             <button
               onClick={handleGeneratePlanningFromBudgetDiffs}
-              disabled={pendingBudgetDiffs.length === 0}
+              disabled={!isProjectHydrated || isGeneratingDiffs || pendingBudgetDiffs.length === 0}
               className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
-              title={`Aplica ${pendingBudgetDiffProgress}% de avanco pendente do ultimo orcamento na semana selecionada`}
+              title={currentBudgetImport?.previousVersionId
+                ? `Diferenças entre ${previousBudgetImport?.fileName || 'a importação anterior'} e ${currentBudgetImport.fileName}`
+                : 'Importe o cronograma anterior e depois o atual para calcular a diferença entre os dois arquivos.'}
             >
-              <span>Delta</span> Gerar por Dif. {pendingBudgetDiffs.length > 0 ? `(${pendingBudgetDiffs.length})` : ''}
+              {isGeneratingDiffs ? 'Gerando...' : `Gerar por Dif. (${pendingBudgetDiffs.length})`}
             </button>
             {isWeekBeingEdited ? (
               <button
@@ -5687,6 +5746,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
 
         {/* Planning Filter Bar */}
+        <p className="text-xs text-slate-500 break-words">
+          {currentBudgetImport?.previousVersionId
+            ? <>Comparação das últimas importações: <strong>{previousBudgetImport?.fileName}</strong> → <strong>{currentBudgetImport.fileName}</strong>. As atividades serão lançadas na semana selecionada.</>
+            : 'Para gerar por diferença, importe primeiro o cronograma anterior e depois o atual.'}
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
           <div>
             <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">🔍 Pesquisa</label>
