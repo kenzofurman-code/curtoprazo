@@ -1,3 +1,5 @@
+import { formatDateBR } from './dates';
+
 export type PpcPeriod = 'last-week' | 'four-weeks' | 'history';
 
 export function getPpcSignal(ppc: number, plannedCount?: number) {
@@ -41,7 +43,7 @@ export function calculatePpcDetail(planning: any[], weeks: string[], teams: stri
     const planned = planning.filter(task => task.weekId === weekId && matchesTeam(task) && (task.plannedThisWeek ?? 100) > 0);
     const completed = planned.filter(task => (task.progressThisWeek ?? 0) >= (task.plannedThisWeek ?? 100));
     const end = new Date(weekId + 'T00:00:00'); end.setDate(end.getDate() + 6);
-    return { weekId, startDateStr: weekId.split('-').reverse().join('/'), endDateStr: end.toLocaleDateString('pt-BR'),
+    return { weekId, startDateStr: formatDateBR(weekId), endDateStr: formatDateBR(end),
       ppc: planned.length ? Math.round(completed.length / planned.length * 100) : 0,
       plannedCount: planned.length, completedCount: completed.length };
   });

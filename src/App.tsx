@@ -10,6 +10,7 @@ import TeamMultiSelect from './TeamMultiSelect';
 import { ppcPeriodWeeks, calculatePpcDetail, getPpcSignal, teamsWithPlannedActivities } from './ppcDetail';
 import PpcVisualBoard from './PpcVisualBoard';
 import type { PpcPeriod } from './ppcDetail';
+import { toLocalDateString, getTodayDateString, parseExcelDate, formatDateBR, formatTimestamp } from './dates';
 
 declare global {
   interface Window {
@@ -228,36 +229,6 @@ const clampPercent = (value) => {
   return Math.max(0, Math.min(100, n));
 };
 
-const toLocalDateString = (date = new Date()) => {
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) return '';
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-};
-
-const getTodayDateString = () => toLocalDateString(new Date());
-
-const parseExcelDate = (value, fallback = getTodayDateString()) => {
-  if (value === undefined || value === null || value === '') return fallback;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return toLocalDateString(value);
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    epoch.setUTCDate(epoch.getUTCDate() + Math.floor(value));
-    return toLocalDateString(epoch);
-  }
-  const text = String(value).trim();
-  const br = text.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
-  if (br) {
-    const [, d, m, y] = br;
-    const yyyy = y.length === 2 ? `20${y}` : y;
-    return `${yyyy}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  }
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? fallback : toLocalDateString(parsed);
-};
-
 const parsePercent = (value) => {
   if (value === undefined || value === null || value === '') return 0;
   if (typeof value === 'number') return clampPercent(value <= 1 ? value * 100 : value);
@@ -442,28 +413,6 @@ const addDays = (date, days) => {
   d.setDate(d.getDate() + days);
   d.setHours(0, 0, 0, 0);
   return d;
-};
-
-const formatDateBR = (isoString) => {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('pt-BR');
-};
-
-const formatTimestamp = (ts) => {
-  if (!ts) return '';
-  let date;
-  if (typeof ts.toDate === 'function') {
-    date = ts.toDate();
-  } else if (ts instanceof Date) {
-    date = ts;
-  } else if (ts && typeof ts === 'object' && ts.seconds !== undefined) {
-    date = new Date(ts.seconds * 1000);
-  } else {
-    date = new Date(ts);
-  }
-  if (isNaN(date.getTime())) return '';
-  return date.toLocaleString('pt-BR');
 };
 
 const toISODate = (date) => {
@@ -2490,8 +2439,8 @@ const App = () => {
       
       let expected = 0;
       if (c.start && c.end) {
-        const s = new Date(c.start);
-        const e = new Date(c.end);
+        const s = parseISODateLocal(c.start);
+        const e = parseISODateLocal(c.end);
         if (targetDate >= e) expected = 100;
         else if (targetDate <= s) expected = 0;
         else {
@@ -2518,8 +2467,8 @@ const App = () => {
         sumRealizado += getActivityProgressAtDate(c, targetDate);
         let expected = 0;
         if (c.start && c.end) {
-          const s = new Date(c.start);
-          const e = new Date(c.end);
+          const s = parseISODateLocal(c.start);
+          const e = parseISODateLocal(c.end);
           if (targetDate >= e) expected = 100;
           else if (targetDate <= s) expected = 0;
           else {
@@ -2552,8 +2501,8 @@ const App = () => {
       
       let expected = 0;
       if (c.start && c.end) {
-        const s = new Date(c.start);
-        const e = new Date(c.end);
+        const s = parseISODateLocal(c.start);
+        const e = parseISODateLocal(c.end);
         if (targetDate >= e) expected = 100;
         else if (targetDate <= s) expected = 0;
         else {
@@ -2579,8 +2528,8 @@ const App = () => {
         sumActual += getActivityProgressAtDate(c, targetDate);
         let expected = 0;
         if (c.start && c.end) {
-          const s = new Date(c.start);
-          const e = new Date(c.end);
+          const s = parseISODateLocal(c.start);
+          const e = parseISODateLocal(c.end);
           if (targetDate >= e) expected = 100;
           else if (targetDate <= s) expected = 0;
           else {
@@ -2778,7 +2727,7 @@ const App = () => {
       
       const recDate = record.timestamp ? new Date(record.timestamp) : new Date();
       const validDate = isNaN(recDate.getTime()) ? new Date() : recDate;
-      const weekStr = getWeekStartDate(validDate).toISOString().split('T')[0];
+      const weekStr = toLocalDateString(getWeekStartDate(validDate));
 
       if (!map[macro]) {
         map[macro] = { 
@@ -2898,7 +2847,7 @@ const App = () => {
     [ppcPeriod, ppcReferenceWeek, planning, ppcHistory]);
   useEffect(() => { setPpcSelectedWeek(''); }, [ppcPeriod, ppcSelectedContractors, selectedProjectId]);
   useEffect(() => { setPpcSelectedContractors([]); }, [selectedProjectId]);
-  const formatWeekId = (weekId: string) => weekId ? weekId.split('-').reverse().join('/') : '';
+  const formatWeekId = (weekId: string) => formatDateBR(weekId);
   const ppcDetail = useMemo(() => calculatePpcDetail(planning, availableWeeks, ppcSelectedContractors, ppcSelectedWeek),
     [planning, availableWeeks, ppcSelectedContractors, ppcSelectedWeek]);
   const contractorWeeklyPpcData = ppcDetail.rows;
@@ -3509,7 +3458,7 @@ const App = () => {
         const newVal = itemAfter.actualPercent || 0;
         if (newVal !== oldVal) {
           const now = new Date();
-          const weekDate = new Date(task.weekId);
+          const weekDate = parseISODateLocal(task.weekId);
           let timestampVal = now.toISOString();
           if (!isNaN(weekDate.getTime())) {
             weekDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
@@ -4389,7 +4338,7 @@ const App = () => {
 
   const handlePrintPlanning = () => {
     const weekEndDate = new Date(currentWeekStart.getTime() + 4 * 86400000);
-    const dateRange = `${currentWeekStart.toLocaleDateString('pt-BR')} a ${weekEndDate.toLocaleDateString('pt-BR')}`;
+    const dateRange = `${formatDateBR(currentWeekStart)} a ${formatDateBR(weekEndDate)}`;
     const tasksToPrint = filteredWeeklyTasks.length > 0 ? filteredWeeklyTasks : weeklyTasks;
     const projectName = projects.find(p => p.id === selectedProjectId)?.name || 'Planejamento Semanal';
 
@@ -4436,7 +4385,7 @@ const App = () => {
     const dayDatesJson = JSON.stringify(dayDates);
     const teamOptionsJson = JSON.stringify(Array.from(new Set(rows.map(r => r.responsible).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR')));
     const totalCount = tasksToPrint.length;
-    const genTime = new Date().toLocaleString('pt-BR');
+    const genTime = formatTimestamp(new Date());
 
     const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -4822,7 +4771,7 @@ rt();
   const generateWhatsappMessage = (teamName: string): string => {
     const weekId = toLocalDateString(currentWeekStart);
     const weekEndDate = new Date(currentWeekStart.getTime() + 4 * 86400000);
-    const dateRange = `${currentWeekStart.toLocaleDateString('pt-BR')} a ${weekEndDate.toLocaleDateString('pt-BR')}`;
+    const dateRange = `${formatDateBR(currentWeekStart)} a ${formatDateBR(weekEndDate)}`;
     
     const teamTasks = planning.filter(t => t.weekId === weekId && t.responsible === teamName && !t.finalized);
     
@@ -5039,9 +4988,9 @@ rt();
   };
 
   const handleExportCSV = () => {
-    const headers = ['Semana ID', 'Pavimento', 'Macroatividade', 'Serviço', 'Responsável', 'Meta Planeada (%)', 'Dias Ativos', 'Progresso Semana (%)', 'Progresso Acumulado (%)', 'Motivo Atraso', 'Observações', 'Status'];
+    const headers = ['Semana', 'Pavimento', 'Macroatividade', 'Serviço', 'Responsável', 'Meta Planeada (%)', 'Dias Ativos', 'Progresso Semana (%)', 'Progresso Acumulado (%)', 'Motivo Atraso', 'Observações', 'Status'];
     const rows = filteredGiantPlanningTasks.map(t => [
-      t?.weekId || '', t?.floor || '', (t?.sectionId || '').toUpperCase(), t?.activityName || '', t?.responsible || '',
+      formatDateBR(t?.weekId), t?.floor || '', (t?.sectionId || '').toUpperCase(), t?.activityName || '', t?.responsible || '',
       `${t?.plannedThisWeek ?? 100}%`,
       (t?.dailyWork || [0,0,0,0,0]).map((dw, i) => dw ? ['Seg', 'Ter', 'Qua', 'Qui', 'Sex'][i] : '').filter(Boolean).join('/'),
       `${t?.progressThisWeek ?? 0}%`, `${getTaskAccumulatedProgress(t)}%`,
@@ -5083,7 +5032,7 @@ rt();
 
     // Build context data
     const weekEndDate = new Date(currentWeekStart.getTime() + 4 * 86400000);
-    const dateRange = `${currentWeekStart.toLocaleDateString('pt-BR')} a ${weekEndDate.toLocaleDateString('pt-BR')}`;
+    const dateRange = `${formatDateBR(currentWeekStart)} a ${formatDateBR(weekEndDate)}`;
     const ppcVal = ppcRecord ? ppcRecord.ppc.toFixed(1) : currentWeekPpcStats.percent.toFixed(1);
     const totalPlanned = ppcRecord ? ppcRecord.totalPlanned : currentWeekPpcStats.totalPlannedCount;
     const totalCompleted = ppcRecord ? ppcRecord.completed : currentWeekPpcStats.completedCount;
@@ -5269,7 +5218,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <div className="text-center min-w-[160px]">
                   <div className="text-[8px] uppercase font-black text-slate-400">Semana Ativa</div>
                   <div className="text-xs font-black text-slate-700">
-                    {currentWeekStart.toLocaleDateString('pt-BR')} - {new Date(currentWeekStart.getTime() + 4*86400000).toLocaleDateString('pt-BR')}
+                    {formatDateBR(currentWeekStart)} - {formatDateBR(new Date(currentWeekStart.getTime() + 4*86400000))}
                   </div>
                 </div>
                 <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">▶</button>
@@ -5667,7 +5616,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             <button onClick={() => setCurrentWeekStart(prev => addDays(prev, -7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">◀</button>
             <div className="text-center min-w-[180px]">
               <div className="text-[9px] uppercase font-bold text-slate-500">Semana Selecionada</div>
-              <div className="text-xs font-black text-indigo-900">{currentWeekStart.toLocaleDateString()} - {new Date(currentWeekStart.getTime() + 4*86400000).toLocaleDateString()}</div>
+              <div className="text-xs font-black text-indigo-900">{formatDateBR(currentWeekStart)} - {formatDateBR(new Date(currentWeekStart.getTime() + 4*86400000))}</div>
             </div>
             <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2.5 hover:bg-white rounded-lg shadow-sm transition">▶</button>
           </div>
@@ -5709,7 +5658,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 onClick={handleEditFinalizedWeek}
                 className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
               >
-                <span>Editar</span> Editar Semana
+                Editar Semana
               </button>
             ) : null}
             <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0 || isWeekFinalized} hidden={hasFinalizedTasks} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
@@ -5826,7 +5775,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                               const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                               
                               return (
-                                <div key={idx} className="flex flex-col items-center w-6 group relative cursor-help" title={`${dayChar} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
+                                <div key={idx} className="flex flex-col items-center w-6 group relative cursor-help" title={`${dayChar} (${formatDateBR(dayDate)})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
                                   <span className="text-[13px] leading-none mb-0.5 select-none">{weatherEmoji || '\u00a0'}</span>
                                   <span className="text-[8px] font-black text-slate-400 leading-none">{dayChar}</span>
                                 </div>
@@ -7458,7 +7407,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       {(accessControl.logs || []).map((log, i) => (
                         <div key={i} className="flex justify-between items-center bg-slate-900/60 border border-slate-850 px-2.5 py-1.5 rounded-lg hover:border-slate-800 transition">
                           <span className="font-bold text-slate-300">👤 {log.username}</span>
-                          <span className="text-slate-500 font-medium">{new Date(log.timestamp).toLocaleString('pt-BR')}</span>
+                          <span className="text-slate-500 font-medium">{formatTimestamp(log.timestamp)}</span>
                         </div>
                       ))}
                       {(accessControl.logs || []).length === 0 && (
@@ -7568,7 +7517,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 const isDelayed = cPlan > progressW;
                 return (
                   <tr key={idx} className={`hover:bg-slate-50/80 transition ${t?.finalized ? 'bg-slate-50/50 text-slate-500' : ''}`}>
-                    <td className="p-2.5 border-r font-mono whitespace-nowrap">{t?.weekId}</td>
+                    <td className="p-2.5 border-r font-mono whitespace-nowrap">{formatDateBR(t?.weekId)}</td>
                     <td className="p-2.5 border-r font-bold whitespace-nowrap">{t?.floor}</td>
                     <td className="p-2.5 border-r uppercase font-medium">{t?.sectionId}</td>
                     <td className="p-2.5 border-r font-black text-slate-800 uppercase">{t?.activityName}</td>
@@ -7593,7 +7542,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                           const tempInfo = weather ? `${weather.conditions} (${weather.tempMin}°C - ${weather.tempMax}°C)` : (isWithinRange && weatherLoading ? 'Carregando...' : 'Sem dados');
                           
                           return (
-                            <div key={i} className="flex flex-col items-center group relative cursor-help" title={`${['Seg','Ter','Qua','Qui','Sex'][i]} (${dayDate.toLocaleDateString('pt-BR')})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
+                            <div key={i} className="flex flex-col items-center group relative cursor-help" title={`${['Seg','Ter','Qua','Qui','Sex'][i]} (${formatDateBR(dayDate)})${isWithinRange ? ` - Clima: ${tempInfo}` : ''}`}>
                               <span className="text-[10px] leading-none mb-0.5 select-none">{weatherEmoji || '\u00a0'}</span>
                               <span className={`w-6 h-6 rounded-full text-[8px] font-black flex items-center justify-center ${dw ? 'bg-slate-300 text-slate-700 shadow-inner border border-slate-400/20' : 'bg-slate-100 text-slate-300'}`}>
                                 {['S','T','Q','Q','S'][i]}
@@ -7905,7 +7854,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               preFilledProgress: input.progress,
               preFilledDelayReason: input.progress < (t.plannedThisWeek ?? 100) ? generalDelayReason : '',
               preFilledObservations: generalObservations,
-              preFilledAt: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR')
+              preFilledAt: formatTimestamp(new Date())
             };
           }
           return t;
@@ -7947,7 +7896,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto">✓</div>
               <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Relatório Enviado!</h2>
               <p className="text-xs text-slate-500 leading-relaxed">
-                As informações de progresso da equipe <strong>{urlTeamName}</strong> para a semana de <strong>{currentWeekStart.toLocaleDateString('pt-BR')}</strong> foram registradas com sucesso.
+                As informações de progresso da equipe <strong>{urlTeamName}</strong> para a semana de <strong>{formatDateBR(currentWeekStart)}</strong> foram registradas com sucesso.
               </p>
               <p className="text-[10px] text-slate-400">
                 O planejador responsável recebeu seus dados e irá validá-los no painel principal.
@@ -7967,7 +7916,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 <div className="text-center">
                   <div className="text-[8px] uppercase font-black text-slate-400">Semana de Trabalho</div>
                   <div className="text-xs font-black text-indigo-900">
-                    {currentWeekStart.toLocaleDateString('pt-BR')} - {weekEndDate.toLocaleDateString('pt-BR')}
+                    {formatDateBR(currentWeekStart)} - {formatDateBR(weekEndDate)}
                   </div>
                 </div>
                 <button onClick={() => setCurrentWeekStart(prev => addDays(prev, 7))} className="p-2 hover:bg-slate-100 rounded-lg transition text-slate-600">▶</button>

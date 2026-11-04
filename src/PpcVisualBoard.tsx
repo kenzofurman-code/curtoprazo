@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { calculatePpcByTeam, getPpcSignal } from './ppcDetail';
+import { formatDateBR } from './dates';
 
 type Props = {
   planning: any[];
@@ -23,7 +24,7 @@ export default function PpcVisualBoard({ planning, weeks, teams }: Props) {
           </tr>
           <tr>
             {weeks.map(week => <th scope="col" key={week} className="p-3 text-xs font-bold border border-slate-300 min-w-[160px]">
-              Semana de {week.split('-').reverse().join('/')}
+              Semana de {formatDateBR(week)}
             </th>)}
           </tr>
         </thead>
