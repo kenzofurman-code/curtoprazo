@@ -14,6 +14,7 @@ import { toLocalDateString, getTodayDateString, parseExcelDate, formatDateBR, fo
 import { requestWeeklyAnalysis } from './weeklyAnalysis';
 import { snapshotImport, pendingComparisonDiffs } from './importComparison';
 import type { ImportSnapshot } from './importComparison';
+import { finalizePlanningWeek, reopenPlanningWeek, ClosedNextWeekError } from './weekClosure';
 
 declare global {
   interface Window {
@@ -853,13 +854,14 @@ const syncPlanningAndPhysical = (currentPlanning, floorsData, cronogramaInicial 
       cumulativeProgress[key] = clampPercent(task.executedBeforeRaw ?? task.executedBefore ?? 0);
     }
     const exactExecutedBefore = cumulativeProgress[key];
-    const updatedTask = {
+    const updatedTask = task.finalized ? task : {
       ...task,
       executedBefore: roundDown25(exactExecutedBefore),
       executedBeforeRaw: exactExecutedBefore
     };
     cumulativeProgress[key] = Math.max(
       exactExecutedBefore,
+      task.finalized ? clampPercent(task.executedBeforeRaw ?? task.executedBefore ?? 0) : 0,
       clampPercent(task.progressThisWeek ?? 0)
     );
     return updatedTask;
@@ -1324,6 +1326,10 @@ const App = () => {
   // Dialogs/Modals
   const [confirmModal, setConfirmModal] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: null });
   const [finalizeModal, setFinalizeModal] = useState<any>({ isOpen: false, carryOverUnfinished: true });
+  const [isFinalizingWeek, setIsFinalizingWeek] = useState(false);
+  const finalizingWeekRef = useRef(false);
+  const weekClosureContextRef = useRef('');
+  weekClosureContextRef.current = `${urlUserId || selectedProjectId}||${toLocalDateString(currentWeekStart)}`;
   const [matrixSelection, setMatrixSelection] = useState({ isOpen: false, matrixId: '', type: 'macro' });
   const [matrixGroupModalOpen, setMatrixGroupModalOpen] = useState<boolean>(false);
   const [matrixTooltip, setMatrixTooltip] = useState<{
@@ -2676,7 +2682,8 @@ const App = () => {
 
   const currentWeekId = toLocalDateString(currentWeekStart);
   const weeklyTasks = useMemo(() => planning.filter(t => t.weekId === currentWeekId), [planning, currentWeekId]);
-  const isWeekBeingEdited = editingFinalizedWeekId === currentWeekId;
+  const isCorrectionWeek = (weekId) => editingFinalizedWeekId === weekId || ppcHistory.some(record => record.weekId === weekId && record.isReopened);
+  const isWeekBeingEdited = isCorrectionWeek(currentWeekId);
   const hasFinalizedTasks = weeklyTasks.some(t => t.finalized);
   const isWeekFinalized = weeklyTasks.length > 0 && weeklyTasks.every(t => t.finalized);
   const isTaskLocked = (task) => Boolean(task?.finalized && !isWeekBeingEdited);
@@ -3572,61 +3579,57 @@ const App = () => {
             itemId: task.itemId, itemName: itemAfter.name, progressAchieved: newVal - oldVal, 
             oldPercent: oldVal, newPercent: newVal, userId,
             weekId: task.weekId, taskId: task.id,
-            isCorrection: editingFinalizedWeekId === task.weekId,
-            correctedBy: editingFinalizedWeekId === task.weekId ? (plannerUsername || 'Sistema') : undefined
+            isCorrection: isCorrectionWeek(task.weekId),
+            correctedBy: isCorrectionWeek(task.weekId) ? (plannerUsername || 'Sistema') : undefined
           });
         }
       }
       setPlanning(recalculatedPlanning);
       setAllFloorsData(updatedFloorsData);
+      setHistory(updatedHistory);
       saveToDB(floors, updatedFloorsData, updatedHistory, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, ppcHistory, matrices);
     }, 0);
   };
 
   const handleFinalizeWeek = async (carryOver) => {
-    if (isWeekFinalized) return;
-    const nextWeekDate = new Date(currentWeekStart);
-    nextWeekDate.setDate(nextWeekDate.getDate() + 7);
-    const nextWeekId = toLocalDateString(nextWeekDate);
-
-    const activePlanned = weeklyTasks.filter(t => (t.plannedThisWeek ?? 100) > 0);
-    const activeCompleted = activePlanned.filter(t => (t.progressThisWeek ?? 0) >= (t.plannedThisWeek ?? 100));
-    const finalPpcVal = activePlanned.length > 0 ? (activeCompleted.length / activePlanned.length) * 100 : 0;
-
-    const updatedPpcHistory = [...ppcHistory.filter(h => h.weekId !== currentWeekId), {
-      weekId: currentWeekId, weekStart: toLocalDateString(currentWeekStart),
-      ppc: finalPpcVal, totalPlanned: activePlanned.length, completed: activeCompleted.length,
-      timestamp: new Date().toISOString()
-    }];
-
-    const carryOverTasks = [];
-    const updatedPlanning = planning.map(t => {
-      if (t.weekId === currentWeekId) {
-        const finalProgress = getTaskAccumulatedProgress(t);
-        if (carryOver && finalProgress < 100) {
-          const existsNextWeek = planning.some(p => p.weekId === nextWeekId && p.itemId === t.itemId && p.floor === t.floor);
-          if (!existsNextWeek) {
-            carryOverTasks.push({
-              ...t, id: crypto.randomUUID(), weekId: nextWeekId,
-              carriedFromWeekId: currentWeekId, carriedFromTaskId: t.id, isCarryOver: true,
-              executedBefore: finalProgress,
-              plannedThisWeek: Math.max(0, 100 - finalProgress), progressThisWeek: 0,
-              observations: '', isUnplannedDetected: false, delayReason: '', finalized: false
-            });
-          }
-        }
-        return { ...t, finalized: true };
-      }
-      return t;
-    });
-
-    const finalPlanning = [...updatedPlanning, ...carryOverTasks];
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(finalPlanning, cloneDeep(allFloorsData), cronogramaInicial);
-
-    await saveToDB(floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial, teams, delayReasons, updatedPpcHistory, matrices);
-    setCurrentWeekStart(nextWeekDate);
-    setFinalizeModal({ isOpen: false, carryOverUnfinished: true });
-    setNotification({ message: `Semana finalizada! PPC de ${finalPpcVal.toFixed(1)}% gravado.`, type: 'success' });
+    if (finalizingWeekRef.current || !isProjectHydrated || (isWeekFinalized && !isWeekBeingEdited)) return;
+    finalizingWeekRef.current = true;
+    setIsFinalizingWeek(true);
+    const context = weekClosureContextRef.current;
+    const nextWeekDate = addDays(currentWeekStart, 7);
+    try {
+      const closed = finalizePlanningWeek({
+        planning, ppcHistory, weekId: currentWeekId, nextWeekId: toLocalDateString(nextWeekDate),
+        carryOver, actor: plannerUsername || 'Sistema', now: new Date().toISOString(), makeId: () => crypto.randomUUID()
+      });
+      const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
+        closed.planning, cloneDeep(allFloorsData), cronogramaInicial
+      );
+      await saveToDB(
+        floors, updatedFloorsData, history, weights, recalculatedPlanning, cronogramaInicial,
+        teams, delayReasons, closed.ppcHistory, matrices, teamPhones, undefined,
+        projectCity, weatherApiKey, weatherCache, true
+      );
+      if (weekClosureContextRef.current !== context) return;
+      setPlanning(recalculatedPlanning);
+      setAllFloorsData(updatedFloorsData);
+      setPpcHistory(closed.ppcHistory);
+      setEditingFinalizedWeekId(null);
+      setSelectedTaskIds([]);
+      setFinalizeModal({ isOpen: false, carryOverUnfinished: true });
+      setCurrentWeekStart(nextWeekDate);
+      setNotification({ message: 'Semana finalizada! PPC de ' + closed.ppc.toFixed(1) + '% gravado e saldos atualizados.', type: 'success' });
+    } catch (error) {
+      if (weekClosureContextRef.current !== context) return;
+      const message = error instanceof ClosedNextWeekError
+        ? 'A semana de ' + formatDateBR(error.weekId) + ' está finalizada. Reabra essa semana antes de ajustar seus saldos.'
+        : 'Não foi possível finalizar a semana. As edições foram mantidas para tentar novamente.';
+      console.error('Erro ao finalizar a semana:', error);
+      setNotification({ message, type: 'error' });
+    } finally {
+      finalizingWeekRef.current = false;
+      setIsFinalizingWeek(false);
+    }
   };
 
   const handleUpdateTaskField = (taskId, field, value) => {
@@ -3640,111 +3643,44 @@ const App = () => {
   const handleOpenWeekForEditing = (weekId) => {
     const parsedWeek = parseISODateLocal(weekId);
     if (Number.isNaN(parsedWeek.getTime())) return;
-    setCurrentWeekStart(getWeekStartDate(parsedWeek));
-    setEditingFinalizedWeekId(weekId);
-    setSelectedTaskIds([]);
-    setActiveTab('planning');
+    triggerConfirm(
+      'Reabrir semana finalizada',
+      'A semana ficará aberta para corrigir medições, metas e observações ou adicionar atividades. O fechamento anterior será preservado no histórico. Finalize-a novamente para recalcular o PPC e atualizar os saldos.',
+      async () => {
+        if (finalizingWeekRef.current || !isProjectHydrated) return;
+        finalizingWeekRef.current = true;
+        setIsFinalizingWeek(true);
+        const context = weekClosureContextRef.current;
+        try {
+          const reopened = reopenPlanningWeek({ planning, ppcHistory, weekId, actor: plannerUsername || 'Sistema', now: new Date().toISOString() });
+          await saveToDB(
+            floors, allFloorsData, history, weights, reopened.planning, cronogramaInicial,
+            teams, delayReasons, reopened.ppcHistory, matrices, teamPhones, undefined,
+            projectCity, weatherApiKey, weatherCache, true
+          );
+          if (weekClosureContextRef.current !== context) return;
+          setPlanning(reopened.planning);
+          setPpcHistory(reopened.ppcHistory);
+          setCurrentWeekStart(getWeekStartDate(parsedWeek));
+          setEditingFinalizedWeekId(weekId);
+          setSelectedTaskIds([]);
+          setActiveTab('planning');
+          setNotification({ message: 'Semana reaberta. Finalize novamente ao concluir as alterações.', type: 'warning' });
+        } catch (error) {
+          if (weekClosureContextRef.current !== context) return;
+          console.error('Erro ao reabrir a semana:', error);
+          setNotification({ message: 'Não foi possível reabrir a semana. Tente novamente.', type: 'error' });
+        } finally {
+          finalizingWeekRef.current = false;
+          setIsFinalizingWeek(false);
+        }
+      }
+    );
   };
 
   const handleEditFinalizedWeek = () => {
     if (!hasFinalizedTasks) return;
-    triggerConfirm(
-      'Corrigir semana finalizada',
-      'A semana ficará editável para corrigir medições, metas e observações. Ao salvar, o avanço físico e o PPC serão recalculados.',
-      () => {
-        setEditingFinalizedWeekId(currentWeekId);
-        setSelectedTaskIds([]);
-        setNotification({ message: 'Semana aberta para correção.', type: 'warning' });
-      }
-    );
-  };
-
-  const handleSaveFinalizedWeekEdits = async () => {
-    if (!isWeekBeingEdited) return;
-
-    const weekTasksToSave = planning.filter(task => task.weekId === currentWeekId);
-    const activePlanned = weekTasksToSave.filter(task => (task.plannedThisWeek ?? 100) > 0);
-    const activeCompleted = activePlanned.filter(task => (task.progressThisWeek ?? 0) >= (task.plannedThisWeek ?? 100));
-    const updatedPpcHistory = [
-      ...ppcHistory.filter(record => record.weekId !== currentWeekId),
-      {
-        weekId: currentWeekId,
-        weekStart: currentWeekId,
-        ppc: activePlanned.length > 0 ? (activeCompleted.length / activePlanned.length) * 100 : 0,
-        totalPlanned: activePlanned.length,
-        completed: activeCompleted.length,
-        timestamp: new Date().toISOString(),
-        lastUpdatedBy: plannerUsername || 'Sistema'
-      }
-    ];
-
-    const nextWeekId = toLocalDateString(addDays(currentWeekStart, 7));
-    const sourceTasksById = new Map(weekTasksToSave.map(task => [task.id, task]));
-    const isCarryOverFromEditedWeek = (task) => (
-      task.weekId === nextWeekId && (
-        task.carriedFromWeekId === currentWeekId ||
-        (task.isCarryOver && !task.carriedFromWeekId) ||
-        String(task.observations || '').startsWith('Saldo de')
-      )
-    );
-    const getCarryOverSource = (task) => (
-      (task.carriedFromTaskId && sourceTasksById.get(task.carriedFromTaskId)) ||
-      weekTasksToSave.find(source => (
-        source.floor === task.floor &&
-        source.sectionId === task.sectionId &&
-        source.itemId === task.itemId
-      ))
-    );
-
-    const adjustedPlanning = planning
-      .filter(task => {
-        if (!isCarryOverFromEditedWeek(task)) return true;
-        const sourceTask = getCarryOverSource(task);
-        return !!sourceTask && getTaskAccumulatedProgress(sourceTask) < 100;
-      })
-      .map(task => {
-        if (!isCarryOverFromEditedWeek(task)) return task;
-        const sourceTask = getCarryOverSource(task);
-        const finalProgress = getTaskAccumulatedProgress(sourceTask);
-        return {
-          ...task,
-          executedBefore: finalProgress,
-          executedBeforeRaw: finalProgress,
-          plannedThisWeek: Math.max(0, 100 - finalProgress),
-          finalized: false,
-          lastUpdatedBy: plannerUsername || 'Sistema'
-        };
-      });
-
-    const { recalculatedPlanning, updatedFloorsData } = syncPlanningAndPhysical(
-      adjustedPlanning,
-      cloneDeep(allFloorsData),
-      cronogramaInicial
-    );
-
-    setPlanning(recalculatedPlanning);
-    setAllFloorsData(updatedFloorsData);
-    await saveToDB(
-      floors,
-      updatedFloorsData,
-      history,
-      weights,
-      recalculatedPlanning,
-      cronogramaInicial,
-      teams,
-      delayReasons,
-      updatedPpcHistory,
-      matrices,
-      teamPhones,
-      undefined,
-      projectCity,
-      weatherApiKey,
-      weatherCache,
-      true
-    );
-    setEditingFinalizedWeekId(null);
-    setSelectedTaskIds([]);
-    setNotification({ message: 'Correções salvas e histórico atualizado.', type: 'success' });
+    handleOpenWeekForEditing(currentWeekId);
   };
 
   const reopenBudgetDiffsFromTasks = (tasks) => {
@@ -4438,8 +4374,8 @@ const App = () => {
           userId,
           weekId: acceptedTask.weekId,
           taskId: acceptedTask.id,
-          isCorrection: editingFinalizedWeekId === acceptedTask.weekId,
-          correctedBy: editingFinalizedWeekId === acceptedTask.weekId ? (plannerUsername || 'Sistema') : undefined
+          isCorrection: isCorrectionWeek(acceptedTask.weekId),
+          correctedBy: isCorrectionWeek(acceptedTask.weekId) ? (plannerUsername || 'Sistema') : undefined
         });
       }
     }
@@ -4517,7 +4453,7 @@ const App = () => {
     .print-page{padding:8px 10px}
     table{font-size:8.5px}
     thead th{background:#1e293b!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    tr.finalized td{background:#f1f5f9!important;color:#94a3b8!important}
+    tr.finalized td{background:#f1f5f9!important;color:#000!important}
     tr.delayed td{background:#fff1f2!important}
     tr.ok td{background:#f0fdf4!important}
     .badge{-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -4561,7 +4497,7 @@ const App = () => {
   tbody tr{border-bottom:1px solid #e2e8f0}
   tbody tr:last-child{border-bottom:none}
   tbody tr:nth-child(even) td{background:#fafafa}
-  tbody tr.finalized td{background:#f8fafc!important;color:#94a3b8}
+  tbody tr.finalized td{background:#f8fafc!important;color:#000}
   tbody tr.delayed td{background:#fff7f7!important}
   tbody tr.ok td{background:#f0fdf4!important}
   tbody td.team-cell{background:var(--team-bg,#f1f5f9)!important;color:var(--team-fg,#1e293b)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -5721,14 +5657,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             >
               {isGeneratingDiffs ? 'Gerando...' : `Gerar por Dif. (${pendingBudgetDiffs.length})`}
             </button>
-            {isWeekBeingEdited ? (
-              <button
-                onClick={handleSaveFinalizedWeekEdits}
-                className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
-              >
-                <span>Editar</span> Salvar Correções
-              </button>
-            ) : hasFinalizedTasks ? (
+            {hasFinalizedTasks && !isWeekBeingEdited ? (
               <button
                 onClick={handleEditFinalizedWeek}
                 className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
@@ -5736,8 +5665,8 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 Editar Semana
               </button>
             ) : null}
-            <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0 || isWeekFinalized} hidden={hasFinalizedTasks} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
-              <span>🏁</span> Finalizar Semana
+            <button onClick={() => setFinalizeModal({ isOpen: true, carryOverUnfinished: true })} disabled={weeklyTasks.length === 0 || isFinalizingWeek || (isWeekFinalized && !isWeekBeingEdited)} hidden={hasFinalizedTasks && !isWeekBeingEdited} className="flex-1 md:flex-none px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
+              <span>🏁</span> {isWeekBeingEdited ? 'Finalizar Semana Novamente' : 'Finalizar Semana'}
             </button>
             <button onClick={() => { setDrawerSourceMode('cronograma'); setDrawerExpandedStep(1); setDrawerMacro(allPossibleMacros[0] || ''); setDrawerFloors([]); setDrawerSelectedServices([]); setDrawerWarning(''); setIsDrawerOpen(true); }} className="flex-1 md:flex-none px-4 py-3 bg-indigo-600 text-white font-black rounded-xl shadow hover:bg-indigo-700 transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2">
               <span>➕</span> Adicionar Atividades
@@ -5746,6 +5675,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
         </div>
 
         {/* Planning Filter Bar */}
+        {isWeekBeingEdited && <p className="text-xs font-bold text-amber-700">Semana reaberta para edição. Finalize novamente para fechar as atividades e atualizar os saldos.</p>}
         <p className="text-xs text-slate-500 break-words">
           {currentBudgetImport?.previousVersionId
             ? <>Comparação das últimas importações: <strong>{previousBudgetImport?.fileName}</strong> → <strong>{currentBudgetImport.fileName}</strong>. As atividades serão lançadas na semana selecionada.</>
@@ -8680,17 +8610,17 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
       {finalizeModal.isOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95">
-            <div className="flex items-center space-x-2 text-emerald-600 mb-3"><h3 className="font-black text-sm uppercase tracking-wider">Finalizar Semana de Trabalho</h3></div>
+            <div className="flex items-center space-x-2 text-emerald-600 mb-3"><h3 className="font-black text-sm uppercase tracking-wider">{isWeekBeingEdited ? 'Finalizar Semana Novamente' : 'Finalizar Semana de Trabalho'}</h3></div>
             <p className="text-xs text-slate-600 mb-4 leading-relaxed">Você está concluindo as atividades planejadas para a semana de <strong className="text-indigo-900">{formatDateBR(currentWeekStart)}</strong>. Isso salvará o PPC finalizado de <strong className="text-emerald-600">{currentWeekPpcStats.percent.toFixed(1)}%</strong> diretamente no banco de dados.</p>
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mb-6">
               <label className="flex items-start space-x-3 cursor-pointer">
-                <input type="checkbox" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 mt-0.5" checked={finalizeModal.carryOverUnfinished} onChange={(e) => setFinalizeModal({ ...finalizeModal, carryOverUnfinished: e.target.checked })} />
-                <div className="text-xs"><p className="font-bold text-slate-800">Reprogramar saldos não concluídos</p><p className="text-slate-500 mt-0.5 leading-tight">Atividades com avanço parcial serão automaticamente duplicadas para a próxima semana.</p></div>
+                <input type="checkbox" disabled={isFinalizingWeek} className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 mt-0.5" checked={finalizeModal.carryOverUnfinished} onChange={(e) => setFinalizeModal({ ...finalizeModal, carryOverUnfinished: e.target.checked })} />
+                <div className="text-xs"><p className="font-bold text-slate-800">Reprogramar saldos não concluídos</p><p className="text-slate-500 mt-0.5 leading-tight">Cria as atividades pendentes que faltam na próxima semana. Saldos existentes serão ajustados preservando as informações já lançadas.</p></div>
               </label>
             </div>
             <div className="flex justify-end space-x-2">
-              <button onClick={() => setFinalizeModal({ ...finalizeModal, isOpen: false })} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-lg transition">Voltar</button>
-              <button onClick={() => handleFinalizeWeek(finalizeModal.carryOverUnfinished)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition">Confirmar e Encerrar</button>
+              <button disabled={isFinalizingWeek} onClick={() => setFinalizeModal({ ...finalizeModal, isOpen: false })} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-lg transition">Voltar</button>
+              <button disabled={isFinalizingWeek} onClick={() => handleFinalizeWeek(finalizeModal.carryOverUnfinished)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition">{isFinalizingWeek ? 'Finalizando...' : 'Confirmar e Encerrar'}</button>
             </div>
           </div>
         </div>
