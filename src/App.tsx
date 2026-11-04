@@ -11,6 +11,7 @@ import { ppcPeriodWeeks, calculatePpcDetail, getPpcSignal, teamsWithPlannedActiv
 import PpcVisualBoard from './PpcVisualBoard';
 import type { PpcPeriod } from './ppcDetail';
 import { toLocalDateString, getTodayDateString, parseExcelDate, formatDateBR, formatTimestamp } from './dates';
+import { requestWeeklyAnalysis } from './weeklyAnalysis';
 
 declare global {
   interface Window {
@@ -1177,6 +1178,8 @@ const App = () => {
   const [cronoProgressFilter, setCronoProgressFilter] = useState<string>('');
   const [cronoSortKey, setCronoSortKey] = useState<string>('');
   const [cronoSortDir, setCronoSortDir] = useState<'asc'|'desc'>('asc');
+  const [cronoPage, setCronoPage] = useState(1);
+  const cronoScrollRef = useRef<HTMLDivElement>(null);
 
   // Filtros Planejamento Semanal
   const [planningSearch, setPlanningSearch] = useState<string>('');
@@ -1251,6 +1254,20 @@ const App = () => {
   const [aiLoading, setAiLoading] = useState<boolean>(false);
   const [aiAnalyzedWeekId, setAiAnalyzedWeekId] = useState<string>('');
   const [aiAnalysesHistory, setAiAnalysesHistory] = useState<Record<string, string>>({});
+  const aiContextKey = `${urlUserId || selectedProjectId}||${toLocalDateString(currentWeekStart)}`;
+  const aiRequestRef = useRef<{ controller: AbortController; contextKey: string } | null>(null);
+
+  useEffect(() => {
+    setAiAnalysis('');
+    setAiAnalyzedWeekId('');
+    setAiLoading(false);
+    return () => {
+      if (aiRequestRef.current?.contextKey === aiContextKey) {
+        aiRequestRef.current.controller.abort();
+        aiRequestRef.current = null;
+      }
+    };
+  }, [aiContextKey]);
 
   useEffect(() => {
     setSelectedDashboardMacros([]);
@@ -1699,6 +1716,7 @@ const App = () => {
     hydratedProjectIdsRef.current.delete(targetId);
     setIsProjectHydrated(false);
     setProjectDelayReasons([]);
+    setAiAnalysesHistory({});
     setLoading(true);
     const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
     const cronoRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, `${targetId}_crono`);
@@ -2264,14 +2282,21 @@ const App = () => {
   };
 
 
-  const getMacroTitle = (sId) => {
-    for (const floor of Object.keys(allFloorsData)) {
-      if (allFloorsData[floor]?.[sId]?.title) return allFloorsData[floor][sId].title;
-    }
-    const match = cronogramaInicial.find(item => slugify(item.macro) === sId);
-    if (match) return match.macro.toUpperCase();
-    return sId;
-  };
+  const macroTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    Object.values(allFloorsData).forEach((floorData: any) => {
+      Object.entries(floorData || {}).forEach(([id, section]: [string, any]) => {
+        if (section?.title && !titles.has(id)) titles.set(id, section.title);
+      });
+    });
+    cronogramaInicial.forEach(item => {
+      if (!item?.macro) return;
+      const id = slugify(item.macro);
+      if (!titles.has(id)) titles.set(id, item.macro.toUpperCase());
+    });
+    return titles;
+  }, [allFloorsData, cronogramaInicial]);
+  const getMacroTitle = (sId) => macroTitles.get(sId) || sId;
 
   const allPossibleMacros = useMemo(() => {
     const macros = new Set<string>();
@@ -2294,6 +2319,7 @@ const App = () => {
 
   const previousWeekIdForDrawer = toLocalDateString(addDays(currentWeekStart, -7));
   const drawerCandidateActivities = useMemo(() => {
+    if (!isDrawerOpen || !isProjectHydrated) return [];
     const isParentCronoItem = (item) => {
       if (!item) return false;
       if (item.isParent !== undefined) return !!item.isParent;
@@ -2350,7 +2376,7 @@ const App = () => {
       const candidates = [item.id, item.originalId].filter(Boolean).map(String);
       return candidates.some(id => successorIds.has(id)) || successorMacroKeys.has(`${item.floor}||${slugify(item.macro)}`);
     });
-  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer]);
+  }, [cronogramaInicial, allFloorsData, drawerSourceMode, planning, previousWeekIdForDrawer, isDrawerOpen, isProjectHydrated]);
 
   const drawerMacroOptions = useMemo(() => (
     Array.from(new Set(drawerCandidateActivities.map(item => slugify(item.macro)).filter(Boolean)))
@@ -2373,16 +2399,27 @@ const App = () => {
     return getActivityProgressFromFloors(c, allFloorsData);
   };
 
+  const historyByActivity = useMemo(() => {
+    const byItem = new Map<any, Map<any, any[]>>();
+    history.forEach(record => {
+      if (!record) return;
+      if (!byItem.has(record.itemId)) byItem.set(record.itemId, new Map());
+      const byFloor = byItem.get(record.itemId)!;
+      if (!byFloor.has(record.floor)) byFloor.set(record.floor, []);
+      byFloor.get(record.floor)!.push(record);
+    });
+    return byItem;
+  }, [history]);
+
   const getActivityProgressAtDate = (c: any, maxDate: Date) => {
     if (!c) return 0;
     let progress = getActivityActualProgress(c);
     
-    (history || []).forEach(record => {
-      if (record && record.itemId === c.id && record.floor === c.floor) {
-        const recordDate = new Date(record.timestamp);
-        if (!isNaN(recordDate.getTime()) && recordDate > maxDate) {
-          progress -= record.progressAchieved;
-        }
+    const records = historyByActivity.get(c.id)?.get(c.floor) || [];
+    records.forEach(record => {
+      const recordDate = new Date(record.timestamp);
+      if (!isNaN(recordDate.getTime()) && recordDate > maxDate) {
+        progress -= record.progressAchieved;
       }
     });
     
@@ -2546,6 +2583,11 @@ const App = () => {
 
 
 
+  const dashboardOverallActual = useMemo(() => {
+    if (activeTab !== 'dashboard' || !isProjectHydrated) return 0;
+    return getCumulativeProgressStats(getProjectActivities()).realizado;
+  }, [cronogramaInicial, allFloorsData, historyByActivity, currentWeekStart, activeTab, isProjectHydrated]);
+
   const delayStats = useMemo(() => {
     const counts: Record<string, number> = {};
     let total = 0;
@@ -2595,7 +2637,7 @@ const App = () => {
 
 
   const currentWeekId = toLocalDateString(currentWeekStart);
-  const weeklyTasks = planning.filter(t => t.weekId === currentWeekId);
+  const weeklyTasks = useMemo(() => planning.filter(t => t.weekId === currentWeekId), [planning, currentWeekId]);
   const isWeekBeingEdited = editingFinalizedWeekId === currentWeekId;
   const hasFinalizedTasks = weeklyTasks.some(t => t.finalized);
   const isWeekFinalized = weeklyTasks.length > 0 && weeklyTasks.every(t => t.finalized);
@@ -2649,10 +2691,14 @@ const App = () => {
     }).map(item => ({ id: item, title: matrixSelection.type === 'macro' ? getMacroTitle(item) : item }));
   }, [matrixSelection, matrices, allPossibleMacros, floors]);
 
-  const getItemCost = (itemId: string) => {
-    const match = cronogramaInicial.find(c => c && c.id === itemId);
-    return match && typeof match.cost === 'number' ? match.cost : 0;
-  };
+  const itemCosts = useMemo(() => {
+    const costs = new Map<string, number>();
+    cronogramaInicial.forEach(item => {
+      if (item && !costs.has(item.id)) costs.set(item.id, typeof item.cost === 'number' ? item.cost : 0);
+    });
+    return costs;
+  }, [cronogramaInicial]);
+  const getItemCost = (itemId: string) => itemCosts.get(itemId) ?? 0;
 
   const getPackageProgress = (floor: string, macroId: string, itemsList: any[]) => {
     if (!itemsList || itemsList.length === 0) return 0;
@@ -2678,6 +2724,7 @@ const App = () => {
   };
 
   const macroEvolutionHistory = useMemo(() => {
+    if (activeTab !== 'historico-andamento' || !isProjectHydrated) return [];
     const map: Record<string, any> = {};
     
     // Initialize map with all packages that currently have progress > 0
@@ -2827,7 +2874,7 @@ const App = () => {
     });
 
     return result;
-  }, [history, allFloorsData]);
+  }, [history, allFloorsData, itemCosts, macroTitles, activeTab, isProjectHydrated]);
 
   // --- Memória do Detalhamento PPC ---
   const uniqueContractors = useMemo(() => {
@@ -3061,6 +3108,17 @@ const App = () => {
     }
     return items;
   }, [cronogramaInicial, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
+
+  const cronoPageCount = Math.max(1, Math.ceil(filteredCronograma.length / 100));
+  const currentCronoPage = Math.min(cronoPage, cronoPageCount);
+  const cronoPageStart = (currentCronoPage - 1) * 100;
+  const pagedCronograma = filteredCronograma.slice(cronoPageStart, cronoPageStart + 100);
+  useEffect(() => {
+    setCronoPage(1);
+  }, [selectedProjectId, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
+  useEffect(() => {
+    if (cronoScrollRef.current) cronoScrollRef.current.scrollTop = 0;
+  }, [currentCronoPage, cronoSearch, cronoFloorFilter, cronoMacroFilter, cronoProgressFilter, cronoSortKey, cronoSortDir]);
 
   const cronogramaOrderMap = useMemo(() => {
     const groupOrder = new Map<string, number>();
@@ -5010,6 +5068,7 @@ rt();
 
   // --- Análise por IA ---
   const handleAIAnalysis = async () => {
+    if (activeTab !== 'dashboard' || isTeamMode || !isProjectHydrated || aiRequestRef.current) return;
     const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
     if (!GEMINI_API_KEY) {
       setAiAnalysis('⚠️ **Chave de API não configurada.**\n\nPara usar a análise por IA, adicione no arquivo `.env.local`:\n```\nVITE_GEMINI_API_KEY=sua_chave_aqui\n```\nObtenha sua chave gratuita em **aistudio.google.com** → "Get API key".');
@@ -5026,6 +5085,9 @@ rt();
       return;
     }
 
+    const request = { controller: new AbortController(), contextKey: aiContextKey };
+    aiRequestRef.current = request;
+    const analysisProjectId = urlUserId || selectedProjectId;
     setAiLoading(true);
     setAiAnalysis('');
     setAiAnalyzedWeekId(weekId);
@@ -5096,83 +5158,35 @@ Gere um relatório com as seguintes seções:
 
 Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máximo de 500 palavras.`;
 
-    let text = '';
-    let lastError: any = null;
-    const modelsToTry = [
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash-lite',
-      'gemini-3.5-flash',
-      'gemini-2.0-flash',
-      'gemini-2.5-flash',
-      'gemini-flash-latest'
-    ];
-
     try {
-      for (const model of modelsToTry) {
-        try {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
-              })
-            }
-          );
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err?.error?.message || `Erro HTTP ${response.status}`);
-          }
-          const data = await response.json();
-          text = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Nenhuma resposta recebida.';
-          if (text) {
-            lastError = null;
-            break;
-          }
-        } catch (e: any) {
-          lastError = e;
-          console.warn(`Falha ao chamar o modelo ${model}:`, e.message);
-        }
-      }
-
-      if (lastError) {
-        throw lastError;
-      }
-
+      const text = await requestWeeklyAnalysis(GEMINI_API_KEY, prompt, request.controller.signal);
+      if (aiRequestRef.current !== request) return;
       setAiAnalysis(text);
-      if (isFinalized && db && (urlUserId || userId)) {
-        const targetId = urlUserId ? urlUserId : 'projeto_principal';
+      if (isFinalized && db && analysisProjectId) {
         const newCache = { ...aiAnalysesHistory, [weekId]: text };
         setAiAnalysesHistory(newCache);
-        const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, targetId);
+        const docRef = doc(db, `artifacts/${appId}/public/data/project_measurements`, analysisProjectId);
         updateDoc(docRef, { aiAnalyses: compressStringUnicode(JSON.stringify(newCache)) }).catch(console.error);
       }
     } catch (e: any) {
-      setAiAnalysis(`❌ **Erro ao chamar a API:** ${e.message}\n\nVerifique sua chave de API em \`VITE_GEMINI_API_KEY\` no arquivo \`.env.local\`.`);
+      if (aiRequestRef.current === request && !request.controller.signal.aborted) {
+        setAiAnalysis(`Não foi possível gerar a análise: ${e.message}`);
+      }
     } finally {
-      setAiLoading(false);
+      if (aiRequestRef.current === request) {
+        aiRequestRef.current = null;
+        setAiLoading(false);
+      }
     }
   };
 
   useEffect(() => {
+    if (!isProjectHydrated) return;
     const weekId = toLocalDateString(currentWeekStart);
     if (aiAnalyzedWeekId === weekId) return;
-
-    const hasTasks = planning.some(t => t.weekId === weekId);
-    
-    if (aiAnalysesHistory[weekId]) {
-      setAiAnalysis(aiAnalysesHistory[weekId]);
-      setAiAnalyzedWeekId(weekId);
-      setAiLoading(false);
-    } else if (hasTasks && !aiLoading) {
-      handleAIAnalysis();
-    } else if (!hasTasks) {
-      setAiAnalysis('');
-      setAiAnalyzedWeekId(weekId);
-    }
-  }, [currentWeekStart, planning, aiAnalysesHistory, aiLoading, aiAnalyzedWeekId]);
+    setAiAnalysis(aiAnalysesHistory[weekId] || '');
+    setAiAnalyzedWeekId(weekId);
+  }, [currentWeekStart, aiAnalysesHistory, aiAnalyzedWeekId, isProjectHydrated, selectedProjectId]);
 
   // --- Secções de Renderização Isoladas (Para evitar falhas do compilador) ---
   
@@ -5183,17 +5197,11 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     ];
     const analysisMonth = MONTHS_PT[currentWeekStart.getMonth()];
 
-    const overallActual = (() => {
-      const activities = getProjectActivities();
-      const stats = getCumulativeProgressStats(activities);
-      return stats.realizado;
-    })();
-
     return (
       <div className="space-y-6 animate-in fade-in duration-300">
         {/* Top Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-          <StatCard title="Avanço Físico Real" value={`${overallActual.toFixed(2)}%`} color="bg-emerald-600" />
+          <StatCard title="Avanço Físico Real" value={`${dashboardOverallActual.toFixed(2)}%`} color="bg-emerald-600" />
           <StatCard title="Meta Semanal Ativa" value={`${weeklyTasks.length} Serviços`} color="bg-indigo-600" />
           <StatCard title="Média de PPC" value={ppcHistory.length > 0 ? `${(ppcHistory.reduce((a, b) => a + b.ppc, 0) / ppcHistory.length).toFixed(1)}%` : '0.0%'} color="bg-cyan-600" />
           <StatCard title="Equipes Registradas" value={`${teams.length} Grupos`} color="bg-slate-800" />
@@ -5232,7 +5240,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                   <div>
                     <h3 className="text-sm font-black text-slate-800 tracking-tight uppercase">Análise da semana</h3>
                     <p className="text-[10px] text-slate-500 mt-0.5 font-bold">
-                      Gerada automaticamente
+                      Gerada ao solicitar a análise
                     </p>
                   </div>
                 </div>
@@ -5242,19 +5250,19 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       onClick={() => handleAIAnalysis()}
                       className="text-[9px] font-black uppercase text-indigo-700 hover:text-white bg-indigo-50 hover:bg-indigo-600 border border-indigo-200 hover:border-indigo-600 px-3 py-1.5 rounded-lg transition duration-200 flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
                     >
-                      🔄 Reavaliar semana
+                      {aiAnalysis ? 'Reavaliar semana' : 'Gerar análise'}
                     </button>
                   )}
                   {(() => {
                     const weekId = toLocalDateString(currentWeekStart);
                     const isFinalized = planning.some(t => t.weekId === weekId && t.finalized);
-                    return isFinalized ? (
+                    return isFinalized && aiAnalysesHistory[weekId] ? (
                       <span className="text-[9px] font-black uppercase text-emerald-700 bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1">
                         <span>🔒</span> Salvo no histórico
                       </span>
                     ) : (
                       <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-100 border border-amber-200 px-2.5 py-1.5 rounded-lg flex items-center gap-1">
-                        <span>⚡</span> Análise em tempo real
+                        <span>⚡</span> Sob demanda
                       </span>
                     );
                   })()}
@@ -5276,7 +5284,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                 {!aiLoading && !aiAnalysis && (
                   <div className="flex items-center justify-center py-8 text-center">
                     <p className="text-slate-400 text-xs font-bold uppercase tracking-wider italic">
-                      Nenhum dado na semana para analisar.
+                      Clique em “Gerar análise” para analisar os dados da semana.
                     </p>
                   </div>
                 )}
@@ -5478,7 +5486,15 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
           </div>
         </div>
 
-        <div className="overflow-auto rounded-xl border border-slate-200 max-h-[520px]">
+        <nav aria-label="Páginas do cronograma" className="flex flex-wrap items-center justify-between gap-3 mb-3 text-xs text-slate-600">
+          <span aria-live="polite">{filteredCronograma.length ? cronoPageStart + 1 : 0}–{Math.min(cronoPageStart + 100, filteredCronograma.length)} de {filteredCronograma.length} atividades</span>
+          <div className="flex items-center gap-3">
+            <button type="button" disabled={currentCronoPage <= 1} onClick={() => setCronoPage(currentCronoPage - 1)} className="px-3 py-2 rounded-lg border border-slate-200 font-bold disabled:opacity-40">Anterior</button>
+            <span>Página {currentCronoPage} de {cronoPageCount}</span>
+            <button type="button" disabled={currentCronoPage >= cronoPageCount} onClick={() => setCronoPage(currentCronoPage + 1)} className="px-3 py-2 rounded-lg border border-slate-200 font-bold disabled:opacity-40">Próxima</button>
+          </div>
+        </nav>
+        <div ref={cronoScrollRef} className="overflow-auto rounded-xl border border-slate-200 max-h-[520px]">
           <table className="min-w-[1520px] w-full text-xs text-left">
             <thead className="bg-slate-800 text-white uppercase text-[9px] tracking-wider sticky top-0 z-10">
               <tr>
@@ -5522,7 +5538,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
-              {filteredCronograma.map((item) => {
+              {pagedCronograma.map((item) => {
                 const progressValue = roundPercentValue(item.progress ?? 0);
                 const activityKey = `${selectedProjectId}||${item.floor}||${item.id}`;
                 return (
