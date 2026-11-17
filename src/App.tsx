@@ -3350,7 +3350,7 @@ const App = () => {
           plannedThisWeek: 0,
           progressThisWeek: importedProgress,
           finishDate: diff.end || cronoMatch?.end || toLocalDateString(new Date()),
-          dailyWork: [0, 0, 0, 0, 0],
+          dailyWork: [1, 1, 1, 1, 1],
           observations: 'Fora do planejado: avanco detectado por diferenca entre versoes de orcamento',
           delayReason: '',
           finalized: false,
@@ -3459,7 +3459,7 @@ const App = () => {
             activityName: match.service, responsible: drawerResponsible || match.responsible || (teams[0] || 'Equipe Geral'),
             isParent: !!match.isParent,
             weight: 100, executedBefore: roundDown25(match.progress || 0), executedBeforeRaw: roundPercentValue(match.progress || 0), plannedThisWeek: 100, progressThisWeek: 0,
-            finishDate: match.end, dailyWork: [0, 0, 0, 0, 0], observations: '', delayReason: '', finalized: false
+            finishDate: match.end, dailyWork: [1, 1, 1, 1, 1], observations: '', delayReason: '', finalized: false
           });
         }
       }
@@ -3508,7 +3508,7 @@ const App = () => {
       plannedThisWeek: 100,
       progressThisWeek: 0,
       finishDate: toLocalDateString(new Date()),
-      dailyWork: [0, 0, 0, 0, 0],
+      dailyWork: [1, 1, 1, 1, 1],
       observations: '',
       delayReason: '',
       finalized: false,
