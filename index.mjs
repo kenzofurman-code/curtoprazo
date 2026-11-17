@@ -142,7 +142,11 @@ const servidor = http.createServer((req, res) => {
   if (!rota) return falha(res, 404, 'Não encontrado.');
 
   if (rota === '/saude') {
-    const ok = fs.existsSync(indexFile) && lerConfigFirebase() !== null && segredo() !== '';
+    const buildPronto = fs.existsSync(indexFile);
+    const firebasePronto = lerConfigFirebase() !== null;
+    const identidadePronta = segredo() !== '';
+    const ok = buildPronto && firebasePronto && identidadePronta;
+    if (!ok) console.error(`Saúde pendente: build=${buildPronto}, firebase=${firebasePronto}, identidade=${identidadePronta}`);
     return falha(res, ok ? 200 : 503, ok ? 'ok' : 'Configure FIREBASE_CONFIG e gere o build antes de publicar.');
   }
 
