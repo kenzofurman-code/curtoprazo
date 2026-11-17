@@ -41,6 +41,24 @@ test('primeira importação cria referência sem herdar pendências antigas', ()
   assert.equal(result.snapshot.items[0].progress, 50);
 });
 
+test('lê o realizado no cabeçalho da linha 32 e habilita diferença para avanço abaixo de 1%', () => {
+  const parser = evaluate(['clampPercent', 'parsePercent', 'normalizeHeaderText', 'findGroupedColumnIndex', 'findScheduleHeaderRow', 'findScheduleProgressColumn'].map(declaration).join('\n'), {},
+    '({findScheduleHeaderRow,findScheduleProgressColumn,parsePercent})');
+  const rows = Array.from({ length: 32 }, () => []);
+  rows[0] = ['Relatório de Serviço'];
+  rows[30] = ['', '', 'Última Medição do Projeto (%)', '', 'Avanço físico (%)'];
+  rows[31] = ['Pacote de trabalho', 'Serviço', 'Previsto', 'Realizado', 'Previsto', 'Realizado'];
+  assert.equal(parser.findScheduleHeaderRow(rows), 31);
+  assert.equal(parser.findScheduleProgressColumn(rows[31], rows[30]), 5);
+  assert.equal(parser.findScheduleProgressColumn(['Previsto', 'Realizado'], []), 1);
+  assert.equal(parser.findScheduleProgressColumn(['Realizado', 'Realizado'], []), -1);
+  const first = importVersion([item('a', parser.parsePercent('0,5%'))]);
+  const second = importVersion([item('a', parser.parsePercent(0.0075, true))], first.snapshot, first.versions);
+  const pending = pendingComparisonDiffs(second.diffs, second.versions);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].delta, 0.25);
+});
+
 test('compara os arquivos originais mesmo após editar o andamento no planejamento', () => {
   const original = [item('a', 50), item('b', 25)];
   const first = importVersion(original);

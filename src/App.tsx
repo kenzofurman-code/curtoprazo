@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
+import FirestoreBackup from './FirestoreBackup';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, writeBatch, runTransaction } from 'firebase/firestore';
 import { preparePayload, resolvePayload, MAX_SAVE_BYTES } from './chunkedPayload';
@@ -233,9 +234,9 @@ const clampPercent = (value) => {
   return Math.max(0, Math.min(100, n));
 };
 
-const parsePercent = (value) => {
+const parsePercent = (value, fraction = false) => {
   if (value === undefined || value === null || value === '') return 0;
-  if (typeof value === 'number') return clampPercent(value <= 1 ? value * 100 : value);
+  if (typeof value === 'number') return clampPercent(fraction ? value * 100 : value);
   let normalized = String(value).replace('%', '').replace(/\s/g, '').trim();
   normalized = normalized.replace(/[^\d,.-]/g, '');
   const lastComma = normalized.lastIndexOf(',');
@@ -251,7 +252,7 @@ const parsePercent = (value) => {
   }
   const n = Number(normalized);
   if (!Number.isFinite(n)) return 0;
-  return clampPercent(n <= 1 ? n * 100 : n);
+  return clampPercent(fraction && !String(value).includes('%') ? n * 100 : n);
 };
 
 const normalizeHeaderText = (value) => String(value || '')
@@ -288,6 +289,23 @@ const findGroupedColumnIndex = (headerRow, groupRow, groupCandidates, headerCand
   }
 
   return fallback;
+};
+
+const findScheduleHeaderRow = (rows: any[][]) => rows.findIndex(row => {
+  const labels = row.map(normalizeHeaderText);
+  return labels.some(label => ['pacote de trabalho/tarefas', 'pacote de trabalho', 'macroatividade'].includes(label))
+    && labels.some(label => ['servico', 'lote', 'local do servico', 'data de inicio'].includes(label));
+});
+
+const findScheduleProgressColumn = (headerRow, groupRow) => {
+  const realized = ['Realizado', 'Realizado (%)', '% Realizado'];
+  for (const group of ['Avanço físico', 'Última Medição do Projeto']) {
+    const index = findGroupedColumnIndex(headerRow, groupRow, [group + ' (%)'], realized);
+    if (index !== -1) return index;
+  }
+  const matches = headerRow.flatMap((header, index) =>
+    realized.some(label => normalizeHeaderText(label) === normalizeHeaderText(header)) ? [index] : []);
+  return matches.length === 1 ? matches[0] : -1;
 };
 
 const roundPercentValue = (value) => {
@@ -3911,10 +3929,10 @@ const App = () => {
         try {
           const XLSX = await import('xlsx');
           const bstr = evt.target.result as string;
-          const workbook = XLSX.read(bstr, { type: 'binary' });
+          const workbook = XLSX.read(bstr, { type: 'binary', cellNF: true });
           const wsname = workbook.SheetNames[0];
           const ws = workbook.Sheets[wsname];
-          const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+          const data = XLSX.utils.sheet_to_json(ws, { header: 1, range: 0, blankrows: true }) as any[][];
           
           if (data.length < 2) {
             setNotification({ message: "Planilha sem linhas suficientes.", type: "error" });
@@ -3923,15 +3941,8 @@ const App = () => {
             return;
           }
 
-          let headerIndex = 3; 
-          for (let i = 0; i < Math.min(10, data.length); i++) {
-            const rowStr = (data[i] || []).join('').toLowerCase();
-            // Exclude 'id' to prevent matching rows above header containing 'unidade' (which contains 'id')
-            if (rowStr.includes('pacote de trabalho') || rowStr.includes('serviço') || rowStr.includes('macroatividade')) {
-              headerIndex = i; 
-              break;
-            }
-          }
+          const headerIndex = findScheduleHeaderRow(data);
+          if (headerIndex === -1) throw new Error('Não encontrei o cabeçalho do cronograma. Confira os nomes das colunas de atividade e local.');
 
           if (data.length <= headerIndex + 1) {
             setNotification({ message: "Não há dados abaixo da linha de cabeçalho.", type: "error" });
@@ -3942,12 +3953,8 @@ const App = () => {
 
           const headerRow = data[headerIndex].map(h => String(h || '').trim());
           const groupRow = headerIndex > 0 ? data[headerIndex - 1].map(h => String(h || '').trim()) : [];
-          const progressColumn = findGroupedColumnIndex(
-            headerRow,
-            groupRow,
-            ['Avanço físico (%)', 'Avanco fisico (%)'],
-            ['Realizado']
-          );
+          const progressColumn = findScheduleProgressColumn(headerRow, groupRow);
+          if (progressColumn === -1) throw new Error('Não consegui identificar uma coluna única de Realizado. Use Realizado no grupo Avanço físico (%) ou deixe uma única coluna Realizado.');
           
           const colIdx = {
             id: findColumnIndex(headerRow, ['ID', 'Identificador']),
@@ -3962,9 +3969,7 @@ const App = () => {
             responsible: findColumnIndex(headerRow, ['Responsáveis', 'Responsaveis', 'Responsável', 'Responsavel'], 14),
             predecessors: findColumnIndex(headerRow, ['Predecessoras', 'Predecessores', 'Predecessora', 'Predecessor']),
             successors: findColumnIndex(headerRow, ['Sucessoras', 'Sucessores', 'Sucessora', 'Sucessor']),
-            progress: progressColumn !== -1
-              ? progressColumn
-              : findGroupedColumnIndex(headerRow, groupRow, ['Última Medição do Projeto (%)', 'Ultima Medicao do Projeto (%)'], ['Realizado'], 27)
+            progress: progressColumn
           };
 
           // Two-pass import: 1st pass collects all detail rows (with explicit service names).
@@ -3976,7 +3981,7 @@ const App = () => {
           const importedTeams = new Set<any>([...teamsRef.current]);
           const importedFloors = new Set<any>([...floors]);
 
-          const processRow = (row: any) => {
+          const processRow = (row: any, rowIndex: number) => {
             if (!row || row.length === 0) return;
 
             const rawFloor = colIdx.floor !== -1 && row[colIdx.floor] !== undefined ? String(row[colIdx.floor]).trim() : 'Térreo';
@@ -4006,7 +4011,8 @@ const App = () => {
             const rawSuccessors = colIdx.successors !== -1 && row[colIdx.successors] !== undefined ? parseDependencyList(row[colIdx.successors]) : [];
             let rawProgress = 0;
             if (colIdx.progress !== -1 && row[colIdx.progress] !== undefined) {
-              rawProgress = parsePercent(row[colIdx.progress]);
+              const cell = ws[XLSX.utils.encode_cell({ r: rowIndex, c: colIdx.progress })];
+              rawProgress = parsePercent(row[colIdx.progress], cell?.t === 'n' && cell.z?.includes('%'));
             }
 
             if (rawResp && rawResp !== 'UNDEFINED' && rawResp !== '' && rawResp !== '-') importedTeams.add(rawResp);
@@ -4032,7 +4038,7 @@ const App = () => {
           };
 
           for (let i = headerIndex + 1; i < data.length; i++) {
-            processRow(data[i]);
+            processRow(data[i], i);
             if ((i - headerIndex) % 500 === 0) {
               setImportStatus(`Analisando planilha: ${i - headerIndex} de ${data.length - headerIndex - 1} linhas...`);
               await new Promise(resolve => setTimeout(resolve, 0));
@@ -4197,7 +4203,11 @@ const App = () => {
               budgetImportVersionsRef.current = updatedBudgetImportVersions;
               budgetImportSnapshotRef.current = updatedImportSnapshot;
               budgetDiffsRef.current = updatedBudgetDiffs;
-              setNotification({ message: `${parsedItems.length} atividades importadas. ${importedBudgetDiffs.length} diferenças registradas para o curto prazo.`, type: "success" });
+              const pendingCount = pendingComparisonDiffs(updatedBudgetDiffs, updatedBudgetImportVersions).length;
+              const comparisonMessage = previousSnapshot
+                ? `${pendingCount} avanços positivos disponíveis em Gerar por Diferença.`
+                : 'Referência salva. Importe a atualização para comparar.';
+              setNotification({ message: `${parsedItems.length} atividades importadas. ${comparisonMessage}`, type: "success" });
               setActiveTab('planning');
             })
             .catch((err) => {
@@ -4211,8 +4221,9 @@ const App = () => {
 
         } catch (err) {
           console.error(err);
-          setNotification({ message: "Falha ao analisar a planilha Excel.", type: "error" });
+          setNotification({ message: err instanceof Error ? err.message : 'Falha ao analisar a planilha Excel.', type: 'error' });
           setIsImporting(false);
+          setImportStatus('');
         }
       }, 100);
     };
@@ -5651,9 +5662,10 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               onClick={handleGeneratePlanningFromBudgetDiffs}
               disabled={!isProjectHydrated || isGeneratingDiffs || pendingBudgetDiffs.length === 0}
               className="flex-1 md:flex-none px-4 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black rounded-xl shadow transition active:scale-95 text-xs uppercase tracking-wider flex items-center justify-center gap-2"
-              title={currentBudgetImport?.previousVersionId
-                ? `Diferenças entre ${previousBudgetImport?.fileName || 'a importação anterior'} e ${currentBudgetImport.fileName}`
-                : 'Importe o cronograma anterior e depois o atual para calcular a diferença entre os dois arquivos.'}
+              title={!isProjectHydrated ? 'Aguarde o carregamento da obra.'
+                : !currentBudgetImport?.previousVersionId ? 'Importe o cronograma anterior e depois o atual para comparar os arquivos.'
+                : !pendingBudgetDiffs.length ? 'Sem aumento pendente na coluna Realizado entre as duas últimas importações.'
+                : `Diferenças entre ${previousBudgetImport?.fileName || 'a importação anterior'} e ${currentBudgetImport.fileName}`}
             >
               {isGeneratingDiffs ? 'Gerando...' : `Gerar por Dif. (${pendingBudgetDiffs.length})`}
             </button>
@@ -7426,6 +7438,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </div>
                   </div>
 
+                  <FirestoreBackup db={db} appId={appId} />
                   <div className="pt-2 border-t border-slate-850 flex justify-end">
                     <button 
                       onClick={() => setShowAccessModal(false)} 
