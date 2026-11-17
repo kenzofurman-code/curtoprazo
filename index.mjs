@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const nome = 'curto-prazo-piemonte';
-const base = (process.env.RATOEIRA_BASE || `/${nome}`).replace(/\/$/, '');
+const base = (process.env.HUB_BASE || process.env.RATOEIRA_BASE || `/${nome}`).replace(/\/$/, '');
 const aqui = path.dirname(fileURLToPath(import.meta.url));
 const buildDir = path.resolve(process.env.AMBIENTE || aqui, process.env.AMBIENTE ? 'curtoprazo/dist' : 'dist');
 const indexFile = path.join(buildDir, 'index.html');
@@ -29,9 +29,12 @@ const tipos = new Map([
 ]);
 
 function segredo() {
+  if (process.env.HUB_APP_SECRET) return process.env.HUB_APP_SECRET;
   const diretorio = process.env.CREDENTIALS_DIRECTORY;
   if (diretorio) {
-    return fs.readFileSync(path.join(diretorio, 'ratoeira-segredo'), 'utf8').trim();
+    for (const arquivo of ['hub-segredo', 'ratoeira-segredo']) {
+      try { return fs.readFileSync(path.join(diretorio, arquivo), 'utf8').trim(); } catch { /* tenta o próximo */ }
+    }
   }
   if (process.env.NODE_ENV !== 'production') return process.env.RATOEIRA_TEST_SECRET || '';
   return '';
@@ -73,7 +76,7 @@ function falha(res, status, mensagem) {
 }
 
 function decodificarIdentidade(req) {
-  const raw = req.headers['x-ratoeira-identidade'];
+  const raw = req.headers['x-hub-identidade'] || req.headers['x-ratoeira-identidade'];
   if (typeof raw !== 'string') return null;
   const ponto = raw.indexOf('.');
   if (ponto < 1 || ponto === raw.length - 1) return null;
@@ -93,7 +96,7 @@ function decodificarIdentidade(req) {
     if (
       typeof identidade.email !== 'string' ||
       typeof identidade.nome !== 'string' ||
-      identidade.app !== `/${nome}` ||
+      identidade.app !== base ||
       !['admin', 'equipe'].includes(identidade.papel) ||
       typeof identidade.exp !== 'number' ||
       identidade.exp < Date.now() / 1000
