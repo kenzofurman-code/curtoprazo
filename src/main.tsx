@@ -4,6 +4,8 @@ import './index.css'
 import App from './App.tsx'
 import { registerServiceWorker } from './registerServiceWorker'
 
+window.ratoeira?.tela({ titulo: 'Curto Prazo Piemonte' })
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

@@ -1,0 +1,17 @@
+{
+  "nome": "curto-prazo-piemonte",
+  "titulo": "Curto Prazo Piemonte",
+  "descricao": "Planejamento semanal, medição física, PPC e acompanhamento de obras.",
+  "porta": 8797,
+  "preparar": "mkdir -p \"$AMBIENTE/curtoprazo\" && tar --exclude='./.git' --exclude='./node_modules' --exclude='./dist' --exclude='./.env' --exclude='./.env.*' -cf - . | tar -xf - -C \"$AMBIENTE/curtoprazo\" && cd \"$AMBIENTE/curtoprazo\" && npm ci --include=dev && RATOEIRA_BASE=/curto-prazo-piemonte npm run build",
+  "iniciar": "exec node index.mjs",
+  "saude": "/saude",
+  "papeis": ["admin", "equipe"],
+  "publico": [],
+  "pacotes": [],
+  "chaves": ["FIREBASE_CONFIG"],
+  "memoria": "768M",
+  "cpu": "50%",
+  "rotinas": [],
+  "chat": { "agente": "agente/" }
+}

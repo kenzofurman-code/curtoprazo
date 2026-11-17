@@ -1,5 +1,6 @@
 export const registerServiceWorker = () => {
   if (!('serviceWorker' in navigator)) return;
+  if (window.ratoeira?.embutido) return;
 
   if (import.meta.env.DEV) {
     navigator.serviceWorker.getRegistrations().then((registrations) => {

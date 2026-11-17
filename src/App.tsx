@@ -23,6 +23,18 @@ declare global {
     __firebase_config?: string;
     __app_id?: string;
     __initial_auth_token?: string;
+    __ratoeira_base?: string;
+    __ratoeira_identidade?: {
+      email: string;
+      nome: string;
+      papel: string;
+      app: string;
+      exp: number;
+    };
+    ratoeira?: {
+      embutido?: boolean;
+      tela?: (contexto: { titulo?: string; detalhe?: string | null }) => void;
+    };
   }
 }
 
@@ -1055,6 +1067,7 @@ const playBeep = (freq = 600, duration = 0.15) => {
 const firebaseConfig = (import.meta.env.VITE_FIREBASE_CONFIG ? JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG) : (typeof window.__firebase_config !== 'undefined' ? JSON.parse(window.__firebase_config) : {}));
 const appId = import.meta.env.VITE_APP_ID || (typeof window.__app_id !== 'undefined' ? window.__app_id : 'obra-app');
 const initialAuthToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN || (typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null);
+const hubIdentity = window.__ratoeira_identidade || null;
 
 const INITIAL_PAVIMENTOS = ['Térreo', 'Pav. Tipo 1', 'Pav. Tipo 2', 'Pav. Cobertura'];
 const INITIAL_STRUCTURE = {
@@ -1069,6 +1082,10 @@ const INITIAL_DELAYS = GENERAL_DELAY_REASONS;
 const App = () => {
   const [db, setDb] = useState<any>(null);
   const [userId, setUserId] = useState<any>(null);
+
+  useEffect(() => {
+    window.ratoeira?.tela({ titulo: 'Curto Prazo Piemonte' });
+  }, []);
 
   // Intercepção de modo de equipe (WhatsApp/Mobile)
   const queryParams = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -1093,6 +1110,7 @@ const App = () => {
 
 
   const [plannerUsername, setPlannerUsername] = useState<string>(() => {
+    if (hubIdentity) return hubIdentity.nome.trim() || hubIdentity.email;
     try {
       return localStorage.getItem('planner_username') || '';
     } catch {
@@ -1240,7 +1258,7 @@ const App = () => {
   const [showAccessModal, setShowAccessModal] = useState<boolean>(false);
   const [accessUser, setAccessUser] = useState<string>('');
   const [accessPassword, setAccessPassword] = useState<string>('');
-  const [isAccessAdmin, setIsAccessAdmin] = useState<boolean>(false);
+  const [isAccessAdmin, setIsAccessAdmin] = useState<boolean>(hubIdentity?.papel === 'admin');
   const [newAccessUser, setNewAccessUser] = useState<string>('');
   const hasLoggedSession = useRef<boolean>(false);
 
@@ -1621,6 +1639,7 @@ const App = () => {
   };
 
   const handleOperatorLogin = async (username: string) => {
+    if (hubIdentity) return;
     const trimmed = username.trim();
     if (!trimmed) return;
     
@@ -4832,7 +4851,8 @@ rt();
           return `- ${getSimpleServiceInstruction(t)}.`;
         }).join('\n');
 
-    const appUrl = `${window.location.origin}/?mode=team&u=${selectedProjectId || urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
+    const appBase = window.__ratoeira_base || '/';
+    const appUrl = `${window.location.origin}${appBase}?mode=team&u=${selectedProjectId || urlUserId || 'projeto_principal'}&t=${encodeURIComponent(teamName)}&w=${weekId}`;
 
     return `Oi, equipe ${teamName}!\n\nServiços da semana (${dateRange}):\n${taskLines}\n\nApontamento de campo: ${appUrl}`;
   };
@@ -6789,7 +6809,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
 
     // 2. Filtragem por controle de acesso
-    const isSystemAdmin = (plannerUsername || '').toLowerCase() === 'admin' || isAccessAdmin;
+    const isSystemAdmin = hubIdentity
+      ? hubIdentity.papel === 'admin'
+      : (plannerUsername || '').toLowerCase() === 'admin' || isAccessAdmin;
     const isUserRegistered = accessControl.users.map(u => u.toLowerCase()).includes((plannerUsername || '').toLowerCase());
     
     if (!isSystemAdmin && isUserRegistered) {
@@ -6818,30 +6840,38 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             
             {/* Operator, Search and Access Control */}
             <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <button 
-                onClick={() => {
-                  setAccessUser('');
-                  setAccessPassword('');
-                  setShowAccessModal(true);
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-900/60 border border-slate-800 hover:border-indigo-500/50 hover:bg-slate-900 text-xs font-bold text-slate-300 hover:text-white rounded-xl transition cursor-pointer"
-                title="Configurações de Controle de Acesso"
-              >
-                🔐 {isAccessAdmin ? 'Acesso Admin' : 'Controle de Acesso'}
-              </button>
+              {(!hubIdentity || hubIdentity.papel === 'admin') && (
+                <button
+                  onClick={() => {
+                    if (hubIdentity?.papel === 'admin') {
+                      setIsAccessAdmin(true);
+                    } else {
+                      setAccessUser('');
+                      setAccessPassword('');
+                    }
+                    setShowAccessModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-900/60 border border-slate-800 hover:border-indigo-500/50 hover:bg-slate-900 text-xs font-bold text-slate-300 hover:text-white rounded-xl transition cursor-pointer"
+                  title="Configurações de Controle de Acesso"
+                >
+                  🔐 {isAccessAdmin ? 'Acesso Admin' : 'Controle de Acesso'}
+                </button>
+              )}
 
               <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/60 border border-slate-800 rounded-xl text-xs font-bold text-slate-300">
                 <span>👤 Operador: <b>{plannerUsername}</b></span>
-                <button 
-                  onClick={() => {
-                    localStorage.removeItem('planner_username');
-                    setPlannerUsername('');
-                  }}
-                  className="text-slate-550 hover:text-white font-black ml-1 text-sm leading-none"
-                  title="Alterar operador"
-                >
-                  &times;
-                </button>
+                {!hubIdentity && (
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem('planner_username');
+                      setPlannerUsername('');
+                    }}
+                    className="text-slate-550 hover:text-white font-black ml-1 text-sm leading-none"
+                    title="Alterar operador"
+                  >
+                    &times;
+                  </button>
+                )}
               </div>
 
               <input 
@@ -7233,6 +7263,9 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
               </button>
               
               {!isAccessAdmin ? (
+                hubIdentity ? (
+                  <p className="text-sm text-slate-300">O controle de acesso está disponível apenas para administradores do Hub.</p>
+                ) : (
                 // 1. Tela de Login de Administrador
                 <form 
                   onSubmit={(e) => {
@@ -7291,6 +7324,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                     </button>
                   </div>
                 </form>
+                )
               ) : (
                 // 2. Tela de Configurações Administrativas
                 <div className="space-y-6">
@@ -7299,12 +7333,14 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
                       <h3 className="text-sm font-black uppercase tracking-tight text-white">Painel de Controle de Acesso</h3>
                       <p className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">Gerencie permissões de acesso por obra</p>
                     </div>
-                    <button 
-                      onClick={() => setIsAccessAdmin(false)} 
-                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-450 font-black uppercase text-[8px] tracking-wider rounded-lg border border-slate-700 cursor-pointer"
-                    >
-                      Sair Admin
-                    </button>
+                    {!hubIdentity && (
+                      <button
+                        onClick={() => setIsAccessAdmin(false)}
+                        className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-450 font-black uppercase text-[8px] tracking-wider rounded-lg border border-slate-700 cursor-pointer"
+                      >
+                        Sair Admin
+                      </button>
+                    )}
                   </div>
 
                   {/* Gerenciamento de Usuários */}
@@ -8106,7 +8142,7 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
     );
   }
 
-  if (!isTeamMode && !plannerUsername) {
+  if (!isTeamMode && !hubIdentity && !plannerUsername) {
     return (
       <div className="min-h-screen bg-slate-900 font-sans text-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
         {/* Background elements */}
@@ -8196,16 +8232,18 @@ Seja objetivo, técnico e use linguagem adequada para um gestor de obras. Máxim
             {plannerUsername && (
               <div className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/60 border border-indigo-700/50 rounded-full text-[9px] font-bold text-indigo-200">
                 <span>👤 {plannerUsername}</span>
-                <button
-                  onClick={() => {
-                    localStorage.removeItem('planner_username');
-                    setPlannerUsername('');
-                  }}
-                  className="hover:text-white font-bold ml-1 text-[10px]"
-                  title="Mudar de operador"
-                >
-                  &times;
-                </button>
+                {!hubIdentity && (
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem('planner_username');
+                      setPlannerUsername('');
+                    }}
+                    className="hover:text-white font-bold ml-1 text-[10px]"
+                    title="Mudar de operador"
+                  >
+                    &times;
+                  </button>
+                )}
               </div>
             )}
             {dbSavingStatus === 'saving' && (

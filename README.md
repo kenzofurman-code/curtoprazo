@@ -68,6 +68,17 @@ npm run build
 npm run preview
 ```
 
+## Integração com o Hub
+
+No Hub, o código roda como um app protegido pela identidade do Hub. O papel
+`admin` administra projetos e permissões; `equipe` registra e atualiza os dados
+das obras. O app mantém o Firestore existente em `obra-app`, sem migrar os dados.
+
+O app publicado recebe `FIREBASE_CONFIG` pelo ambiente e a injeta na página em
+tempo de execução. Configure essa variável antes de publicar; não a grave em
+`hub-app.json` nem no Git. Os links de apontamento para equipes continuam
+funcionando para pessoas autenticadas no Hub.
+
 ## Variáveis de Ambiente
 
 ```env
