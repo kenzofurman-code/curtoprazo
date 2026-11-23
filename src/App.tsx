@@ -4441,7 +4441,7 @@ const App = () => {
       executedBefore: t.executedBefore ?? 0,
       plannedThisWeek: t.plannedThisWeek ?? 100,
       progressThisWeek: t.progressThisWeek ?? 0,
-      dailyWork: Array.isArray(t.dailyWork) ? t.dailyWork : [0,0,0,0,0],
+      dailyWork: normalizeDailyWork(t.dailyWork),
       delayReason: t.delayReason || '',
       observations: t.observations || '',
       finalized: !!t.finalized,
